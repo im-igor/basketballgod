@@ -56,7 +56,9 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const blackCount = team === 'BLACK' ? d.players_team : d.players_other;
   const label = monthLabel(input.month, input.year);
 
-  const header = `<b>Бюджет ${label} ${team}\n\n</b>`;
+  // ❗️ пока есть хотя бы один должник; ✅ когда все оплатили.
+  const statusIcon = input.charges.some((c) => !c.paid) ? '❗️' : '✅';
+  const header = `<b>${statusIcon} Бюджет ${label} ${team}\n\n</b>`;
 
   const calcInner =
     `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +

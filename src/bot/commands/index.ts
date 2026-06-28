@@ -256,14 +256,8 @@ export function registerCommands(bot: Bot): void {
     }
 
     const built = await buildAndSaveBudgets(month, year, [team]);
+    // Инфо-сообщение + сам драфт с кнопкой уходят админам в личку отдельными сообщениями.
     await sendBudgetDraftToAdmins(ctx.api, built);
-    const b = built[0]!;
-    const gamesNote = games.length > 0 ? ` Учтено игр: ${games.length}.` : '';
-    await ctx.reply(
-      `✅ Черновик бюджета ${team} за ${monthLabel(month, year)} отправлен тебе в личку.\n` +
-        `Базовый взнос ${b.result.base_per_person}₽ × ${b.result.charges.length} чел.${gamesNote}\n` +
-        `Проверь и нажми «Опубликовать в чат».`,
-    );
   })));
 
   // /debtors [MM YYYY]

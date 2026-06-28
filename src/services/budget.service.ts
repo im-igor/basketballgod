@@ -25,6 +25,7 @@ export interface BuiltBudget {
   budgetId: number;
   result: TeamBudget;
   message: string;
+  gamesCount: number;
 }
 
 /**
@@ -108,7 +109,7 @@ export async function buildAndSaveBudgets(
       })),
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
-    out.push({ team, budgetId: saved.id, result, message });
+    out.push({ team, budgetId: saved.id, result, message, gamesCount: gamesRaw[team].length });
   }
   return out;
 }

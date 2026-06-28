@@ -58,17 +58,18 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
 
   const header = `<b>Бюджет ${label} ${team}\n\n</b>`;
 
-  const calc =
-    `<blockquote>Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
+  const calcInner =
+    `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
     `Зал PG - ${d.paid_gym_sessions} трен. и оплата шкафчика ${tariffs.locker_rent_price} (делятся на всех)\n` +
     `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price} + ${tariffs.locker_rent_price}) / ${d.total_players} = ${d.gym_per_person} руб.\n` +
     `Зал Red по понедельникам - оплачивается Яндексом полностью.\n` +
     `Тренер в ${team} ${d.coach_sessions} трен. ${d.coach_sessions} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
-    `ИТОГО: ${d.base_per_person} руб.\n</blockquote>\n`;
+    `ИТОГО: ${d.base_per_person} руб.\n`;
 
-  const gamesBlock =
+  // Блок прошедших игр входит в ту же цитату, что и расчёт.
+  const gamesInner =
     input.games.length > 0
-      ? `За прошедшие игры прибавляю участвовавшим:\n` +
+      ? `\nЗа прошедшие игры прибавляю участвовавшим:\n` +
         input.games
           .map((g) => {
             const date = isoToRu(g.played_on);
@@ -76,18 +77,22 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
             return `${date ? `${date} ` : ''}${opp} +${g.fee_per_player ?? 0}`;
           })
           .join('\n') +
-        `\n\n`
+        `\n`
       : '';
 
+  const quote = `<blockquote>${calcInner}${gamesInner}</blockquote>\n`;
+
+  // Должник — ❗️ перед именем; оплативший — без ❗️ и с « +» после суммы.
   const usersList = input.charges
     .map((c) => {
+      const flag = c.paid ? '' : '❗️';
       const mark = c.paid ? ' +' : '';
-      return `${escapeHtml(c.name ?? '')} ${c.tg_login} ${c.amount}${mark}`;
+      return `${flag}${escapeHtml(c.name ?? '')} ${c.tg_login} ${c.amount}${mark}`;
     })
     .join('\n');
 
   const pay = paymentBlock(input.payment.sberUrl, input.payment.tbankUrl);
-  return `${header}${calc}\n${gamesBlock}${pay}\n\n${usersList}`;
+  return `${header}${quote}\n${pay}\n\n${usersList}`;
 }
 
 /** Сообщение-напоминание должникам за месяц. */

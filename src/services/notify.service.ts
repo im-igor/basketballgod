@@ -79,26 +79,37 @@ export async function sendBudgetDraftToAdmins(
 ): Promise<void> {
   for (const b of built) {
     const team = b.team;
-    const header =
-      `🧾 <b>Черновик бюджета — ${team}</b>\n` +
-      `Проверь и нажми «Опубликовать», чтобы бот отправил сбор в чат команды.\n\n`;
+    const monthName = monthLabel(b.result.month, b.result.year);
+    const gamesLine = b.gamesCount > 0 ? ` Учтено игр: ${b.gamesCount}.` : '';
+    // Первое сообщение — инфо/инструкция (отдельно от самого драфта).
+    const info =
+      `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
+      `Базовый взнос ${b.result.base_per_person}₽ × ${b.result.charges.length} чел.${gamesLine}\n` +
+      `Проверь черновик ниже и нажми «Опубликовать в чат».`;
     const keyboard = new InlineKeyboard().text(
       `✅ Опубликовать в чат ${team}`,
       `budpub:${b.budgetId}`,
     );
     for (const adminId of env.ADMIN_TG_IDS) {
+      const warn = (err: unknown) =>
+        log.warn(
+          `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+          (err as Error).message,
+        );
       await api
-        .sendMessage(adminId, header + b.message, {
+        .sendMessage(adminId, info, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+        })
+        .catch(warn);
+      // Второе сообщение — сам драфт сбора, с кнопкой публикации.
+      await api
+        .sendMessage(adminId, b.message, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
         })
-        .catch((err) =>
-          log.warn(
-            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
-            (err as Error).message,
-          ),
-        );
+        .catch(warn);
     }
   }
 }

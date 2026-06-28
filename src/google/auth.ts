@@ -10,7 +10,8 @@ import { env } from '../config/env.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/spreadsheets.readonly',
+  // Таблица — источник правды по игрокам: нужен доступ на запись (read/write).
+  'https://www.googleapis.com/auth/spreadsheets',
 ];
 
 function loadCredentials(): { client_email: string; private_key: string } | undefined {

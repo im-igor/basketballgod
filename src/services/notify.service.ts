@@ -1,5 +1,5 @@
-import type { Api } from 'grammy';
-import { env } from '../config/env.js';
+import { InlineKeyboard, type Api } from 'grammy';
+import { env, TEAMS } from '../config/env.js';
 import {
   getBudgetById,
   getCharges,
@@ -11,6 +11,7 @@ import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../dom
 import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, Team } from '../db/types.js';
+import type { BuiltBudget } from './budget.service.js';
 
 const payment = { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL };
 
@@ -54,6 +55,42 @@ export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void
     ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
   });
   await setBudgetMessage(budgetId, chat.chatId, msg.message_id);
+}
+
+/**
+ * Отправить ЧЕРНОВИКИ бюджета администраторам в личку — отдельным сообщением на
+ * каждую команду, с кнопкой «Опубликовать в чат». Сам сбор в чат команды не уходит:
+ * его публикует бот после нажатия кнопки (см. bot/budgetPublish.ts), поэтому
+ * message_id известен и отметки оплат «+» продолжают работать.
+ */
+export async function sendBudgetDraftToAdmins(
+  api: Api,
+  built: Record<Team, BuiltBudget>,
+): Promise<void> {
+  for (const team of TEAMS) {
+    const b = built[team];
+    const header =
+      `🧾 <b>Черновик бюджета — ${team}</b>\n` +
+      `Проверь и нажми «Опубликовать», чтобы бот отправил сбор в чат команды.\n\n`;
+    const keyboard = new InlineKeyboard().text(
+      `✅ Опубликовать в чат ${team}`,
+      `budpub:${b.budgetId}`,
+    );
+    for (const adminId of env.ADMIN_TG_IDS) {
+      await api
+        .sendMessage(adminId, header + b.message, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          reply_markup: keyboard,
+        })
+        .catch((err) =>
+          log.warn(
+            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+            (err as Error).message,
+          ),
+        );
+    }
+  }
 }
 
 /** Перерисовать ранее отправленное сообщение сбора (после отметок оплат). */

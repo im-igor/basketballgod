@@ -40,6 +40,9 @@ export async function upsertPlayer(p: {
        name = excluded.name,
        team = excluded.team,
        is_employee = excluded.is_employee,
+       active = excluded.active,
+       active_from = excluded.active_from,
+       active_to = excluded.active_to,
        notes = excluded.notes,
        updated_at = now()
      returning *`,

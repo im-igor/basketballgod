@@ -3,12 +3,10 @@ import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetToChat } from '../services/notify.service.js';
+import { sendBudgetDraftToAdmins } from '../services/notify.service.js';
+import { importPlayersFromSheet } from '../services/playersImport.service.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
-import type { Team } from '../db/types.js';
-
-const TEAMS: Team[] = ['RED', 'BLACK'];
 
 /** Обёртка задачи: ошибки не должны ронять процесс. */
 function job(name: string, fn: () => Promise<void>): () => void {
@@ -29,14 +27,15 @@ export function startScheduler(api: Api): void {
     await sendWeeklyPolls(api);
   }), { timezone: env.TZ });
 
-  // Бюджет на следующий месяц (по умолчанию 25-е число 10:00)
+  // Бюджет на следующий месяц (по умолчанию 25-е число 10:00):
+  // сначала импортируем актуальный состав из таблицы, затем собираем бюджет и
+  // отправляем ЧЕРНОВИКИ администраторам в личку (в чаты публикует админ кнопкой).
   cron.schedule(env.MONTHLY_CRON, job('monthly-budget', async () => {
     const { month, year } = nextMonthOf(new Date());
-    log.info(`[cron] собираю бюджет за ${monthLabel(month, year)}`);
+    log.info(`[cron] импорт игроков из таблицы и сбор бюджета за ${monthLabel(month, year)}`);
+    await importPlayersFromSheet();
     const built = await buildAndSaveBudgets(month, year);
-    for (const team of TEAMS) {
-      await sendBudgetToChat(api, built[team].budgetId);
-    }
+    await sendBudgetDraftToAdmins(api, built);
   }), { timezone: env.TZ });
 
   log.info(

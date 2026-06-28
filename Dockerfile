@@ -8,7 +8,7 @@ RUN npm install
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=3072 npm run build
 
 # Прод-зависимости отдельно (без dev)
 RUN npm prune --omit=dev

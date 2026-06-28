@@ -1,5 +1,5 @@
 import { InlineKeyboard, type Api } from 'grammy';
-import { env, TEAMS } from '../config/env.js';
+import { env } from '../config/env.js';
 import {
   getBudgetById,
   getCharges,
@@ -7,6 +7,7 @@ import {
   setBudgetMessage,
 } from '../db/repos/budgets.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
+import { listGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
 import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
@@ -24,7 +25,11 @@ export async function renderBudgetFromDb(budgetId: number): Promise<{
 } | null> {
   const budget = await getBudgetById(budgetId);
   if (!budget || !budget.details) return null;
-  const [charges, tariffs] = await Promise.all([getCharges(budgetId), getTariffs()]);
+  const [charges, tariffs, games] = await Promise.all([
+    getCharges(budgetId),
+    getTariffs(),
+    listGamesForMonth(budget.team, budget.month, budget.year),
+  ]);
   const views: ChargeView[] = charges.map((c) => ({
     name: c.name,
     tg_login: c.tg_login,
@@ -39,6 +44,11 @@ export async function renderBudgetFromDb(budgetId: number): Promise<{
     details: budget.details as BudgetDetails,
     tariffs,
     charges: views,
+    games: games.map((g) => ({
+      played_on: g.played_on,
+      opponent: g.opponent,
+      fee_per_player: g.fee_per_player,
+    })),
     payment,
   });
   return { team: budget.team, chatId: budget.chat_id, messageId: budget.message_id, text };
@@ -65,10 +75,10 @@ export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void
  */
 export async function sendBudgetDraftToAdmins(
   api: Api,
-  built: Record<Team, BuiltBudget>,
+  built: BuiltBudget[],
 ): Promise<void> {
-  for (const team of TEAMS) {
-    const b = built[team];
+  for (const b of built) {
+    const team = b.team;
     const header =
       `🧾 <b>Черновик бюджета — ${team}</b>\n` +
       `Проверь и нажми «Опубликовать», чтобы бот отправил сбор в чат команды.\n\n`;

@@ -17,6 +17,12 @@ export interface ChargeView {
   paid: boolean;
 }
 
+export interface GameView {
+  played_on: string | null; // ISO | null
+  opponent: string | null;
+  fee_per_player: number | null;
+}
+
 export interface BudgetMessageInput {
   team: Team;
   month: number;
@@ -24,7 +30,15 @@ export interface BudgetMessageInput {
   details: BudgetDetails;
   tariffs: Tariffs;
   charges: ChargeView[];
+  games: GameView[];
   payment: { sberUrl: string; tbankUrl: string };
+}
+
+/** ISO YYYY-MM-DD (или Date-строка из БД) → ДД.ММ.ГГГГ; пусто, если нет. */
+function isoToRu(v: string | null): string {
+  if (!v) return '';
+  const m = v.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
 }
 
 /**
@@ -47,11 +61,16 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
     `Тренер в ${team} ${d.coach_sessions} трен. ${d.coach_sessions} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
     `ИТОГО: ${d.base_per_person} руб.\n</blockquote>\n`;
 
-  const withGames = input.charges.filter((c) => c.game_amount > 0);
   const gamesBlock =
-    withGames.length > 0
-      ? `На прошедшие игры прибавляю участвовавшим:\n` +
-        withGames.map((c) => `${escapeHtml(c.name ?? '')} +${c.game_amount}`).join('\n') +
+    input.games.length > 0
+      ? `За прошедшие игры прибавляю участвовавшим:\n` +
+        input.games
+          .map((g) => {
+            const date = isoToRu(g.played_on);
+            const opp = escapeHtml(g.opponent ?? 'игра');
+            return `${date ? `${date} ` : ''}${opp} +${g.fee_per_player ?? 0}`;
+          })
+          .join('\n') +
         `\n\n`
       : '';
 

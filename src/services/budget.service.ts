@@ -7,7 +7,7 @@ import { saveBudget, type ChargeInput } from '../db/repos/budgets.repo.js';
 import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
-import type { Player, Team } from '../db/types.js';
+import type { Game, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 
@@ -27,11 +27,16 @@ export interface BuiltBudget {
   message: string;
 }
 
-/** Собрать и сохранить бюджеты обеих команд за месяц; вернуть тексты сообщений. */
+/**
+ * Собрать и сохранить бюджеты за месяц; вернуть собранные черновики.
+ * Считаются обе команды (зал делится на всех активных обеих команд), но сохраняются и
+ * возвращаются только указанные в `teamsToProcess` (по умолчанию обе).
+ */
 export async function buildAndSaveBudgets(
   month: number,
   year: number,
-): Promise<Record<Team, BuiltBudget>> {
+  teamsToProcess: Team[] = TEAMS,
+): Promise<BuiltBudget[]> {
   const { from, to } = monthRange(month, year);
 
   const [tariffs, allPlayers, redEvents, blackEvents] = await Promise.all([
@@ -56,6 +61,7 @@ export async function buildAndSaveBudgets(
     listGamesForMonth('RED', month, year),
     listGamesForMonth('BLACK', month, year),
   ]);
+  const gamesRaw: Record<Team, Game[]> = { RED: redGames, BLACK: blackGames };
   const games: Record<Team, GameForBudget[]> = {
     RED: redGames.map((g) => ({ team: g.team, fee_per_player: g.fee_per_player, participants: g.participants })),
     BLACK: blackGames.map((g) => ({ team: g.team, fee_per_player: g.fee_per_player, participants: g.participants })),
@@ -63,8 +69,8 @@ export async function buildAndSaveBudgets(
 
   const computed = computeBudgets({ month, year, tariffs, events, active, games });
 
-  const out = {} as Record<Team, BuiltBudget>;
-  for (const team of TEAMS) {
+  const out: BuiltBudget[] = [];
+  for (const team of teamsToProcess) {
     const result = computed[team];
     const charges: ChargeInput[] = result.charges.map((c) => ({
       player_id: c.player.id,
@@ -95,9 +101,14 @@ export async function buildAndSaveBudgets(
         amount: c.amount,
         paid: false,
       })),
+      games: gamesRaw[team].map((g) => ({
+        played_on: g.played_on,
+        opponent: g.opponent,
+        fee_per_player: g.fee_per_player,
+      })),
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
-    out[team] = { team, budgetId: saved.id, result, message };
+    out.push({ team, budgetId: saved.id, result, message });
   }
   return out;
 }

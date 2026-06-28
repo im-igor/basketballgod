@@ -1,9 +1,9 @@
 import type { Bot, Context } from 'grammy';
 import { adminOnly } from '../middlewares/auth.js';
-import { normalizeLogin, parseMonthYear, extractUrls } from '../../util/args.js';
+import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
-import { nextMonthOf, monthLabel } from '../../domain/dates.js';
-import { getByLogin } from '../../db/repos/players.repo.js';
+import { monthLabel } from '../../domain/dates.js';
+import { getByLogin, listPlayers } from '../../db/repos/players.repo.js';
 import {
   findPlayerInSheet,
   upsertPlayerInSheet,
@@ -14,8 +14,13 @@ import {
 } from '../../google/sheets.js';
 import { importPlayersFromSheet } from '../../services/playersImport.service.js';
 import { getBudget, setChargePaidByLogin } from '../../db/repos/budgets.repo.js';
+import { getTariffs } from '../../db/repos/tariffs.repo.js';
 import { buildAndSaveBudgets } from '../../services/budget.service.js';
-import { processGameUrls } from '../../services/gameFee.service.js';
+import {
+  validateGame,
+  registerValidatedGames,
+  type GamePlan,
+} from '../../services/gameFee.service.js';
 import { sendBudgetDraftToAdmins, refreshBudgetMessage, sendDebtors } from '../../services/notify.service.js';
 import { sendWeeklyPolls } from '../../services/poll.service.js';
 import { log } from '../../util/logger.js';
@@ -33,11 +38,12 @@ const HELP = `<b>basketballgod — команды</b>
 /sync_players — загрузить таблицу в БД (импорт)
 
 <b>Бюджет и оплаты:</b>
-/budget [MM YYYY] — собрать бюджет → черновик в личку (по умолчанию след. месяц)
-/game_fee url1 url2 … — посчитать взносы за игру по статистике
+/budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
 /debtors [MM YYYY] — напомнить должникам (по умолчанию текущий месяц)
 /pay @login MM YYYY — отметить оплату игрока
-/poll — разослать опросы на ближайшую неделю вручную`;
+/poll — разослать опросы на ближайшую неделю вручную
+
+Игры в /budget: каждый сыгравший должен быть в ростере указанной команды с active=YES и employee=TRUE, иначе игра не принимается.`;
 
 /** Текст аргументов команды (grammY типизирует ctx.match как string | RegExpMatchArray). */
 const argText = (ctx: Context): string => (typeof ctx.match === 'string' ? ctx.match : '');
@@ -215,39 +221,49 @@ export function registerCommands(bot: Bot): void {
     await ctx.reply(`✅ Импорт завершён. Обновлено: ${imported}, деактивировано: ${deactivated}.`);
   })));
 
-  // /budget [MM YYYY] — собрать бюджет и прислать черновик в личку
+  // /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку.
   bot.command('budget', adminOnly(safe(async (ctx) => {
-    const my = parseMonthYear(argText(ctx), nextMonthOf(new Date()));
-    if (!my) {
-      await ctx.reply('Формат: /budget MM YYYY (например /budget 7 2026)');
+    const { value, error } = parseBudgetArgs(argText(ctx));
+    if (error || !value) {
+      await ctx.reply(error ?? 'Не удалось разобрать аргументы. /budget RED|BLACK MM YYYY [ссылка …]');
       return;
     }
-    await ctx.reply(`Импортирую игроков и считаю бюджет за ${monthLabel(my.month, my.year)}…`);
-    await importPlayersFromSheet();
-    const built = await buildAndSaveBudgets(my.month, my.year);
-    await sendBudgetDraftToAdmins(ctx.api, built);
-    const summary = TEAMS.map(
-      (t) => `${t}: ${built[t].result.base_per_person}₽ базовый × ${built[t].result.charges.length} чел.`,
-    ).join('\n');
+    const { team, month, year, games } = value;
     await ctx.reply(
-      `✅ Черновики бюджета отправлены тебе в личку. Проверь и нажми «Опубликовать в чат».\n${summary}`,
+      `Импортирую игроков из таблицы и считаю бюджет ${team} за ${monthLabel(month, year)}…`,
     );
-  })));
+    await importPlayersFromSheet();
 
-  // /game_fee url1 url2 ...
-  bot.command('game_fee', adminOnly(safe(async (ctx) => {
-    const urls = extractUrls(argText(ctx));
-    if (urls.length === 0) {
-      await ctx.reply('Формат: /game_fee https://… [https://…]');
-      return;
+    // Игры (если есть): сперва валидируем все, и только если без ошибок — сохраняем.
+    if (games.length > 0) {
+      const [roster, tariffs] = await Promise.all([listPlayers(team), getTariffs()]);
+      const plans: GamePlan[] = [];
+      const errors: string[] = [];
+      for (const g of games) {
+        const res = await validateGame(g.url, team, g.date, roster, tariffs);
+        if (res.ok) plans.push(res.plan);
+        else errors.push(...res.errors);
+      }
+      if (errors.length > 0) {
+        await ctx.reply(
+          `❌ Игры не приняты, бюджет не собран. Исправь состав в таблице (active=YES, ` +
+            `employee=TRUE, верная команда) и повтори:\n\n` +
+            errors.map((e) => `• ${e}`).join('\n'),
+        );
+        return;
+      }
+      await registerValidatedGames(plans, month, year);
     }
-    await ctx.reply(`Обрабатываю игр: ${urls.length}…`);
-    const results = await processGameUrls(urls);
-    const lines = results.map((r) => {
-      const unmatched = r.unmatched.length ? `\n  не сопоставлены: ${r.unmatched.join(', ')}` : '';
-      return `🏀 ${r.teamName} [${r.team}] — сыграло ${r.played.length}, взнос ${r.fee_per_player}₽/чел.${unmatched}`;
-    });
-    await ctx.reply(lines.join('\n\n'));
+
+    const built = await buildAndSaveBudgets(month, year, [team]);
+    await sendBudgetDraftToAdmins(ctx.api, built);
+    const b = built[0]!;
+    const gamesNote = games.length > 0 ? ` Учтено игр: ${games.length}.` : '';
+    await ctx.reply(
+      `✅ Черновик бюджета ${team} за ${monthLabel(month, year)} отправлен тебе в личку.\n` +
+        `Базовый взнос ${b.result.base_per_person}₽ × ${b.result.charges.length} чел.${gamesNote}\n` +
+        `Проверь и нажми «Опубликовать в чат».`,
+    );
   })));
 
   // /debtors [MM YYYY]

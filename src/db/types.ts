@@ -66,6 +66,7 @@ export interface Game {
   id: number;
   event_uid: string | null;
   team: Team | 'MIXED';
+  opponent: string | null;
   played_on: string | null;
   stat_url: string | null;
   fee_per_player: number | null;

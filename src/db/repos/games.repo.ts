@@ -3,7 +3,8 @@ import type { Game, GameParticipant, Team } from '../types.js';
 
 export async function saveGame(g: {
   event_uid: string | null;
-  team: Team | 'MIXED';
+  team: Team;
+  opponent: string | null;
   played_on: string | null;
   stat_url: string | null;
   fee_per_player: number;
@@ -12,12 +13,13 @@ export async function saveGame(g: {
   year: number;
 }): Promise<Game> {
   const { rows } = await query<Game>(
-    `insert into games (event_uid, team, played_on, stat_url, fee_per_player, participants, month, year)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)
+    `insert into games (event_uid, team, opponent, played_on, stat_url, fee_per_player, participants, month, year)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      returning *`,
     [
       g.event_uid,
       g.team,
+      g.opponent,
       g.played_on,
       g.stat_url,
       g.fee_per_player,
@@ -29,6 +31,11 @@ export async function saveGame(g: {
   return rows[0]!;
 }
 
+/** Удалить ранее сохранённые игры по ссылке (дедуп при повторной регистрации). */
+export async function deleteGamesByUrl(statUrl: string): Promise<void> {
+  await query('delete from games where stat_url = $1', [statUrl]);
+}
+
 /** Игры команды за месяц (для включения взносов в бюджет). */
 export async function listGamesForMonth(
   team: Team,
@@ -38,7 +45,7 @@ export async function listGamesForMonth(
   const { rows } = await query<Game>(
     `select * from games
      where month = $2 and year = $3 and (team = $1 or team = 'MIXED')
-     order by played_on`,
+     order by played_on nulls last, id`,
     [team, month, year],
   );
   return rows;

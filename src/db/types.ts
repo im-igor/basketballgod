@@ -37,10 +37,13 @@ export interface BudgetDetails {
   players_team: number;
   players_other: number;
   paid_gym_sessions: number;
-  coach_sessions: number;
+  coach_sessions: number; // календарное число тренировок (для строки «N трен.»)
   gym_per_person: number;
-  coach_per_person: number;
+  coach_per_person: number; // итог с учётом coach_delta
   base_per_person: number;
+  // Ручные корректировки черновика (кнопками в личке):
+  coach_delta?: number; // ± оплат тренера к календарному coach_sessions
+  coach_note?: string | null; // комментарий к строке тренера
 }
 
 export interface Charge {

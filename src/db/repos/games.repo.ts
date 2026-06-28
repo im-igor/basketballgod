@@ -3,7 +3,7 @@ import type { Game, GameParticipant, Team } from '../types.js';
 
 export async function saveGame(g: {
   event_uid: string | null;
-  team: Team;
+  team: Team | 'MIXED';
   opponent: string | null;
   played_on: string | null;
   stat_url: string | null;
@@ -34,6 +34,21 @@ export async function saveGame(g: {
 /** Удалить ранее сохранённые игры по ссылке (дедуп при повторной регистрации). */
 export async function deleteGamesByUrl(statUrl: string): Promise<void> {
   await query('delete from games where stat_url = $1', [statUrl]);
+}
+
+/** Удалить последний добавленный вручную товарищеский (MIXED, без stat_url) за месяц. */
+export async function deleteLastManualFriendly(month: number, year: number): Promise<Game | null> {
+  const { rows } = await query<Game>(
+    `delete from games
+     where id = (
+       select id from games
+       where month = $1 and year = $2 and team = 'MIXED' and stat_url is null
+       order by id desc limit 1
+     )
+     returning *`,
+    [month, year],
+  );
+  return rows[0] ?? null;
 }
 
 /** Игры команды за месяц (для включения взносов в бюджет). */

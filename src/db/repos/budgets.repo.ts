@@ -42,6 +42,31 @@ export async function saveBudget(input: {
   return budget;
 }
 
+/** Обновить итог и details бюджета (без трогания charges). */
+export async function updateBudgetDetails(
+  budgetId: number,
+  totalPerPlayer: number,
+  details: BudgetDetails,
+): Promise<void> {
+  await query(
+    'update budgets set total_per_player = $2, details = $3, updated_at = now() where id = $1',
+    [budgetId, totalPerPlayer, JSON.stringify(details)],
+  );
+}
+
+/** Мягко обновить суммы начисления (сохраняя paid/paid_at). */
+export async function updateChargeAmount(
+  chargeId: number,
+  baseAmount: number,
+  gameAmount: number,
+  amount: number,
+): Promise<void> {
+  await query(
+    'update charges set base_amount = $2, game_amount = $3, amount = $4 where id = $1',
+    [chargeId, baseAmount, gameAmount, amount],
+  );
+}
+
 export async function getBudget(
   team: Team,
   month: number,

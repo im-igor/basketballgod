@@ -4,6 +4,7 @@ import { log } from '../util/logger.js';
 import { registerCommands } from './commands/index.js';
 import { registerPollAnswers } from './pollAnswers.js';
 import { registerBudgetPublish } from './budgetPublish.js';
+import { registerBudgetAdjust } from './budgetAdjust.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -15,6 +16,8 @@ bot.catch((err) => {
 registerPollAnswers(bot);
 registerBudgetPublish(bot);
 registerCommands(bot);
+// После команд: текстовый обработчик ответов ловит только force-reply на наши запросы.
+registerBudgetAdjust(bot);
 
 export async function setupBotCommandsMenu(): Promise<void> {
   await bot.api.setMyCommands([

@@ -60,12 +60,15 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const statusIcon = input.charges.some((c) => !c.paid) ? '❗️' : '✅';
   const header = `<b>${statusIcon} Бюджет ${label} ${team}\n\n</b>`;
 
+  // Эффективное число оплат тренера = календарное + ручная дельта; комментарий — после «N трен.».
+  const effCoach = Math.max(0, d.coach_sessions + (d.coach_delta ?? 0));
+  const coachNote = d.coach_note ? ` ${escapeHtml(d.coach_note)}` : '';
   const calcInner =
     `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
     `Зал PG - ${d.paid_gym_sessions} трен. и оплата шкафчика ${tariffs.locker_rent_price} (делятся на всех)\n` +
     `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price} + ${tariffs.locker_rent_price}) / ${d.total_players} = ${d.gym_per_person} руб.\n` +
     `Зал Red по понедельникам - оплачивается Яндексом полностью.\n` +
-    `Тренер в ${team} ${d.coach_sessions} трен. ${d.coach_sessions} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
+    `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${effCoach} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
     `ИТОГО: ${d.base_per_person} руб.\n`;
 
   // Блок прошедших игр входит в ту же цитату, что и расчёт.

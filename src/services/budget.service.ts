@@ -3,11 +3,20 @@ import { listEvents } from '../google/calendar.js';
 import { listPlayers } from '../db/repos/players.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listGamesForMonth } from '../db/repos/games.repo.js';
-import { saveBudget, type ChargeInput } from '../db/repos/budgets.repo.js';
+import {
+  saveBudget,
+  getBudget,
+  getBudgetById,
+  getCharges,
+  updateBudgetDetails,
+  updateChargeAmount,
+  type ChargeInput,
+} from '../db/repos/budgets.repo.js';
 import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
-import { buildBudgetMessage } from '../domain/messages.js';
+import { gameFeeForPlayer } from '../domain/gamefee.js';
+import { buildBudgetMessage, type ChargeView } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
-import type { Game, Player, Team } from '../db/types.js';
+import type { BudgetDetails, Game, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 
@@ -73,33 +82,50 @@ export async function buildAndSaveBudgets(
   const out: BuiltBudget[] = [];
   for (const team of teamsToProcess) {
     const result = computed[team];
+
+    // Переносим ранее внесённые ручные правки тренера (если бюджет уже существует).
+    const prev = await getBudget(team, month, year);
+    const prevDetails = prev?.details as BudgetDetails | null;
+    const coachDelta = prevDetails?.coach_delta ?? 0;
+    const coachNote = prevDetails?.coach_note ?? null;
+    const effCoach = Math.max(0, result.details.coach_sessions + coachDelta);
+    const coachPer =
+      result.details.players_team > 0
+        ? Math.ceil((effCoach * tariffs.coach_per_session) / result.details.players_team)
+        : 0;
+    const base = result.details.gym_per_person + coachPer;
+
+    const details: BudgetDetails = {
+      ...result.details,
+      coach_per_person: coachPer,
+      base_per_person: base,
+      coach_delta: coachDelta,
+      coach_note: coachNote,
+    };
+    // Приводим result к учтённой дельте (для инфо-сообщения и возврата).
+    result.details = details;
+    result.base_per_person = base;
+
     const charges: ChargeInput[] = result.charges.map((c) => ({
       player_id: c.player.id,
       tg_login: c.player.tg_login,
       name: c.player.name,
-      base_amount: c.base_amount,
+      base_amount: base,
       game_amount: c.game_amount,
-      amount: c.amount,
+      amount: base + c.game_amount,
     }));
-    const saved = await saveBudget({
-      team,
-      month,
-      year,
-      total_per_player: result.base_per_person,
-      details: result.details,
-      charges,
-    });
+    const saved = await saveBudget({ team, month, year, total_per_player: base, details, charges });
     const message = buildBudgetMessage({
       team,
       month,
       year,
-      details: result.details,
+      details,
       tariffs,
       charges: result.charges.map((c) => ({
         name: c.player.name,
         tg_login: c.player.tg_login,
         game_amount: c.game_amount,
-        amount: c.amount,
+        amount: base + c.game_amount,
         paid: false,
       })),
       games: gamesRaw[team].map((g) => ({
@@ -112,4 +138,79 @@ export async function buildAndSaveBudgets(
     out.push({ team, budgetId: saved.id, result, message, gamesCount: gamesRaw[team].length });
   }
   return out;
+}
+
+export interface RecalcResult {
+  team: Team;
+  budgetId: number;
+  message: string;
+  coachDelta: number;
+  effCoach: number;
+}
+
+/**
+ * Быстрый перерасчёт бюджета по сохранённым details и играм из БД (без Google-календаря).
+ * Применяет ручные правки тренера (coach_delta/coach_note) и пер-игроковые взносы, сохраняя
+ * статус оплат (paid). Возвращает данные для перерисовки сообщения-черновика.
+ */
+export async function recalcBudget(
+  budgetId: number,
+  opts: { coachDeltaChange?: number; coachNote?: string } = {},
+): Promise<RecalcResult | null> {
+  const budget = await getBudgetById(budgetId);
+  if (!budget || !budget.details) return null;
+  const d = budget.details as BudgetDetails;
+
+  const [tariffs, charges, games] = await Promise.all([
+    getTariffs(),
+    getCharges(budgetId),
+    listGamesForMonth(budget.team, budget.month, budget.year),
+  ]);
+
+  const coachDelta = (d.coach_delta ?? 0) + (opts.coachDeltaChange ?? 0);
+  const coachNote =
+    opts.coachNote !== undefined ? opts.coachNote || null : d.coach_note ?? null;
+  const effCoach = Math.max(0, d.coach_sessions + coachDelta);
+  const coachPer = d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session) / d.players_team) : 0;
+  const base = d.gym_per_person + coachPer;
+
+  const gamesForBudget: GameForBudget[] = games.map((g) => ({
+    team: g.team,
+    fee_per_player: g.fee_per_player,
+    participants: g.participants,
+  }));
+
+  const views: ChargeView[] = [];
+  for (const c of charges) {
+    const game = c.player_id ? gameFeeForPlayer(c.player_id, gamesForBudget) : c.game_amount;
+    const amount = base + game;
+    await updateChargeAmount(c.id, base, game, amount);
+    views.push({ name: c.name, tg_login: c.tg_login, game_amount: game, amount, paid: c.paid });
+  }
+
+  const newDetails: BudgetDetails = {
+    ...d,
+    coach_delta: coachDelta,
+    coach_note: coachNote,
+    coach_per_person: coachPer,
+    base_per_person: base,
+  };
+  await updateBudgetDetails(budgetId, base, newDetails);
+
+  const message = buildBudgetMessage({
+    team: budget.team,
+    month: budget.month,
+    year: budget.year,
+    details: newDetails,
+    tariffs,
+    charges: views,
+    games: games.map((g) => ({
+      played_on: g.played_on,
+      opponent: g.opponent,
+      fee_per_player: g.fee_per_player,
+    })),
+    payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
+  });
+
+  return { team: budget.team, budgetId, message, coachDelta, effCoach };
 }

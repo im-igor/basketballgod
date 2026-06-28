@@ -16,6 +16,19 @@ import type { BuiltBudget } from './budget.service.js';
 
 const payment = { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL };
 
+/** Клавиатура под черновиком: правки тренера/товарищеского + публикация. */
+export function draftKeyboard(budgetId: number, team: Team): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Тренер −', `budcoach:${budgetId}:-1`)
+    .text('Тренер +', `budcoach:${budgetId}:1`)
+    .text('✏️ коммент', `budnote:${budgetId}`)
+    .row()
+    .text('🤝 + Товарищеский', `budfriendly:${budgetId}`)
+    .text('🗑 убрать посл.', `budfrdel:${budgetId}`)
+    .row()
+    .text(`✅ Опубликовать в чат ${team}`, `budpub:${budgetId}`);
+}
+
 /** Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат). */
 export async function renderBudgetFromDb(budgetId: number): Promise<{
   team: Team;
@@ -86,10 +99,7 @@ export async function sendBudgetDraftToAdmins(
       `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
       `Базовый взнос ${b.result.base_per_person}₽ × ${b.result.charges.length} чел.${gamesLine}\n` +
       `Проверь черновик ниже и нажми «Опубликовать в чат».`;
-    const keyboard = new InlineKeyboard().text(
-      `✅ Опубликовать в чат ${team}`,
-      `budpub:${b.budgetId}`,
-    );
+    const keyboard = draftKeyboard(b.budgetId, team);
     for (const adminId of env.ADMIN_TG_IDS) {
       const warn = (err: unknown) =>
         log.warn(

@@ -13,16 +13,30 @@ function nameTokens(fullName: string): string[] {
 }
 
 /**
- * Сопоставление имени со страницы с игроком из (уже отфильтрованного по команде) ростера
- * по общему токену. Сайт даёт «Имя Фамилия», в ростере порядок может быть любым, поэтому
- * сравниваем множества токенов: сначала по длинному токену (обычно фамилия, ≥4), затем мягко ≥3.
+ * Сопоставление имени со страницы с игроком из (уже отфильтрованного по команде) ростера.
+ * Матчим по **ФИО**: засчитываем игрока, только если ВСЕ токены имени со страницы (и имя,
+ * и фамилия) есть в записи ростера. Это исключает ложные совпадения по общему имени
+ * (несколько «Александров») и различает однофамильцев-братьев (Решин Кирилл / Решин Максим).
+ * Фолбэк по фамилии — лишь когда в ростере ровно один человек с такой фамилией (брата нет).
  */
 function matchPlayer(name: string, teamRoster: Player[]): Player | undefined {
-  const tokens = new Set(nameTokens(name));
-  if (tokens.size === 0) return undefined;
-  const byMinLen = (min: number): Player | undefined =>
-    teamRoster.find((p) => nameTokens(p.name).some((t) => t.length >= min && tokens.has(t)));
-  return byMinLen(4) ?? byMinLen(3);
+  const tokens = nameTokens(name);
+  if (tokens.length === 0) return undefined;
+
+  const rosterTokens = teamRoster.map((p) => ({ p, t: new Set(nameTokens(p.name)) }));
+
+  // Строгий матч: все токены страницы присутствуют в записи ростера.
+  const strict = rosterTokens.filter(({ t }) => tokens.every((tok) => t.has(tok)));
+  if (strict.length === 1) return strict[0]!.p;
+  if (strict.length > 1) return undefined; // неоднозначно — не угадываем
+
+  // Фолбэк: уникальная фамилия (последний токен на странице «Имя Фамилия»).
+  const surname = tokens[tokens.length - 1]!;
+  if (surname.length >= 3) {
+    const bySurname = rosterTokens.filter(({ t }) => t.has(surname));
+    if (bySurname.length === 1) return bySurname[0]!.p;
+  }
+  return undefined;
 }
 
 export interface GamePlan {

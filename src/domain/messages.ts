@@ -18,7 +18,7 @@ export interface ChargeView {
 }
 
 export interface GameView {
-  played_on: string | null; // ISO | null
+  played_on: string | Date | null; // ISO-строка или Date из БД (колонка date)
   opponent: string | null;
   fee_per_player: number | null;
 }
@@ -34,9 +34,14 @@ export interface BudgetMessageInput {
   payment: { sberUrl: string; tbankUrl: string };
 }
 
-/** ISO YYYY-MM-DD (или Date-строка из БД) → ДД.ММ.ГГГГ; пусто, если нет. */
-function isoToRu(v: string | null): string {
+/** ISO YYYY-MM-DD или Date (колонка date) → ДД.ММ.ГГГГ; пусто, если нет. */
+function isoToRu(v: string | Date | null): string {
   if (!v) return '';
+  if (v instanceof Date) {
+    const d = String(v.getDate()).padStart(2, '0');
+    const mo = String(v.getMonth() + 1).padStart(2, '0');
+    return `${d}.${mo}.${v.getFullYear()}`;
+  }
   const m = v.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
 }

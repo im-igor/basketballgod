@@ -3,7 +3,7 @@ import { adminOnly } from '../middlewares/auth.js';
 import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
 import { monthLabel } from '../../domain/dates.js';
-import { getByLogin, listPlayers } from '../../db/repos/players.repo.js';
+import { listPlayers } from '../../db/repos/players.repo.js';
 import {
   findPlayerInSheet,
   upsertPlayerInSheet,
@@ -13,7 +13,7 @@ import {
   type SheetPlayer,
 } from '../../google/sheets.js';
 import { importPlayersFromSheet } from '../../services/playersImport.service.js';
-import { getBudget, setChargePaidByLogin } from '../../db/repos/budgets.repo.js';
+import { getBudget } from '../../db/repos/budgets.repo.js';
 import { getTariffs } from '../../db/repos/tariffs.repo.js';
 import { buildAndSaveBudgets } from '../../services/budget.service.js';
 import {
@@ -21,7 +21,8 @@ import {
   registerValidatedGames,
   type GamePlan,
 } from '../../services/gameFee.service.js';
-import { sendBudgetDraftToAdmins, refreshBudgetMessage, sendDebtors } from '../../services/notify.service.js';
+import { sendBudgetDraftToAdmins, sendDebtors } from '../../services/notify.service.js';
+import { buildPayPrompt } from '../payMark.js';
 import { sendWeeklyPolls } from '../../services/poll.service.js';
 import { log } from '../../util/logger.js';
 import type { Team } from '../../db/types.js';
@@ -40,7 +41,7 @@ const HELP = `<b>basketballgod — команды</b>
 <b>Бюджет и оплаты:</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
 /debtors [MM YYYY] — напомнить должникам (по умолчанию текущий месяц)
-/pay @login MM YYYY — отметить оплату игрока
+/pay [MM YYYY] — отметить оплаты кнопками (должники обеих команд, по умолчанию текущий месяц)
 /poll — разослать опросы на ближайшую неделю вручную
 
 Игры в /budget: каждый сыгравший должен быть в ростере указанной команды с active=YES и employee=TRUE, иначе игра не принимается.`;
@@ -281,33 +282,20 @@ export function registerCommands(bot: Bot): void {
     await ctx.reply(report.join('\n'));
   })));
 
-  // /pay @login MM YYYY
+  // /pay [MM YYYY] — список кнопок с должниками обеих команд; нажатие = отметка оплаты.
   bot.command('pay', adminOnly(safe(async (ctx) => {
-    const m = argText(ctx).trim().match(/^(@?[A-Za-z0-9_]+)\s+(\d{1,2})\s+(\d{4})$/);
-    if (!m) {
-      await ctx.reply('Формат: /pay @login MM YYYY');
+    const now = new Date();
+    const my = parseMonthYear(argText(ctx), { month: now.getMonth() + 1, year: now.getFullYear() });
+    if (!my) {
+      await ctx.reply('Формат: /pay [MM YYYY]');
       return;
     }
-    const login = normalizeLogin(m[1]!);
-    const month = Number(m[2]);
-    const year = Number(m[3]);
-    const player = await getByLogin(login);
-    if (!player) {
-      await ctx.reply(`Игрок ${login} не найден.`);
+    const { text, keyboard, hasBudget } = await buildPayPrompt(my.month, my.year);
+    if (!hasBudget) {
+      await ctx.reply(`Бюджет за ${monthLabel(my.month, my.year)} не найден.`);
       return;
     }
-    const budget = await getBudget(player.team, month, year);
-    if (!budget) {
-      await ctx.reply(`Бюджет ${player.team} за ${monthLabel(month, year)} не найден.`);
-      return;
-    }
-    const charge = await setChargePaidByLogin(budget.id, login, true);
-    if (!charge) {
-      await ctx.reply(`Начисление для ${login} в этом бюджете не найдено.`);
-      return;
-    }
-    await refreshBudgetMessage(ctx.api, budget.id);
-    await ctx.reply(`✅ Отмечена оплата ${login} за ${monthLabel(month, year)} (${charge.amount}₽).`);
+    await ctx.reply(text, keyboard ? { reply_markup: keyboard } : {});
   })));
 
   // /poll — ручной запуск рассылки опросов

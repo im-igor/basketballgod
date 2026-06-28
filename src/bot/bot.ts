@@ -5,6 +5,7 @@ import { registerCommands } from './commands/index.js';
 import { registerPollAnswers } from './pollAnswers.js';
 import { registerBudgetPublish } from './budgetPublish.js';
 import { registerBudgetAdjust } from './budgetAdjust.js';
+import { registerPayMark } from './payMark.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -15,6 +16,7 @@ bot.catch((err) => {
 
 registerPollAnswers(bot);
 registerBudgetPublish(bot);
+registerPayMark(bot);
 registerCommands(bot);
 // После команд: текстовый обработчик ответов ловит только force-reply на наши запросы.
 registerBudgetAdjust(bot);
@@ -29,7 +31,7 @@ export async function setupBotCommandsMenu(): Promise<void> {
     { command: 'sync_players', description: 'Импорт таблицы игроков в БД' },
     { command: 'budget', description: 'Черновик бюджета: /budget RED|BLACK MM YYYY [url …]' },
     { command: 'debtors', description: 'Напомнить должникам: /debtors MM YYYY' },
-    { command: 'pay', description: 'Отметить оплату: /pay @login MM YYYY' },
+    { command: 'pay', description: 'Отметить оплаты кнопками: /pay [MM YYYY]' },
     { command: 'poll', description: 'Разослать опросы на неделю (вручную)' },
   ]);
 }

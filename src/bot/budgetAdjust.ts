@@ -96,8 +96,8 @@ export function registerBudgetAdjust(bot: Bot): void {
     pending.set(ctx.from!.id, { kind: 'friendly', budgetId: id, chatId: msg.chat.id, msgId: msg.message_id });
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      '🤝 Ответьте: какие взносы (судья / тренер / оба) и @login сыгравших (можно из обеих команд).\n' +
-        'Пример: судья @ivan @petr @maria',
+      '🤝 Ответьте: Соперник | судья / тренер / оба и @login сыгравших (можно из обеих команд).\n' +
+        'Пример: Гипротрубопровод | судья @ivan @petr @maria',
       { reply_markup: { force_reply: true } },
     );
   });
@@ -161,24 +161,28 @@ export function registerBudgetAdjust(bot: Bot): void {
         return;
       }
 
-      // friendly
-      const lower = text.toLowerCase();
+      // friendly: всё до первого «|» — соперник; после — взносы и @login.
+      const pipe = text.indexOf('|');
+      const opponentName = pipe >= 0 ? text.slice(0, pipe).trim() : '';
+      const rest = pipe >= 0 ? text.slice(pipe + 1).trim() : text;
+      const lower = rest.toLowerCase();
       const coach = /тренер|оба/.test(lower);
       const judge = /судья|оба/.test(lower);
       if (!coach && !judge) {
-        await ctx.reply('Укажи «судья», «тренер» или «оба». Пример: судья @ivan @petr');
+        await ctx.reply('Укажи «судья», «тренер» или «оба». Пример: Соперник | судья @ivan @petr');
         return;
       }
-      const logins = text
+      const logins = rest
         .split(/\s+/)
         .filter((t) => /^@?[A-Za-z0-9_]{3,}$/.test(t) && !/^(судья|тренер|оба)$/i.test(t));
       if (logins.length === 0) {
         await ctx.reply('Не нашёл ни одного @login сыгравших.');
         return;
       }
+      const label = opponentName ? `Товарищеская игра с «${opponentName}»` : 'Товарищеская игра';
       const { matched, unmatched, fee } = await registerFriendly(
         logins,
-        { coach, judge },
+        { coach, judge, label },
         budget.month,
         budget.year,
       );
@@ -190,7 +194,7 @@ export function registerBudgetAdjust(bot: Bot): void {
       if (r) await redrawDraft(ctx.api, entry, r);
       await refreshOtherTeam(ctx.api, budget.team, budget.month, budget.year);
       const warn = unmatched.length ? `\n⚠️ не сопоставлены: ${unmatched.join(', ')}` : '';
-      await ctx.reply(`✅ Товарищеский добавлен: ${matched} чел., ${fee}₽ с каждого.${warn}`);
+      await ctx.reply(`✅ ${label}: ${matched} чел., ${fee}₽ с каждого.${warn}`);
     } catch (err) {
       log.error('[budget-adjust] ошибка обработки ответа', (err as Error).message);
       await ctx.reply(`⚠️ Ошибка: ${(err as Error).message}`);

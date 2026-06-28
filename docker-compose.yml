@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: basketballgod
+      POSTGRES_PASSWORD: basketballgod
+      POSTGRES_DB: basketballgod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U basketballgod']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Внутри compose БД доступна по хосту db
+      DATABASE_URL: postgres://basketballgod:basketballgod@db:5432/basketballgod
+    ports:
+      - '${HTTP_PORT:-3000}:3000'
+    volumes:
+      # Ключ сервис-аккаунта Google (если используешь файл, а не base64)
+      - ./secrets:/app/secrets:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

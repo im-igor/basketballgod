@@ -1,0 +1,73 @@
+/** SSR-вьюхи админ-панели: адаптивная вёрстка без фронтенд-фреймворков. */
+
+export function esc(s: unknown): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+const STYLE = `
+:root { --bg:#0f1115; --card:#1a1d24; --fg:#e7e9ee; --muted:#9aa3b2; --accent:#e23b3b; --ok:#2ecc71; --line:#2a2f3a; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; line-height:1.5; }
+header { background:var(--card); border-bottom:1px solid var(--line); padding:12px 16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; position:sticky; top:0; }
+header a { color:var(--fg); text-decoration:none; font-weight:600; }
+header nav { display:flex; gap:14px; flex-wrap:wrap; }
+header nav a { color:var(--muted); font-weight:500; }
+header nav a:hover { color:var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.3rem; } h2 { font-size: 1.05rem; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin:12px 0; }
+table { width:100%; border-collapse:collapse; }
+th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+th { color:var(--muted); font-weight:600; font-size:.85rem; }
+.badge { padding:2px 8px; border-radius:999px; font-size:.8rem; }
+.badge.yes { background:rgba(46,204,113,.15); color:var(--ok); }
+.badge.no { background:rgba(226,59,59,.15); color:var(--accent); }
+.badge.red { background:rgba(226,59,59,.15); color:#ff8585; }
+.badge.black { background:rgba(255,255,255,.1); color:#cfd3dc; }
+input,select,button { font:inherit; }
+input,select { background:#11141a; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; width:100%; }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:end; }
+.row > div { flex:1; min-width:120px; }
+label { display:block; font-size:.8rem; color:var(--muted); margin-bottom:4px; }
+button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:8px 14px; cursor:pointer; font-weight:600; }
+button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+button.ok { background:var(--ok); }
+.inline { display:inline; }
+.muted { color:var(--muted); }
+.right { text-align:right; }
+.flash { background:rgba(46,204,113,.12); border:1px solid var(--ok); color:#aef0c8; padding:10px 12px; border-radius:8px; margin:8px 0; }
+.login-wrap { max-width:360px; margin:10vh auto; }
+@media (max-width:600px){ th:nth-child(n+4), td:nth-child(n+4){ display:none; } main{padding:10px;} }
+`;
+
+export function layout(title: string, body: string, opts: { nav?: boolean; flash?: string } = {}): string {
+  const nav = opts.nav === false ? '' : `
+    <header>
+      <a href="/">🏀 basketballgod</a>
+      <nav>
+        <a href="/players">Игроки</a>
+        <a href="/tariffs">Тарифы</a>
+        <a href="/budgets">Бюджеты</a>
+      </nav>
+      <form class="inline" method="post" action="/logout" style="margin-left:auto"><button class="ghost">Выйти</button></form>
+    </header>`;
+  const flash = opts.flash ? `<div class="flash">${esc(opts.flash)}</div>` : '';
+  return `<!doctype html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)} — basketballgod</title><style>${STYLE}</style></head>
+<body>${nav}<main>${flash}${body}</main></body></html>`;
+}
+
+export function teamBadge(team: string): string {
+  const cls = team === 'RED' ? 'red' : 'black';
+  return `<span class="badge ${cls}">${esc(team)}</span>`;
+}
+
+export function activeBadge(active: boolean): string {
+  return active ? `<span class="badge yes">активен</span>` : `<span class="badge no">нет</span>`;
+}

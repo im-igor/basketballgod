@@ -31,19 +31,22 @@ export async function buildPayPrompt(
   undoChargeId?: number,
 ): Promise<{ text: string; keyboard?: InlineKeyboard; hasBudget: boolean }> {
   let hasBudget = false;
-  const kb = new InlineKeyboard();
-  let unpaidCount = 0;
+  const buttons: { id: number; label: string }[] = [];
 
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget) continue;
     hasBudget = true;
     const debtors = await getDebtors(budget.id);
-    for (const c of debtors) {
-      kb.text(formatNameForButton(c.name), `paymark:${c.id}`).row();
-      unpaidCount += 1;
-    }
+    for (const c of debtors) buttons.push({ id: c.id, label: formatNameForButton(c.name) });
   }
+
+  // Единый список обеих команд по алфавиту (по подписи «Имя …») по возрастанию.
+  buttons.sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+
+  const kb = new InlineKeyboard();
+  for (const b of buttons) kb.text(b.label, `paymark:${b.id}`).row();
+  const unpaidCount = buttons.length;
 
   if (undoChargeId) kb.text('↩️ Отменить последнюю отметку', `payundo:${undoChargeId}`).row();
 

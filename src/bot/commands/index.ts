@@ -23,7 +23,8 @@ import {
 } from '../../services/gameFee.service.js';
 import { sendBudgetDraftToAdmins, sendDebtors } from '../../services/notify.service.js';
 import { buildPayPrompt } from '../payMark.js';
-import { sendWeeklyPolls } from '../../services/poll.service.js';
+import { sendPollDraftsToAdmins } from '../pollDraft.js';
+import { buildPollDrafts } from '../../services/poll.service.js';
 import { log } from '../../util/logger.js';
 import type { Team } from '../../db/types.js';
 
@@ -42,7 +43,7 @@ const HELP = `<b>basketballgod — команды</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
 /debtors [MM YYYY] — напомнить должникам (по умолчанию текущий месяц)
 /pay [MM YYYY] — отметить оплаты кнопками (должники обеих команд, по умолчанию текущий месяц)
-/poll — разослать опросы на ближайшую неделю вручную
+/poll — черновики опросов на неделю в личку: правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
 
 Игры в /budget: каждый сыгравший должен быть в ростере указанной команды с active=YES и employee=TRUE, иначе игра не принимается.`;
 
@@ -298,10 +299,11 @@ export function registerCommands(bot: Bot): void {
     await ctx.reply(text, keyboard ? { reply_markup: keyboard } : {});
   })));
 
-  // /poll — ручной запуск рассылки опросов
+  // /poll — собрать черновики опросов на неделю и прислать в личку админам для проверки
   bot.command('poll', adminOnly(safe(async (ctx) => {
-    await ctx.reply('Рассылаю опросы…');
-    const { sent, forwarded } = await sendWeeklyPolls(ctx.api);
-    await ctx.reply(`✅ Отправлено опросов: ${sent}, переслано тренировок: ${forwarded}`);
+    await ctx.reply('Собираю черновики опросов на ближайшую неделю…');
+    const drafts = await buildPollDrafts();
+    await sendPollDraftsToAdmins(ctx.api, drafts);
+    await ctx.reply(`✅ Готово: черновиков — ${drafts.length}. Проверь их в личке и отправь в чат.`);
   })));
 }

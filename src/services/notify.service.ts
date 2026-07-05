@@ -1,5 +1,5 @@
 import { InlineKeyboard, type Api } from 'grammy';
-import { env } from '../config/env.js';
+import { env, TEAMS } from '../config/env.js';
 import {
   getBudgetById,
   getCharges,
@@ -9,7 +9,7 @@ import {
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
-import { monthLabel } from '../domain/dates.js';
+import { monthLabel, nextMonthOf } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, Team } from '../db/types.js';
 import type { BuiltBudget } from './budget.service.js';
@@ -140,6 +140,27 @@ export async function refreshBudgetMessage(api: Api, budgetId: number): Promise<
   }
 }
 
+/**
+ * Уведомление в чаты обеих команд, что состав участников бюджета на следующий
+ * месяц зафиксирован (шлём за сутки до рассылки сбора — см. cron).
+ */
+export async function sendBudgetFixationNotice(api: Api): Promise<void> {
+  const { month, year } = nextMonthOf(new Date());
+  const text = `🔒 <b>Участники бюджета на ${monthLabel(month, year)} зафиксированы.</b>`;
+  for (const team of TEAMS) {
+    const chat = env.chats[team];
+    await api
+      .sendMessage(chat.chatId, text, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
+      })
+      .catch((err) =>
+        log.warn(`[notify] не удалось отправить уведомление о фиксации (${team})`, (err as Error).message),
+      );
+  }
+}
+
 /** Отправить напоминание должникам команды за месяц. */
 export async function sendDebtors(
   api: Api,
@@ -147,6 +168,8 @@ export async function sendDebtors(
 ): Promise<{ count: number }> {
   const budget = await getBudgetById(budgetId);
   if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
+  // Напоминание должникам имеет смысл только по опубликованному в чат сбору.
+  if (!budget.message_id) throw new Error('Бюджет не опубликован в чат — сначала опубликуй сбор');
   const debtors = await getDebtors(budgetId);
   if (debtors.length === 0) return { count: 0 };
 

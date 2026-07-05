@@ -41,7 +41,7 @@ const HELP = `<b>basketballgod — команды</b>
 
 <b>Бюджет и оплаты:</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
-/debtors [MM YYYY] — напомнить должникам (по умолчанию текущий месяц)
+/debtors [RED|BLACK] [MM YYYY] — напомнить должникам (без команды — обеим; по умолчанию текущий месяц)
 /pay [MM YYYY] — отметить оплаты кнопками (должники обеих команд, по умолчанию текущий месяц)
 /poll — черновики опросов на неделю в личку: правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
 
@@ -262,19 +262,31 @@ export function registerCommands(bot: Bot): void {
     await sendBudgetDraftToAdmins(ctx.api, built);
   })));
 
-  // /debtors [MM YYYY]
+  // /debtors [RED|BLACK] [MM YYYY] — без команды напоминаем обеим.
   bot.command('debtors', adminOnly(safe(async (ctx) => {
     const now = new Date();
-    const my = parseMonthYear(argText(ctx), { month: now.getMonth() + 1, year: now.getFullYear() });
+    const parts = argText(ctx).trim().split(/\s+/).filter(Boolean);
+    // Необязательный первый аргумент — команда (RED|BLACK); остальное — месяц/год.
+    let teams = TEAMS;
+    if (parts[0] && /^(red|black)$/i.test(parts[0])) {
+      teams = [parts.shift()!.toUpperCase() as Team];
+    }
+    const my = parseMonthYear(parts.join(' '), { month: now.getMonth() + 1, year: now.getFullYear() });
     if (!my) {
-      await ctx.reply('Формат: /debtors MM YYYY');
+      await ctx.reply('Формат: /debtors [RED|BLACK] [MM YYYY]');
       return;
     }
     const report: string[] = [];
-    for (const team of TEAMS) {
+    for (const team of teams) {
       const budget = await getBudget(team, my.month, my.year);
       if (!budget) {
         report.push(`${team}: бюджет за ${monthLabel(my.month, my.year)} не найден`);
+        continue;
+      }
+      if (!budget.message_id) {
+        report.push(
+          `${team}: ⚠️ бюджет за ${monthLabel(my.month, my.year)} не опубликован в чат — напоминание не отправлено`,
+        );
         continue;
       }
       const { count } = await sendDebtors(ctx.api, budget.id);

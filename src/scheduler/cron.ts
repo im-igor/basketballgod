@@ -3,7 +3,7 @@ import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetDraftToAdmins } from '../services/notify.service.js';
+import { sendBudgetDraftToAdmins, sendBudgetFixationNotice } from '../services/notify.service.js';
 import { importPlayersFromSheet } from '../services/playersImport.service.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
@@ -20,6 +20,8 @@ function job(name: string, fn: () => Promise<void>): () => void {
 
 export function startScheduler(api: Api): void {
   if (!cron.validate(env.POLL_CRON)) throw new Error(`Некорректный POLL_CRON: ${env.POLL_CRON}`);
+  if (!cron.validate(env.MONTHLY_FIXATION_CRON))
+    throw new Error(`Некорректный MONTHLY_FIXATION_CRON: ${env.MONTHLY_FIXATION_CRON}`);
   if (!cron.validate(env.MONTHLY_CRON)) throw new Error(`Некорректный MONTHLY_CRON: ${env.MONTHLY_CRON}`);
 
   // Рассылка опросов (по умолчанию пятница 12:00)
@@ -27,7 +29,13 @@ export function startScheduler(api: Api): void {
     await sendWeeklyPolls(api);
   }), { timezone: env.TZ });
 
-  // Бюджет на следующий месяц (по умолчанию 25-е число 10:00 МСК):
+  // Уведомление о фиксации участников (по умолчанию 25-е число 20:00 МСК):
+  // за сутки до сбора бюджета шлём в чаты обеих команд, что состав на следующий месяц зафиксирован.
+  cron.schedule(env.MONTHLY_FIXATION_CRON, job('budget-fixation-notice', async () => {
+    await sendBudgetFixationNotice(api);
+  }), { timezone: env.TZ });
+
+  // Бюджет на следующий месяц (по умолчанию 26-е число 20:00 МСК):
   // сначала импортируем актуальный состав из таблицы, затем собираем бюджеты ОБЕИХ
   // команд и отправляем ЧЕРНОВИКИ администраторам в личку (в чаты публикует админ кнопкой).
   // Игры (взносы) берутся из БД — те, что зарегистрированы вручную через /budget … url.
@@ -40,6 +48,7 @@ export function startScheduler(api: Api): void {
   }), { timezone: env.TZ });
 
   log.info(
-    `[cron] расписание активно (TZ=${env.TZ}) — опросы "${env.POLL_CRON}", бюджет "${env.MONTHLY_CRON}"`,
+    `[cron] расписание активно (TZ=${env.TZ}) — опросы "${env.POLL_CRON}", ` +
+      `фиксация "${env.MONTHLY_FIXATION_CRON}", бюджет "${env.MONTHLY_CRON}"`,
   );
 }

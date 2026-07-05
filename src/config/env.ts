@@ -53,7 +53,10 @@ const schema = z.object({
   // Schedule
   TZ: z.string().default('Europe/Moscow'),
   POLL_CRON: z.string().default('0 12 * * 5'),
-  MONTHLY_CRON: z.string().default('0 10 25 * *'),
+  // Уведомление в чаты о фиксации участников — 25-го вечером (за сутки до сбора).
+  MONTHLY_FIXATION_CRON: z.string().default('0 20 25 * *'),
+  // Черновик бюджета админам в личку — 26-го вечером.
+  MONTHLY_CRON: z.string().default('0 20 26 * *'),
 
   // Google
   GOOGLE_CALENDAR_RED: z.string().min(1),

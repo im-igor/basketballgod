@@ -33,7 +33,7 @@ export async function setupBotCommandsMenu(): Promise<void> {
     { command: 'active', description: 'Активность игрока: /active @login yes|no' },
     { command: 'sync_players', description: 'Импорт таблицы игроков в БД' },
     { command: 'budget', description: 'Черновик бюджета: /budget RED|BLACK MM YYYY [url …]' },
-    { command: 'debtors', description: 'Напомнить должникам: /debtors MM YYYY' },
+    { command: 'debtors', description: 'Напомнить должникам: /debtors [RED|BLACK] [MM YYYY]' },
     { command: 'pay', description: 'Отметить оплаты кнопками: /pay [MM YYYY]' },
     { command: 'poll', description: 'Черновики опросов на неделю в личку (с правкой)' },
   ]);

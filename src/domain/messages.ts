@@ -137,5 +137,5 @@ export function buildDebtorsMessage(
 ): string {
   const pay = paymentBlock(payment.sberUrl, payment.tbankUrl);
   const list = debtors.map((c) => `${escapeHtml(c.name ?? '')} ${c.tg_login} ${c.amount}`).join('\n');
-  return `<b>Просьба должников за ${monthName}</b>\n\n${pay}\n\n${list}`;
+  return `❗️<b>Должники за ${monthName}, просьба донести взносы</b>\n\n${pay}\n\n${list}`;
 }

@@ -30,8 +30,8 @@ async function main(): Promise<void> {
     void bot.start({ onStart: () => log.info('[bot] long polling запущен') });
   }
 
-  // 4. Планировщик.
-  startScheduler(bot.api);
+  // 4. Планировщик (расписание читается из вкладки `cron` Google-таблицы с фолбэком на env).
+  await startScheduler(bot.api);
 
   // 5. Корректное завершение.
   const shutdown = async (sig: string) => {

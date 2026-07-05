@@ -162,3 +162,75 @@ export async function deletePlayerFromSheet(login: string): Promise<boolean> {
   await writePlayersSheet(filtered);
   return true;
 }
+
+// ── Транспонированные вкладки-конфиги (колонка A — ключ, B — значение) ──────
+
+/** Прочитать вкладку «ключ→значение» (диапазон A:B) в объект (ключи в нижнем регистре). */
+async function readKeyValueTab(tab: string): Promise<Record<string, string>> {
+  const sheets = sheetsClient();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId(),
+    range: `${tab}!A:B`,
+  });
+  const rows = (res.data.values ?? []) as string[][];
+  const map: Record<string, string> = {};
+  for (const [key, value] of rows) {
+    if (!key) continue;
+    map[key.trim().toLowerCase()] = (value ?? '').trim();
+  }
+  return map;
+}
+
+export interface SheetTariffs {
+  gym_paid_price?: number;
+  locker_rent_price?: number;
+  coach_per_session?: number;
+  coach_per_game?: number;
+  referee_default?: number;
+}
+
+/** Тарифы из вкладки `tariffs` (A=ключ, B=значение). Битые/пустые значения — undefined. */
+export async function readTariffsFromSheet(): Promise<SheetTariffs> {
+  const map = await readKeyValueTab('tariffs');
+  const num = (key: string): number | undefined => {
+    const raw = map[key];
+    if (!raw) return undefined;
+    const n = Number(raw.replace(/\s+/g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    gym_paid_price: num('gym_paid_price'),
+    locker_rent_price: num('locker_rent_price'),
+    coach_per_session: num('coach_per_session'),
+    coach_per_game: num('coach_per_game'),
+    referee_default: num('referee_default'),
+  };
+}
+
+export interface SheetCronConfig {
+  timezone?: string;
+  poll_weekday?: number;
+  poll_time?: string;
+  fixation_day?: number;
+  fixation_time?: string;
+  budget_day?: number;
+  budget_time?: string;
+}
+
+/** Расписание из вкладки `cron` (A=ключ, B=значение). Отсутствующее — undefined. */
+export async function readCronConfigFromSheet(): Promise<SheetCronConfig> {
+  const map = await readKeyValueTab('cron');
+  const int = (key: string): number | undefined => {
+    const n = Number(map[key]);
+    return Number.isInteger(n) ? n : undefined;
+  };
+  return {
+    timezone: map['timezone'] || undefined,
+    poll_weekday: int('poll_weekday'),
+    poll_time: map['poll_time'] || undefined,
+    fixation_day: int('fixation_day'),
+    fixation_time: map['fixation_time'] || undefined,
+    budget_day: int('budget_day'),
+    budget_time: map['budget_time'] || undefined,
+  };
+}

@@ -13,6 +13,7 @@ import {
   type SheetPlayer,
 } from '../../google/sheets.js';
 import { importPlayersFromSheet } from '../../services/playersImport.service.js';
+import { importTariffsFromSheet } from '../../services/tariffsImport.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
 import { getTariffs } from '../../db/repos/tariffs.repo.js';
 import { buildAndSaveBudgets } from '../../services/budget.service.js';
@@ -232,9 +233,10 @@ export function registerCommands(bot: Bot): void {
     }
     const { team, month, year, games } = value;
     await ctx.reply(
-      `Импортирую игроков из таблицы и считаю бюджет ${team} за ${monthLabel(month, year)}…`,
+      `Импортирую игроков и тарифы из таблицы и считаю бюджет ${team} за ${monthLabel(month, year)}…`,
     );
     await importPlayersFromSheet();
+    await importTariffsFromSheet();
 
     // Игры (если есть): сперва валидируем все, и только если без ошибок — сохраняем.
     if (games.length > 0) {

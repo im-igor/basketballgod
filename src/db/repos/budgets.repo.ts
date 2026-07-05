@@ -120,6 +120,18 @@ export async function setChargePaid(chargeId: number, paid: boolean): Promise<Ch
   return rows[0] ?? null;
 }
 
+/** Переключить статус оплаты начисления (paid ↔ не paid), обновив paid_at. */
+export async function toggleChargePaid(chargeId: number): Promise<Charge | null> {
+  const { rows } = await query<Charge>(
+    `update charges
+        set paid = not paid,
+            paid_at = case when paid then null else now() end
+      where id = $1 returning *`,
+    [chargeId],
+  );
+  return rows[0] ?? null;
+}
+
 export async function setChargePaidByLogin(
   budgetId: number,
   tgLogin: string,

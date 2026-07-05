@@ -161,28 +161,66 @@ export async function sendBudgetFixationNotice(api: Api): Promise<void> {
   }
 }
 
-/** Отправить напоминание должникам команды за месяц. */
-export async function sendDebtors(
-  api: Api,
+/** Собрать текст напоминания должникам и их число по бюджету (черновику или опубликованному). */
+async function buildDebtorsDraft(
   budgetId: number,
-): Promise<{ count: number }> {
+): Promise<{ team: Team; text: string; count: number } | null> {
   const budget = await getBudgetById(budgetId);
-  if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
-  // Напоминание должникам имеет смысл только по опубликованному в чат сбору.
-  if (!budget.message_id) throw new Error('Бюджет не опубликован в чат — сначала опубликуй сбор');
+  if (!budget) return null;
   const debtors = await getDebtors(budgetId);
-  if (debtors.length === 0) return { count: 0 };
-
   const text = buildDebtorsMessage(
     monthLabel(budget.month, budget.year),
     debtors.map((d) => ({ name: d.name, tg_login: d.tg_login, amount: d.amount })),
     payment,
   );
-  const chat = env.chats[budget.team];
-  await api.sendMessage(chat.chatId, text, {
+  return { team: budget.team, text, count: debtors.length };
+}
+
+/** Отправить напоминание должникам в чат команды. Долги — по любому собранному бюджету. */
+export async function sendDebtors(api: Api, budgetId: number): Promise<{ count: number }> {
+  const d = await buildDebtorsDraft(budgetId);
+  if (!d) throw new Error(`Бюджет #${budgetId} не найден`);
+  if (d.count === 0) return { count: 0 };
+  const chat = env.chats[d.team];
+  await api.sendMessage(chat.chatId, d.text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
     ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
   });
-  return { count: debtors.length };
+  return { count: d.count };
+}
+
+/**
+ * Отправить ЧЕРНОВИК списка должников администраторам в личку — по одному сообщению на команду,
+ * с кнопкой «Отправить в чат». В чат команды напоминание уходит только после нажатия кнопки
+ * (см. bot/debtorsPublish.ts). count=0 — должников нет, черновик не шлём.
+ */
+export async function sendDebtorsDraftToAdmins(
+  api: Api,
+  budgetId: number,
+): Promise<{ team: Team; count: number } | null> {
+  const d = await buildDebtorsDraft(budgetId);
+  if (!d) return null;
+  if (d.count === 0) return { team: d.team, count: 0 };
+
+  const header =
+    `🧾 <b>Черновик напоминания должникам — ${d.team}</b>\n` +
+    `Проверь список и нажми «Отправить в чат».\n\n`;
+  const keyboard = new InlineKeyboard().text(`✅ Отправить в чат ${d.team}`, `debtorssend:${budgetId}`);
+
+  for (const adminId of env.ADMIN_TG_IDS) {
+    await api
+      .sendMessage(adminId, header + d.text, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        reply_markup: keyboard,
+      })
+      .catch((err) =>
+        log.warn(
+          `[notify] не удалось отправить черновик должников админу ${adminId}`,
+          (err as Error).message,
+        ),
+      );
+  }
+  return { team: d.team, count: d.count };
 }

@@ -5,6 +5,7 @@ import { registerCommands } from './commands/index.js';
 import { registerPollAnswers } from './pollAnswers.js';
 import { registerPollDraft } from './pollDraft.js';
 import { registerBudgetPublish } from './budgetPublish.js';
+import { registerDebtorsPublish } from './debtorsPublish.js';
 import { registerBudgetAdjust } from './budgetAdjust.js';
 import { registerPayMark } from './payMark.js';
 
@@ -17,6 +18,7 @@ bot.catch((err) => {
 
 registerPollAnswers(bot);
 registerBudgetPublish(bot);
+registerDebtorsPublish(bot);
 registerPayMark(bot);
 registerCommands(bot);
 // После команд: текстовые обработчики ответов ловят только force-reply на наши запросы.
@@ -33,7 +35,7 @@ export async function setupBotCommandsMenu(): Promise<void> {
     { command: 'active', description: 'Активность игрока: /active @login yes|no' },
     { command: 'sync_players', description: 'Импорт таблицы игроков в БД' },
     { command: 'budget', description: 'Черновик бюджета: /budget RED|BLACK MM YYYY [url …]' },
-    { command: 'debtors', description: 'Напомнить должникам: /debtors [RED|BLACK] [MM YYYY]' },
+    { command: 'debtors', description: 'Черновик должников в личку: /debtors [RED|BLACK] [MM YYYY]' },
     { command: 'pay', description: 'Отметить оплаты кнопками: /pay [MM YYYY]' },
     { command: 'poll', description: 'Черновики опросов на неделю в личку (с правкой)' },
   ]);

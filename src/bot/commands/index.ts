@@ -22,7 +22,7 @@ import {
   registerValidatedGames,
   type GamePlan,
 } from '../../services/gameFee.service.js';
-import { sendBudgetDraftToAdmins, sendDebtors } from '../../services/notify.service.js';
+import { sendBudgetDraftToAdmins, sendDebtorsDraftToAdmins } from '../../services/notify.service.js';
 import { buildPayPrompt } from '../payMark.js';
 import { sendPollDraftsToAdmins } from '../pollDraft.js';
 import { buildPollDrafts } from '../../services/poll.service.js';
@@ -42,7 +42,7 @@ const HELP = `<b>basketballgod — команды</b>
 
 <b>Бюджет и оплаты:</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
-/debtors [RED|BLACK] [MM YYYY] — напомнить должникам (без команды — обеим; по умолчанию текущий месяц)
+/debtors [RED|BLACK] [MM YYYY] — черновик списка должников в личку с кнопкой «Отправить в чат» (без команды — обе; по умолч. текущий месяц)
 /pay [MM YYYY] — отметить оплаты кнопками (должники обеих команд, по умолчанию текущий месяц)
 /poll — черновики опросов на неделю в личку: правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
 
@@ -285,14 +285,14 @@ export function registerCommands(bot: Bot): void {
         report.push(`${team}: бюджет за ${monthLabel(my.month, my.year)} не найден`);
         continue;
       }
-      if (!budget.message_id) {
-        report.push(
-          `${team}: ⚠️ бюджет за ${monthLabel(my.month, my.year)} не опубликован в чат — напоминание не отправлено`,
-        );
-        continue;
-      }
-      const { count } = await sendDebtors(ctx.api, budget.id);
-      report.push(`${team}: должников ${count}`);
+      // Долги — по любому собранному бюджету (черновик или опубликованный).
+      // Черновик списка уходит админу в личку с кнопкой «Отправить в чат».
+      const res = await sendDebtorsDraftToAdmins(ctx.api, budget.id);
+      report.push(
+        !res || res.count === 0
+          ? `${team}: должников нет`
+          : `${team}: черновик отправлен в личку (должников ${res.count})`,
+      );
     }
     await ctx.reply(report.join('\n'));
   })));

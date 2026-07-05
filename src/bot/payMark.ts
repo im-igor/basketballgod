@@ -7,18 +7,11 @@ import {
   toggleChargePaid,
 } from '../db/repos/budgets.repo.js';
 import { refreshBudgetMessage } from '../services/notify.service.js';
+import { formatFullName } from '../domain/messages.js';
 import { monthLabel } from '../domain/dates.js';
 import type { Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
-
-/** Полное ФИО → «Имя Отчество Ф.» (хранение: «Фамилия Имя Отчество»). */
-export function formatNameForButton(name: string | null): string {
-  const t = (name ?? '').trim().split(/\s+/).filter(Boolean);
-  if (t.length >= 3) return `${t[1]} ${t[2]} ${t[0]![0]}.`;
-  if (t.length === 2) return `${t[1]} ${t[0]![0]}.`;
-  return name ?? 'без имени';
-}
 
 /**
  * Промпт оплат за месяц: кнопки со ВСЕМИ игроками обеих команд, у оплативших — ✅.
@@ -38,7 +31,9 @@ export async function buildPayPrompt(
     hasBudget = true;
     const charges = await getCharges(budget.id);
     for (const c of charges) {
-      buttons.push({ id: c.id, label: formatNameForButton(c.name), paid: c.paid });
+      // Кнопка: «Имя Отчество Фамилия <сумма к оплате за месяц>», напр. «Иван Петрович Сидоров 4250».
+      const label = `${formatFullName(c.name) || 'без имени'} ${Math.round(Number(c.amount))}`;
+      buttons.push({ id: c.id, label, paid: c.paid });
       if (c.paid) paidCount++;
     }
   }
@@ -80,7 +75,7 @@ export function registerPayMark(bot: Bot): void {
         const { text, keyboard } = await buildPayPrompt(budget.month, budget.year);
         await ctx.editMessageText(text, { reply_markup: keyboard }).catch(() => undefined);
       }
-      const name = formatNameForButton(charge.name);
+      const name = formatFullName(charge.name) || 'без имени';
       await ctx.answerCallbackQuery({ text: charge.paid ? `✅ Оплатил: ${name}` : `↩️ Снято: ${name}` });
     } catch (err) {
       await ctx.answerCallbackQuery({ text: `Ошибка: ${(err as Error).message}`, show_alert: true });

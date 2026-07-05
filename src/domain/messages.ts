@@ -5,6 +5,13 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Хранимое «Фамилия Имя Отчество» → «Имя Отчество Фамилия» (фамилия в конце). */
+export function formatFullName(name: string | null): string {
+  const t = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (t.length >= 2) return `${t.slice(1).join(' ')} ${t[0]}`;
+  return name?.trim() ?? '';
+}
+
 export function paymentBlock(sberUrl: string, tbankUrl: string): string {
   return `Сбер\n${sberUrl}\n\nТбанк\n${tbankUrl}`;
 }
@@ -116,12 +123,11 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
 
   const quote = `<blockquote>${calcInner}${gamesInner}</blockquote>\n`;
 
-  // Должник — ❗️ перед именем; оплативший — без ❗️ и с « +» после суммы.
+  // Перед именем: ❗️ у должника, ✅ у оплатившего.
   const usersList = input.charges
     .map((c) => {
-      const flag = c.paid ? '' : '❗️';
-      const mark = c.paid ? ' +' : '';
-      return `${flag}${escapeHtml(c.name ?? '')} ${c.tg_login} ${c.amount}${mark}`;
+      const flag = c.paid ? '✅' : '❗️';
+      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}`;
     })
     .join('\n');
 
@@ -136,6 +142,8 @@ export function buildDebtorsMessage(
   payment: { sberUrl: string; tbankUrl: string },
 ): string {
   const pay = paymentBlock(payment.sberUrl, payment.tbankUrl);
-  const list = debtors.map((c) => `${escapeHtml(c.name ?? '')} ${c.tg_login} ${c.amount}`).join('\n');
+  const list = debtors
+    .map((c) => `${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}`)
+    .join('\n');
   return `❗️<b>Должники за ${monthName}, просьба донести взносы</b>\n\n${pay}\n\n${list}`;
 }

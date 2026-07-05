@@ -228,10 +228,11 @@ curl http://localhost:3000/healthz   # должен ответить ok
 
 ### Эксплуатация
 ```bash
-docker compose logs -f app          # логи
-docker compose restart app          # перезапуск после смены .env
-docker compose up -d --build app    # пересборка после git pull / нового кода
-docker compose down                  # остановить (данные БД сохранятся в volume pgdata)
+docker compose logs -f app                 # логи
+docker compose up -d --force-recreate app  # применить изменения .env (restart НЕ перечитывает env_file!)
+docker compose restart app                 # просто перезапуск процесса (окружение НЕ обновляется)
+docker compose up -d --build app           # пересборка после git pull / нового кода
+docker compose down                        # остановить (данные БД сохранятся в volume pgdata)
 ```
 Бэкап БД:
 ```bash

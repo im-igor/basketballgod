@@ -181,6 +181,23 @@ async function readKeyValueTab(tab: string): Promise<Record<string, string>> {
   return map;
 }
 
+/**
+ * Перезаписать вкладку «ключ→значение» (A:B). Пишем пары в заданном порядке,
+ * предварительно очистив прежнее содержимое (на случай удалённых строк).
+ */
+async function writeKeyValueTab(tab: string, pairs: [string, string][]): Promise<void> {
+  const sheets = sheetsClient();
+  const id = sheetId();
+  await sheets.spreadsheets.values.clear({ spreadsheetId: id, range: `${tab}!A:B` });
+  if (pairs.length === 0) return;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: id,
+    range: `${tab}!A1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: pairs.map(([k, v]) => [k, v]) },
+  });
+}
+
 export interface SheetTariffs {
   gym_paid_price?: number;
   locker_rent_price?: number;
@@ -233,4 +250,91 @@ export async function readCronConfigFromSheet(): Promise<SheetCronConfig> {
     budget_day: int('budget_day'),
     budget_time: map['budget_time'] || undefined,
   };
+}
+
+/** Записать тарифы в вкладку `tariffs` (A=ключ, B=значение). */
+export async function writeTariffsToSheet(t: {
+  gym_paid_price: number;
+  locker_rent_price: number;
+  coach_per_session: number;
+  coach_per_game: number;
+  referee_default: number;
+}): Promise<void> {
+  await writeKeyValueTab('tariffs', [
+    ['gym_paid_price', String(t.gym_paid_price)],
+    ['locker_rent_price', String(t.locker_rent_price)],
+    ['coach_per_session', String(t.coach_per_session)],
+    ['coach_per_game', String(t.coach_per_game)],
+    ['referee_default', String(t.referee_default)],
+  ]);
+}
+
+/** Записать расписание в вкладку `cron` (A=ключ, B=значение). null → пустая ячейка. */
+export async function writeCronToSheet(c: {
+  timezone: string | null;
+  poll_weekday: number | null;
+  poll_time: string | null;
+  fixation_day: number | null;
+  fixation_time: string | null;
+  budget_day: number | null;
+  budget_time: string | null;
+}): Promise<void> {
+  const s = (v: string | number | null): string => (v === null ? '' : String(v));
+  await writeKeyValueTab('cron', [
+    ['timezone', s(c.timezone)],
+    ['poll_weekday', s(c.poll_weekday)],
+    ['poll_time', s(c.poll_time)],
+    ['fixation_day', s(c.fixation_day)],
+    ['fixation_time', s(c.fixation_time)],
+    ['budget_day', s(c.budget_day)],
+    ['budget_time', s(c.budget_time)],
+  ]);
+}
+
+// ── Справочник тегов (вкладка `Tags`, A:C — key/value/description) ──────────
+
+const TAGS_TAB = 'Tags';
+
+export interface SheetTag {
+  tag_key: string;
+  tag_value: string;
+  description: string | null;
+}
+
+/** Прочитать справочник тегов из вкладки `Tags` (строка 1 — заголовок, данные с A2). */
+export async function readTagsFromSheet(): Promise<SheetTag[]> {
+  const sheets = sheetsClient();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId(),
+    range: `${TAGS_TAB}!A2:C`,
+  });
+  const rows = (res.data.values ?? []) as string[][];
+  const out: SheetTag[] = [];
+  for (const [key, value, description] of rows) {
+    const k = (key ?? '').trim();
+    if (!k) continue;
+    out.push({
+      tag_key: k.toUpperCase(),
+      tag_value: (value ?? '').trim(),
+      description: (description ?? '').trim() || null,
+    });
+  }
+  return out;
+}
+
+/** Перезаписать вкладку `Tags` (с заголовком). */
+export async function writeTagsToSheet(tags: SheetTag[]): Promise<void> {
+  const sheets = sheetsClient();
+  const id = sheetId();
+  await sheets.spreadsheets.values.clear({ spreadsheetId: id, range: `${TAGS_TAB}!A:C` });
+  const values = [
+    ['key', 'value', 'description'],
+    ...tags.map((t) => [t.tag_key, t.tag_value, t.description ?? '']),
+  ];
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: id,
+    range: `${TAGS_TAB}!A1`,
+    valueInputOption: 'RAW',
+    requestBody: { values },
+  });
 }

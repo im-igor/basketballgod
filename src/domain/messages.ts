@@ -99,11 +99,21 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   // Эффективное число оплат тренера = календарное + ручная дельта; комментарий — после «N трен.».
   const effCoach = Math.max(0, d.coach_sessions + (d.coach_delta ?? 0));
   const coachNote = d.coach_note ? ` ${escapeHtml(d.coach_note)}` : '';
+
+  // Шкафчик: при нулевой аренде упоминание и слагаемое из формулы убираем.
+  const hasLocker = tariffs.locker_rent_price > 0;
+  const lockerText = hasLocker ? ` и оплата шкафчика ${tariffs.locker_rent_price}` : '';
+  const lockerSum = hasLocker ? ` + ${tariffs.locker_rent_price}` : '';
+  const gymFormula = hasLocker
+    ? `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price}${lockerSum}) / ${d.total_players}`
+    : `${d.paid_gym_sessions} x ${tariffs.gym_paid_price} / ${d.total_players}`;
+  const shareWord = hasLocker ? 'делятся' : 'делится';
+
   const calcInner =
     `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
-    `Зал PG - ${d.paid_gym_sessions} трен. и оплата шкафчика ${tariffs.locker_rent_price} (делятся на всех)\n` +
-    `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price} + ${tariffs.locker_rent_price}) / ${d.total_players} = ${d.gym_per_person} руб.\n` +
-    `Зал Red по понедельникам - оплачивается Яндексом полностью.\n` +
+    `Зал Black по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
+    `${gymFormula} = ${d.gym_per_person} руб.\n` +
+    `Зал Red по вторникам - оплачивается Яндексом полностью.\n` +
     `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${effCoach} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
     `ИТОГО: ${d.base_per_person} руб.\n`;
 

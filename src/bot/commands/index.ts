@@ -14,6 +14,7 @@ import {
 } from '../../google/sheets.js';
 import { importPlayersFromSheet } from '../../services/playersImport.service.js';
 import { importTariffsFromSheet } from '../../services/tariffsImport.service.js';
+import { syncAllFromSheet } from '../../services/sheetSync.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
 import { getTariffs } from '../../db/repos/tariffs.repo.js';
 import { buildAndSaveBudgets } from '../../services/budget.service.js';
@@ -38,7 +39,8 @@ const HELP = `<b>basketballgod — команды</b>
 /player_set @login поле=значение … — изменить поля (name, team, employee, active, from, to, notes)
 /player_del @login — удалить игрока из таблицы
 /active @login yes|no — активность игрока на след. месяц
-/sync_players — загрузить таблицу в БД (импорт)
+/sync_players — загрузить вкладку Players в БД
+/sync_all — загрузить все вкладки (Players, Tariffs, Cron, Tags) из таблицы в БД
 
 <b>Бюджет и оплаты:</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
@@ -217,11 +219,18 @@ export function registerCommands(bot: Bot): void {
     );
   })));
 
-  // /sync_players — импорт таблицы в БД
+  // /sync_players — импорт вкладки Players в БД
   bot.command('sync_players', adminOnly(safe(async (ctx) => {
     await ctx.reply('Импортирую игроков из таблицы в БД…');
     const { imported, deactivated } = await importPlayersFromSheet();
     await ctx.reply(`✅ Импорт завершён. Обновлено: ${imported}, деактивировано: ${deactivated}.`);
+  })));
+
+  // /sync_all — импорт всех вкладок (Players, Tariffs, Cron, Tags) таблица → БД
+  bot.command('sync_all', adminOnly(safe(async (ctx) => {
+    await ctx.reply('Синхронизирую все вкладки из таблицы в БД…');
+    const summary = await syncAllFromSheet();
+    await ctx.reply(`Готово:\n${summary}`);
   })));
 
   // /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку.

@@ -52,15 +52,32 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
       <nav>
         <a href="/players">Игроки</a>
         <a href="/tariffs">Тарифы</a>
+        <a href="/cron">Крон</a>
+        <a href="/tags">Теги</a>
         <a href="/budgets">Бюджеты</a>
       </nav>
-      <form class="inline" method="post" action="/logout" style="margin-left:auto"><button class="ghost">Выйти</button></form>
+      <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+        <form class="inline" method="post" action="/sync/pull"><button class="ghost" title="Загрузить все вкладки из таблицы в БД">⬇ Всё из таблицы</button></form>
+        <form class="inline" method="post" action="/sync/push"><button class="ghost" title="Выгрузить все данные из БД в таблицу">⬆ Всё в таблицу</button></form>
+        <form class="inline" method="post" action="/logout"><button class="ghost">Выйти</button></form>
+      </div>
     </header>`;
   const flash = opts.flash ? `<div class="flash">${esc(opts.flash)}</div>` : '';
   return `<!doctype html><html lang="ru"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — basketballgod</title><style>${STYLE}</style></head>
 <body>${nav}<main>${flash}${body}</main></body></html>`;
+}
+
+/**
+ * Пара кнопок синхронизации раздела с соответствующей вкладкой Google-таблицы:
+ * «загрузить из таблицы» (таблица → БД) и «выгрузить в таблицу» (БД → таблица).
+ */
+export function syncButtons(section: string): string {
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap">
+    <form class="inline" method="post" action="/${section}/pull"><button class="ghost">⬇ Загрузить из таблицы</button></form>
+    <form class="inline" method="post" action="/${section}/push"><button class="ghost">⬆ Выгрузить в таблицу</button></form>
+  </div>`;
 }
 
 export function teamBadge(team: string): string {

@@ -6,7 +6,8 @@ import { buildAndSaveBudgets } from '../services/budget.service.js';
 import { sendBudgetDraftToAdmins, sendBudgetFixationNotice } from '../services/notify.service.js';
 import { importPlayersFromSheet } from '../services/playersImport.service.js';
 import { importTariffsFromSheet } from '../services/tariffsImport.service.js';
-import { readCronConfigFromSheet, type SheetCronConfig } from '../google/sheets.js';
+import { getCronConfig } from '../db/repos/cronConfig.repo.js';
+import type { CronConfig } from '../db/types.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 
@@ -28,7 +29,7 @@ interface Schedule {
 }
 
 /** «ЧЧ:ММ» → {h, m}, иначе null. */
-function parseHm(time: string | undefined): { h: number; m: number } | null {
+function parseHm(time: string | null | undefined): { h: number; m: number } | null {
   const m = (time ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
   const h = Number(m[1]);
@@ -38,12 +39,12 @@ function parseHm(time: string | undefined): { h: number; m: number } | null {
 }
 
 /** День недели 1=Пн…7=Вс → формат cron (0=Вс…6=Сб), иначе null. */
-function toCronDow(wd: number | undefined): number | null {
-  if (wd === undefined || !Number.isInteger(wd) || wd < 1 || wd > 7) return null;
+function toCronDow(wd: number | null | undefined): number | null {
+  if (wd == null || !Number.isInteger(wd) || wd < 1 || wd > 7) return null;
   return wd === 7 ? 0 : wd;
 }
 
-const RECONCILE_CRON = '7 * * * *'; // как часто перечитывать вкладку cron (раз в час)
+const RECONCILE_CRON = '7 * * * *'; // как часто перечитывать cron_config из БД (раз в час)
 
 /** Расписание из env/дефолтов — фолбэк, когда таблица недоступна или поля не заданы. */
 function envSchedule(): Schedule {
@@ -55,14 +56,14 @@ function envSchedule(): Schedule {
   };
 }
 
-/** Собрать расписание из значений вкладки `cron`; каждое поле — с фолбэком на env/дефолты. */
-function buildSchedule(cfg: SheetCronConfig): Schedule {
+/** Собрать расписание из значений cron_config; каждое поле — с фолбэком на env/дефолты. */
+function buildSchedule(cfg: CronConfig): Schedule {
   const fb = envSchedule();
   const pollT = parseHm(cfg.poll_time);
   const pollDow = toCronDow(cfg.poll_weekday);
   const fixT = parseHm(cfg.fixation_time);
   const budT = parseHm(cfg.budget_time);
-  const dayOk = (d: number | undefined): d is number => d !== undefined && d >= 1 && d <= 28;
+  const dayOk = (d: number | null | undefined): d is number => d != null && d >= 1 && d <= 28;
   return {
     tz: cfg.timezone || fb.tz,
     pollCron: pollT && pollDow !== null ? `${pollT.m} ${pollT.h} * * ${pollDow}` : fb.pollCron,
@@ -72,15 +73,15 @@ function buildSchedule(cfg: SheetCronConfig): Schedule {
 }
 
 /**
- * Прочитать расписание из вкладки `cron`. fromSheet=false, если таблицу прочитать не удалось —
- * тогда при реконсиляции НЕ трогаем текущее расписание (защита от «тряски» при сбоях сети).
+ * Прочитать расписание из cron_config (БД). fromDb=false, если БД прочитать не удалось —
+ * тогда при реконсиляции НЕ трогаем текущее расписание (защита от «тряски» при сбоях).
  */
 async function loadSchedule(): Promise<{ sch: Schedule; fromSheet: boolean }> {
   try {
-    const cfg = await readCronConfigFromSheet();
+    const cfg = await getCronConfig();
     return { sch: buildSchedule(cfg), fromSheet: true };
   } catch (err) {
-    log.warn('[cron] вкладка cron недоступна — расписание из env/дефолтов', (err as Error).message);
+    log.warn('[cron] cron_config недоступен — расписание из env/дефолтов', (err as Error).message);
     return { sch: envSchedule(), fromSheet: false };
   }
 }
@@ -136,8 +137,8 @@ export async function startScheduler(api: Api): Promise<void> {
   const { sch } = await loadSchedule();
   applySchedule(api, sch);
 
-  // Горячая перечитка: периодически сверяем расписание с таблицей и переприменяем при изменении.
-  // Так правки в вкладке `cron` подхватываются без перезапуска бота (в пределах интервала).
+  // Горячая перечитка: периодически сверяем расписание с БД и переприменяем при изменении.
+  // Так правки cron_config (через админку/синк) подхватываются без перезапуска бота.
   cron.schedule(RECONCILE_CRON, () => {
     void loadSchedule()
       .then(({ sch: next, fromSheet }) => {

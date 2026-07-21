@@ -4,18 +4,20 @@ import formbody from '@fastify/formbody';
 import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
-import { layout, esc, teamBadge, activeBadge, sortHeader } from './views.js';
-import {
-  readPlayersSheet,
-  findPlayerInSheet,
-  upsertPlayerInSheet,
-  deletePlayerFromSheet,
-  isoToRu,
-  type SheetPlayer,
-} from '../google/sheets.js';
-import { importPlayersFromSheet } from '../services/playersImport.service.js';
+import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons } from './views.js';
+import { isoToRu } from '../google/sheets.js';
+import { normalizeLogin } from '../util/args.js';
 import { computeActivityDates } from '../domain/activity.js';
+import {
+  listPlayers,
+  getByLogin,
+  upsertPlayer,
+  setActive,
+  deletePlayer,
+} from '../db/repos/players.repo.js';
 import { getTariffs, updateTariffs } from '../db/repos/tariffs.repo.js';
+import { getCronConfig, updateCronConfig } from '../db/repos/cronConfig.repo.js';
+import { listTags, upsertTag, deleteTag } from '../db/repos/tags.repo.js';
 import {
   listBudgets,
   getBudgetById,
@@ -25,8 +27,20 @@ import {
 import { buildAndSaveBudgets } from '../services/budget.service.js';
 import { sendBudgetToChat, refreshBudgetMessage, sendDebtors } from '../services/notify.service.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
+import {
+  syncAllFromSheet,
+  syncAllToSheet,
+  importPlayersToDb,
+  exportPlayersToSheet,
+  importTariffsToDb,
+  exportTariffsToSheet,
+  importCronFromSheet,
+  exportCronToSheet,
+  importTagsToDb,
+  exportTagsToSheet,
+} from '../services/sheetSync.service.js';
 import { monthLabel } from '../domain/dates.js';
-import type { Team } from '../db/types.js';
+import type { Team, Player } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
@@ -45,6 +59,17 @@ function redirect(reply: FastifyReply, to: string, msg?: string): FastifyReply {
 
 function html(reply: FastifyReply, body: string): FastifyReply {
   return reply.type('text/html; charset=utf-8').send(body);
+}
+
+/** Обработчик кнопки синхронизации: запускает fn и редиректит на `back` со сводкой/ошибкой. */
+function syncRoute(back: string, fn: () => Promise<string>) {
+  return async (_req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    try {
+      return redirect(reply, back, await fn());
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
+  };
 }
 
 export async function buildServer(bot: Bot) {
@@ -121,9 +146,20 @@ export async function buildServer(bot: Bot) {
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
-  // ── Players (источник правды — Google-таблица) ───────────
-  // Полная форма игрока (добавление/редактирование). Пишет в таблицу.
-  const playerForm = (p?: SheetPlayer): string => {
+  // ── Players (источник правды — БД; синк с вкладкой Players по кнопкам) ────
+  // date-значение из БД (Date или ISO-строка) → YYYY-MM-DD для input[type=date].
+  const isoDate = (v: string | Date | null | undefined): string => {
+    if (!v) return '';
+    if (v instanceof Date) {
+      const mm = String(v.getMonth() + 1).padStart(2, '0');
+      const dd = String(v.getDate()).padStart(2, '0');
+      return `${v.getFullYear()}-${mm}-${dd}`;
+    }
+    return String(v).slice(0, 10);
+  };
+
+  // Полная форма игрока (добавление/редактирование). Пишет в БД.
+  const playerForm = (p?: Player): string => {
     const sel = (t: Team) => (p?.team === t ? 'selected' : '');
     const chk = (b: boolean) => (b ? 'checked' : '');
     return `<form method="post" action="/players">
@@ -136,8 +172,8 @@ export async function buildServer(bot: Bot) {
       <div class="row" style="margin-top:8px">
         <div style="flex:0"><label>Сотрудник</label><input type="checkbox" name="is_employee" value="yes" ${chk(p?.is_employee ?? false)} style="width:auto"></div>
         <div style="flex:0"><label>Активен</label><input type="checkbox" name="active" value="yes" ${chk(p?.active ?? true)} style="width:auto"></div>
-        <div><label>Активен с</label><input name="active_from" type="date" value="${esc(p?.active_from ?? '')}"></div>
-        <div><label>Активен по</label><input name="active_to" type="date" value="${esc(p?.active_to ?? '')}"></div>
+        <div><label>Активен с</label><input name="active_from" type="date" value="${esc(isoDate(p?.active_from))}"></div>
+        <div><label>Активен по</label><input name="active_to" type="date" value="${esc(isoDate(p?.active_to))}"></div>
       </div>
       <div class="row" style="margin-top:8px">
         <div><label>Заметки</label><input name="notes" value="${esc(p?.notes ?? '')}"></div>
@@ -147,13 +183,13 @@ export async function buildServer(bot: Bot) {
   };
 
   // Компараторы для сортировки списка игроков по колонкам таблицы.
-  const PLAYER_SORTS: Record<string, (a: SheetPlayer, b: SheetPlayer) => number> = {
+  const PLAYER_SORTS: Record<string, (a: Player, b: Player) => number> = {
     name: (a, b) => a.name.localeCompare(b.name, 'ru'),
     tg_login: (a, b) => a.tg_login.localeCompare(b.tg_login, 'ru'),
     team: (a, b) => a.team.localeCompare(b.team),
     active: (a, b) => Number(a.active) - Number(b.active),
-    active_from: (a, b) => (a.active_from ?? '').localeCompare(b.active_from ?? ''),
-    active_to: (a, b) => (a.active_to ?? '').localeCompare(b.active_to ?? ''),
+    active_from: (a, b) => isoDate(a.active_from).localeCompare(isoDate(b.active_from)),
+    active_to: (a, b) => isoDate(a.active_to).localeCompare(isoDate(b.active_to)),
   };
 
   app.get('/players', async (req, reply) => {
@@ -161,7 +197,7 @@ export async function buildServer(bot: Bot) {
     const msg = q.msg;
     const sort = q.sort && PLAYER_SORTS[q.sort] ? q.sort : 'name';
     const dir: 'asc' | 'desc' = q.dir === 'desc' ? 'desc' : 'asc';
-    const players = await readPlayersSheet();
+    const players = await listPlayers();
     const cmp = PLAYER_SORTS[sort]!;
     players.sort((a, b) => (dir === 'desc' ? -cmp(a, b) : cmp(a, b)));
     const rows = players
@@ -180,7 +216,7 @@ export async function buildServer(bot: Bot) {
             <input type="hidden" name="value" value="${p.active ? 'no' : 'yes'}">
             <button class="ghost">${p.active ? 'Деактивировать' : 'Активировать'}</button>
           </form>
-          <form class="inline" method="post" action="/players/delete" onsubmit="return confirm('Удалить игрока из таблицы?')">
+          <form class="inline" method="post" action="/players/delete" onsubmit="return confirm('Удалить игрока из БД?')">
             <input type="hidden" name="login" value="${esc(p.tg_login)}">
             <button class="ghost">✕</button>
           </form>
@@ -190,9 +226,9 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Игроки <span class="muted">(${players.length})</span></h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Источник правды — Google-таблица. Правки здесь пишутся в таблицу.
-          Чтобы расчёты (бюджет, должники) увидели изменения — нажми «Импортировать в БД».</div>
-        <form class="inline" method="post" action="/players/sync"><button class="ok">Импортировать в БД</button></form>
+        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД. Синхронизация с вкладкой
+          «Players» Google-таблицы — кнопками справа.</div>
+        ${syncButtons('players')}
       </div></div>
       <div class="card"><h2>Добавить / обновить</h2>${playerForm()}</div>
       <div class="card"><table>
@@ -211,8 +247,8 @@ export async function buildServer(bot: Bot) {
 
   app.get('/players/edit', async (req, reply) => {
     const login = (req.query as Record<string, string>).login;
-    const player = login ? await findPlayerInSheet(login) : null;
-    if (!player) return redirect(reply, '/players', 'Игрок не найден в таблице');
+    const player = login ? await getByLogin(login) : null;
+    if (!player) return redirect(reply, '/players', 'Игрок не найден');
     const body = `<h1>Изменить игрока</h1>
       <div class="card">${playerForm(player)}</div>
       <div class="card"><a href="/players">← к списку игроков</a></div>`;
@@ -222,14 +258,14 @@ export async function buildServer(bot: Bot) {
   app.post('/players', async (req, reply) => {
     const b = req.body as Record<string, string>;
     const name = (b.name ?? '').trim();
-    const tgLogin = (b.tg_login ?? '').trim();
-    if (!name || !tgLogin || (b.team !== 'RED' && b.team !== 'BLACK')) {
+    const tgLoginRaw = (b.tg_login ?? '').trim();
+    if (!name || !tgLoginRaw || (b.team !== 'RED' && b.team !== 'BLACK')) {
       return redirect(reply, '/players', 'Заполни ФИО, tg_login и команду');
     }
-    const origLogin = (b.orig_login ?? '').trim() || null;
-    await upsertPlayerInSheet(origLogin, {
-      tg_login: tgLogin,
+    const tgLogin = normalizeLogin(tgLoginRaw);
+    await upsertPlayer({
       name,
+      tg_login: tgLogin,
       team: b.team as Team,
       is_employee: b.is_employee === 'yes',
       active: b.active === 'yes',
@@ -237,38 +273,37 @@ export async function buildServer(bot: Bot) {
       active_to: b.active_to ? b.active_to : null,
       notes: (b.notes ?? '').trim() || null,
     });
-    return redirect(reply, '/players', 'Игрок сохранён в таблице');
+    // Переименование tg_login: удаляем старую строку, если логин сменился.
+    const origLogin = (b.orig_login ?? '').trim();
+    if (origLogin && normalizeLogin(origLogin).toLowerCase() !== tgLogin.toLowerCase()) {
+      const old = await getByLogin(origLogin);
+      if (old) await deletePlayer(old.id);
+    }
+    return redirect(reply, '/players', 'Игрок сохранён');
   });
 
   app.post('/players/active', async (req, reply) => {
     const b = req.body as Record<string, string>;
     const login = (b.login ?? '').trim();
     const value = b.value === 'yes';
-    if (login && (await findPlayerInSheet(login))) {
+    if (login) {
       const { active_from, active_to } = computeActivityDates(value);
-      await upsertPlayerInSheet(login, {
-        tg_login: login,
-        active: value,
-        ...(value ? { active_from } : { active_to }),
-      });
+      await setActive(login, value, active_from ?? null, active_to ?? null);
     }
-    return redirect(reply, '/players', 'Статус обновлён в таблице');
+    return redirect(reply, '/players', 'Статус обновлён');
   });
 
   app.post('/players/delete', async (req, reply) => {
     const login = ((req.body as Record<string, string>).login ?? '').trim();
-    if (login) await deletePlayerFromSheet(login);
-    return redirect(reply, '/players', 'Игрок удалён из таблицы');
+    if (login) {
+      const p = await getByLogin(login);
+      if (p) await deletePlayer(p.id);
+    }
+    return redirect(reply, '/players', 'Игрок удалён из БД');
   });
 
-  app.post('/players/sync', async (_req, reply) => {
-    try {
-      const { imported, deactivated } = await importPlayersFromSheet();
-      return redirect(reply, '/players', `Импорт в БД: обновлено ${imported}, деактивировано ${deactivated}`);
-    } catch (err) {
-      return redirect(reply, '/players', `Ошибка импорта: ${(err as Error).message}`);
-    }
-  });
+  app.post('/players/pull', syncRoute('/players', importPlayersToDb));
+  app.post('/players/push', syncRoute('/players', exportPlayersToSheet));
 
   // ── Tariffs ──────────────────────────────────────────────
   app.get('/tariffs', async (req, reply) => {
@@ -277,6 +312,10 @@ export async function buildServer(bot: Bot) {
     const field = (name: string, label: string, val: number) =>
       `<div><label>${label}</label><input name="${name}" type="number" step="1" value="${val}"></div>`;
     const body = `<h1>Тарифы</h1>
+      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+        <div class="muted" style="flex:1">Правки пишутся в БД. Синхронизация с вкладкой «tariffs» — кнопками справа.</div>
+        ${syncButtons('tariffs')}
+      </div></div>
       <div class="card"><form method="post" action="/tariffs"><div class="row">
         ${field('coach_per_session', 'Тренер / тренировка', t.coach_per_session)}
         ${field('coach_per_game', 'Тренер / игра', t.coach_per_game)}
@@ -299,6 +338,130 @@ export async function buildServer(bot: Bot) {
     });
     return redirect(reply, '/tariffs', 'Тарифы сохранены');
   });
+
+  app.post('/tariffs/pull', syncRoute('/tariffs', importTariffsToDb));
+  app.post('/tariffs/push', syncRoute('/tariffs', exportTariffsToSheet));
+
+  // ── Cron (расписание планировщика в cron_config) ─────────
+  app.get('/cron', async (req, reply) => {
+    const msg = (req.query as Record<string, string>).msg;
+    const c = await getCronConfig();
+    const val = (v: string | number | null): string => (v === null || v === undefined ? '' : String(v));
+    const text = (name: string, label: string, v: string | null, ph = '') =>
+      `<div><label>${label}</label><input name="${name}" value="${esc(val(v))}" placeholder="${ph}"></div>`;
+    const numf = (name: string, label: string, v: number | null, ph = '') =>
+      `<div><label>${label}</label><input name="${name}" type="number" value="${esc(val(v))}" placeholder="${ph}"></div>`;
+    const body = `<h1>Крон</h1>
+      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+        <div class="muted" style="flex:1">Расписание планировщика (в БД). Пустое поле → берётся значение из env/дефолтов.
+          Синхронизация с вкладкой «cron» — кнопками справа.</div>
+        ${syncButtons('cron')}
+      </div></div>
+      <div class="card"><form method="post" action="/cron">
+        <div class="row">
+          ${text('timezone', 'Таймзона', c.timezone, 'Europe/Moscow')}
+          ${numf('poll_weekday', 'Опрос: день недели (1=Пн…7=Вс)', c.poll_weekday, '5')}
+          ${text('poll_time', 'Опрос: время (ЧЧ:ММ)', c.poll_time, '12:00')}
+        </div>
+        <div class="row" style="margin-top:8px">
+          ${numf('fixation_day', 'Фиксация: день месяца (1–28)', c.fixation_day, '25')}
+          ${text('fixation_time', 'Фиксация: время (ЧЧ:ММ)', c.fixation_time, '20:00')}
+        </div>
+        <div class="row" style="margin-top:8px">
+          ${numf('budget_day', 'Бюджет: день месяца (1–28)', c.budget_day, '26')}
+          ${text('budget_time', 'Бюджет: время (ЧЧ:ММ)', c.budget_time, '20:00')}
+        </div>
+        <button style="margin-top:12px">Сохранить</button>
+      </form></div>`;
+    return html(reply, layout('Крон', body, { flash: msg }));
+  });
+
+  app.post('/cron', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    const str = (v: string | undefined) => (v !== undefined && v.trim() !== '' ? v.trim() : undefined);
+    const int = (v: string | undefined) => {
+      const s = str(v);
+      if (s === undefined) return undefined;
+      const n = Number(s);
+      return Number.isInteger(n) ? n : undefined;
+    };
+    await updateCronConfig({
+      timezone: str(b.timezone),
+      poll_weekday: int(b.poll_weekday),
+      poll_time: str(b.poll_time),
+      fixation_day: int(b.fixation_day),
+      fixation_time: str(b.fixation_time),
+      budget_day: int(b.budget_day),
+      budget_time: str(b.budget_time),
+    });
+    return redirect(reply, '/cron', 'Расписание сохранено');
+  });
+
+  app.post('/cron/pull', syncRoute('/cron', importCronFromSheet));
+  app.post('/cron/push', syncRoute('/cron', exportCronToSheet));
+
+  // ── Tags (справочник тегов календарных событий) ──────────
+  app.get('/tags', async (req, reply) => {
+    const msg = (req.query as Record<string, string>).msg;
+    const tags = await listTags();
+    const rows = tags
+      .map(
+        (t) => `<tr>
+        <td><b>${esc(t.tag_key)}</b></td>
+        <td>${esc(t.tag_value)}</td>
+        <td class="muted">${esc(t.description ?? '')}</td>
+        <td class="right"><form class="inline" method="post" action="/tags/delete" onsubmit="return confirm('Удалить тег?')">
+          <input type="hidden" name="id" value="${t.id}">
+          <button class="ghost">✕</button>
+        </form></td></tr>`,
+      )
+      .join('');
+    const body = `<h1>Теги <span class="muted">(${tags.length})</span></h1>
+      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+        <div class="muted" style="flex:1">Справочник тегов календарных событий (легенда KEY=VALUE). Хранится в БД;
+          синхронизация с вкладкой «Tags» — кнопками справа. На валидацию парсинга не влияет.</div>
+        ${syncButtons('tags')}
+      </div></div>
+      <div class="card"><h2>Добавить / обновить</h2>
+        <form method="post" action="/tags"><div class="row">
+          <div><label>Ключ (KEY)</label><input name="tag_key" placeholder="TYPE" required></div>
+          <div><label>Значение (VALUE)</label><input name="tag_value" placeholder="TRAINING"></div>
+          <div style="flex:2"><label>Описание</label><input name="description" placeholder="Тренировка"></div>
+          <div style="flex:0"><label>&nbsp;</label><button>Сохранить</button></div>
+        </div></form>
+        <div class="muted" style="margin-top:6px">Обновление — по совпадению ключ+значение.</div>
+      </div>
+      <div class="card"><table>
+        <thead><tr><th>Ключ</th><th>Значение</th><th>Описание</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="muted">Пока нет тегов</td></tr>'}</tbody>
+      </table></div>`;
+    return html(reply, layout('Теги', body, { flash: msg }));
+  });
+
+  app.post('/tags', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    const key = (b.tag_key ?? '').trim().toUpperCase();
+    if (!key) return redirect(reply, '/tags', 'Укажи ключ тега');
+    await upsertTag({
+      tag_key: key,
+      tag_value: (b.tag_value ?? '').trim(),
+      description: (b.description ?? '').trim() || null,
+    });
+    return redirect(reply, '/tags', 'Тег сохранён');
+  });
+
+  app.post('/tags/delete', async (req, reply) => {
+    const id = Number((req.body as Record<string, string>).id);
+    if (Number.isInteger(id)) await deleteTag(id);
+    return redirect(reply, '/tags', 'Тег удалён');
+  });
+
+  app.post('/tags/pull', syncRoute('/tags', importTagsToDb));
+  app.post('/tags/push', syncRoute('/tags', exportTagsToSheet));
+
+  // ── Синхронизация всех вкладок (кнопки в шапке) ──────────
+  app.post('/sync/pull', syncRoute('/', syncAllFromSheet));
+  app.post('/sync/push', syncRoute('/', syncAllToSheet));
 
   // ── Budgets ──────────────────────────────────────────────
   app.get('/budgets', async (req, reply) => {

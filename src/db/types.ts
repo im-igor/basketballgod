@@ -21,6 +21,24 @@ export interface Tariffs {
   referee_default: number;
 }
 
+export interface CronConfig {
+  timezone: string | null;
+  poll_weekday: number | null; // 1=Пн … 7=Вс
+  poll_time: string | null; // «ЧЧ:ММ»
+  fixation_day: number | null;
+  fixation_time: string | null;
+  budget_day: number | null;
+  budget_time: string | null;
+}
+
+export interface Tag {
+  id: number;
+  tag_key: string;
+  tag_value: string;
+  description: string | null;
+  sort_order: number;
+}
+
 export interface Budget {
   id: number;
   team: Team;

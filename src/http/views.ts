@@ -71,3 +71,20 @@ export function teamBadge(team: string): string {
 export function activeBadge(active: boolean): string {
   return active ? `<span class="badge yes">активен</span>` : `<span class="badge no">нет</span>`;
 }
+
+/**
+ * Заголовок-ссылка для сортировки таблицы. Клик по активной колонке
+ * переключает направление; иначе сортирует по возрастанию.
+ */
+export function sortHeader(
+  label: string,
+  key: string,
+  base: string,
+  cur: { sort: string; dir: 'asc' | 'desc' },
+): string {
+  const active = cur.sort === key;
+  const nextDir = active && cur.dir === 'asc' ? 'desc' : 'asc';
+  const arrow = active ? (cur.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const href = `${base}?sort=${encodeURIComponent(key)}&dir=${nextDir}`;
+  return `<th><a href="${href}" style="color:inherit;text-decoration:none;white-space:nowrap">${esc(label)}${arrow}</a></th>`;
+}

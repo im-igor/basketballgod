@@ -4,7 +4,7 @@ import formbody from '@fastify/formbody';
 import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
-import { layout, esc, teamBadge, activeBadge } from './views.js';
+import { layout, esc, teamBadge, activeBadge, sortHeader } from './views.js';
 import {
   readPlayersSheet,
   findPlayerInSheet,
@@ -146,9 +146,24 @@ export async function buildServer(bot: Bot) {
     </form>`;
   };
 
+  // Компараторы для сортировки списка игроков по колонкам таблицы.
+  const PLAYER_SORTS: Record<string, (a: SheetPlayer, b: SheetPlayer) => number> = {
+    name: (a, b) => a.name.localeCompare(b.name, 'ru'),
+    tg_login: (a, b) => a.tg_login.localeCompare(b.tg_login, 'ru'),
+    team: (a, b) => a.team.localeCompare(b.team),
+    active: (a, b) => Number(a.active) - Number(b.active),
+    active_from: (a, b) => (a.active_from ?? '').localeCompare(b.active_from ?? ''),
+    active_to: (a, b) => (a.active_to ?? '').localeCompare(b.active_to ?? ''),
+  };
+
   app.get('/players', async (req, reply) => {
-    const msg = (req.query as Record<string, string>).msg;
+    const q = req.query as Record<string, string>;
+    const msg = q.msg;
+    const sort = q.sort && PLAYER_SORTS[q.sort] ? q.sort : 'name';
+    const dir: 'asc' | 'desc' = q.dir === 'desc' ? 'desc' : 'asc';
     const players = await readPlayersSheet();
+    const cmp = PLAYER_SORTS[sort]!;
+    players.sort((a, b) => (dir === 'desc' ? -cmp(a, b) : cmp(a, b)));
     const rows = players
       .map(
         (p) => `<tr>
@@ -181,7 +196,15 @@ export async function buildServer(bot: Bot) {
       </div></div>
       <div class="card"><h2>Добавить / обновить</h2>${playerForm()}</div>
       <div class="card"><table>
-        <thead><tr><th>ФИО</th><th>tg</th><th>Команда</th><th>Статус</th><th>С</th><th>По</th><th></th></tr></thead>
+        <thead><tr>
+          ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
+          ${sortHeader('tg', 'tg_login', '/players', { sort, dir })}
+          ${sortHeader('Команда', 'team', '/players', { sort, dir })}
+          ${sortHeader('Статус', 'active', '/players', { sort, dir })}
+          ${sortHeader('С', 'active_from', '/players', { sort, dir })}
+          ${sortHeader('По', 'active_to', '/players', { sort, dir })}
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody></table></div>`;
     return html(reply, layout('Игроки', body, { flash: msg }));
   });

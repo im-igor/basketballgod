@@ -1,6 +1,7 @@
 import { InlineKeyboard, type Api } from 'grammy';
 import { env, TEAMS } from '../config/env.js';
 import {
+  getBudget,
   getBudgetById,
   getCharges,
   getDebtors,
@@ -122,6 +123,57 @@ export async function sendBudgetDraftToAdmins(
         .catch(warn);
     }
   }
+}
+
+/**
+ * Отправить черновики бюджета обеих команд за месяц админам в личку, читая уже
+ * собранные бюджеты из БД (без пересчёта по календарю). Используется кнопкой в админке.
+ */
+export async function sendBudgetDraftsByMonth(
+  api: Api,
+  month: number,
+  year: number,
+): Promise<{ sent: number }> {
+  let sent = 0;
+  for (const team of TEAMS) {
+    const budget = await getBudget(team, month, year);
+    if (!budget || !budget.details) continue;
+    const rendered = await renderBudgetFromDb(budget.id);
+    if (!rendered) continue;
+
+    const [charges, games] = await Promise.all([
+      getCharges(budget.id),
+      listGamesForMonth(team, month, year),
+    ]);
+    const monthName = monthLabel(month, year);
+    const gamesLine = games.length > 0 ? ` Учтено игр: ${games.length}.` : '';
+    const base = budget.total_per_player ?? (budget.details as BudgetDetails).base_per_person;
+    const info =
+      `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
+      `Базовый взнос ${base}₽ × ${charges.length} чел.${gamesLine}\n` +
+      `Проверь черновик ниже и нажми «Опубликовать в чат».`;
+    const keyboard = draftKeyboard(budget.id, team);
+
+    for (const adminId of env.ADMIN_TG_IDS) {
+      const warn = (err: unknown) =>
+        log.warn(
+          `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+          (err as Error).message,
+        );
+      await api
+        .sendMessage(adminId, info, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
+        .catch(warn);
+      await api
+        .sendMessage(adminId, rendered.text, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          reply_markup: keyboard,
+        })
+        .catch(warn);
+    }
+    sent++;
+  }
+  return { sent };
 }
 
 /** Перерисовать ранее отправленное сообщение сбора (после отметок оплат). */

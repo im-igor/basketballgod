@@ -20,12 +20,19 @@ import { getCronConfig, updateCronConfig } from '../db/repos/cronConfig.repo.js'
 import { listTags, upsertTag, deleteTag } from '../db/repos/tags.repo.js';
 import {
   listBudgets,
+  getBudget,
   getBudgetById,
   getCharges,
   setChargePaid,
 } from '../db/repos/budgets.repo.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetToChat, refreshBudgetMessage, sendDebtors } from '../services/notify.service.js';
+import {
+  sendBudgetToChat,
+  refreshBudgetMessage,
+  sendDebtors,
+  sendBudgetDraftsByMonth,
+  renderBudgetFromDb,
+} from '../services/notify.service.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import {
   syncAllFromSheet,
@@ -464,8 +471,20 @@ export async function buildServer(bot: Bot) {
   app.post('/sync/push', syncRoute('/', syncAllToSheet));
 
   // ── Budgets ──────────────────────────────────────────────
+  // Месяц/год по умолчанию: следующий месяц (номер) и текущий год.
+  const defaultBudgetPeriod = (): { month: number; year: number } => {
+    const now = new Date();
+    const cur = now.getMonth() + 1;
+    return { month: cur === 12 ? 1 : cur + 1, year: now.getFullYear() };
+  };
+
   app.get('/budgets', async (req, reply) => {
-    const msg = (req.query as Record<string, string>).msg;
+    const q = req.query as Record<string, string>;
+    const msg = q.msg;
+    const def = defaultBudgetPeriod();
+    const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
+    const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
+
     const budgets = await listBudgets();
     const rows = budgets
       .map(
@@ -477,13 +496,47 @@ export async function buildServer(bot: Bot) {
         </tr>`,
       )
       .join('');
+
+    // Черновики за выбранный период (обе команды) — если бюджеты уже собраны.
+    const [redBudget, blackBudget] = await Promise.all([
+      getBudget('RED', month, year),
+      getBudget('BLACK', month, year),
+    ]);
+    const built = [redBudget, blackBudget].filter((b): b is NonNullable<typeof b> => !!b);
+    let draftsCard = '';
+    if (built.length > 0) {
+      const previews: string[] = [];
+      for (const b of built) {
+        const rendered = await renderBudgetFromDb(b.id);
+        if (!rendered) continue;
+        previews.push(
+          `<div style="margin-top:12px">
+            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${b.id}">открыть</a></div>
+            <div style="white-space:pre-wrap;background:#11141a;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere">${rendered.text}</div>
+          </div>`,
+        );
+      }
+      const hidden = `<input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">`;
+      draftsCard = `<div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
+            <form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Опубликовать сборы в чаты обеих команд?')">${hidden}<button>Отправить в чаты команд</button></form>
+          </div>
+        </div>
+        ${previews.join('')}
+      </div>`;
+    }
+
     const body = `<h1>Бюджеты</h1>
-      <div class="card"><h2>Собрать новый</h2>
+      <div class="card"><h2>Собрать черновик</h2>
         <form method="post" action="/budgets/build" class="row">
-          <div><label>Месяц</label><input name="month" type="number" min="1" max="12" required></div>
-          <div><label>Год</label><input name="year" type="number" min="2024" max="2100" required></div>
+          <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
+          <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button>Собрать</button></div>
         </form></div>
+      ${draftsCard}
       <div class="card"><table>
         <thead><tr><th>Месяц</th><th>Команда</th><th>Базовый</th><th>Статус</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="4" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
@@ -491,15 +544,65 @@ export async function buildServer(bot: Bot) {
     return html(reply, layout('Бюджеты', body, { flash: msg }));
   });
 
-  app.post('/budgets/build', async (req, reply) => {
-    const b = req.body as { month?: string; year?: string };
+  /** Прочитать и провалидировать месяц/год из тела формы. */
+  const readPeriod = (body: unknown): { month: number; year: number } | null => {
+    const b = body as { month?: string; year?: string };
     const month = Number(b.month);
     const year = Number(b.year);
-    if (!(month >= 1 && month <= 12) || !(year >= 2024)) {
-      return redirect(reply, '/budgets', 'Неверный месяц/год');
+    if (!(month >= 1 && month <= 12) || !(year >= 2024)) return null;
+    return { month, year };
+  };
+
+  app.post('/budgets/build', async (req, reply) => {
+    const p = readPeriod(req.body);
+    if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
+    await buildAndSaveBudgets(p.month, p.year);
+    return redirect(
+      reply,
+      `/budgets?month=${p.month}&year=${p.year}`,
+      `Черновики за ${monthLabel(p.month, p.year)} собраны для обеих команд`,
+    );
+  });
+
+  // Отправить черновики бюджета обеих команд админам в личку (с кнопкой публикации).
+  app.post('/budgets/draft', async (req, reply) => {
+    const p = readPeriod(req.body);
+    if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
+    const back = `/budgets?month=${p.month}&year=${p.year}`;
+    try {
+      const { sent } = await sendBudgetDraftsByMonth(api, p.month, p.year);
+      return redirect(
+        reply,
+        back,
+        sent ? `Черновики отправлены в личку (команд: ${sent})` : 'Нет собранных черновиков за период',
+      );
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }
-    await buildAndSaveBudgets(month, year);
-    return redirect(reply, '/budgets', `Бюджет за ${monthLabel(month, year)} собран`);
+  });
+
+  // Опубликовать сборы обеих команд в чаты команд.
+  app.post('/budgets/publish', async (req, reply) => {
+    const p = readPeriod(req.body);
+    if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
+    const back = `/budgets?month=${p.month}&year=${p.year}`;
+    try {
+      let sent = 0;
+      for (const team of ['RED', 'BLACK'] as Team[]) {
+        const budget = await getBudget(team, p.month, p.year);
+        if (budget) {
+          await sendBudgetToChat(api, budget.id);
+          sent++;
+        }
+      }
+      return redirect(
+        reply,
+        back,
+        sent ? `Сборы отправлены в чаты (команд: ${sent})` : 'Нет собранных бюджетов за период',
+      );
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
   });
 
   app.get('/budgets/:id', async (req, reply) => {

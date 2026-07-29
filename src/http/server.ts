@@ -4,7 +4,7 @@ import formbody from '@fastify/formbody';
 import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
-import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons } from './views.js';
+import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
 import { isoToRu } from '../google/sheets.js';
 import { normalizeLogin } from '../util/args.js';
 import { computeActivityDates } from '../domain/activity.js';
@@ -47,7 +47,7 @@ import {
   exportTagsToSheet,
 } from '../services/sheetSync.service.js';
 import { monthLabel } from '../domain/dates.js';
-import type { Team, Player } from '../db/types.js';
+import type { Team, Player, Charge } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
@@ -485,16 +485,38 @@ export async function buildServer(bot: Bot) {
     const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
 
+    // Список — один общий бюджет на месяц (обе команды в одной строке).
     const budgets = await listBudgets();
-    const rows = budgets
-      .map(
-        (b) => `<tr>
-        <td><a href="/budgets/${b.id}">${esc(monthLabel(b.month, b.year))}</a></td>
-        <td>${teamBadge(b.team)}</td>
-        <td>${esc(b.total_per_player ?? '')}₽</td>
-        <td>${b.message_id ? '<span class="badge yes">отправлен</span>' : '<span class="badge no">черновик</span>'}</td>
-        </tr>`,
-      )
+    const byMonth = new Map<string, typeof budgets>();
+    for (const b of budgets) {
+      const k = `${b.year}-${String(b.month).padStart(2, '0')}`;
+      (byMonth.get(k) ?? byMonth.set(k, []).get(k)!).push(b);
+    }
+    const rows = [...byMonth.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0])) // новые сверху
+      .map(([, group]) => {
+        const first = group[0]!;
+        const red = group.find((g) => g.team === 'RED');
+        const black = group.find((g) => g.team === 'BLACK');
+        const baseInfo = [
+          red ? `${teamBadge('RED')} ${red.total_per_player ?? '—'}₽` : '',
+          black ? `${teamBadge('BLACK')} ${black.total_per_player ?? '—'}₽` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        const sentCount = group.filter((g) => g.message_id).length;
+        const status =
+          sentCount === 0
+            ? '<span class="badge no">черновик</span>'
+            : sentCount === group.length
+              ? '<span class="badge yes">отправлен</span>'
+              : '<span class="badge red">частично</span>';
+        return `<tr>
+          <td><a href="/budgets/${first.id}">${esc(monthLabel(first.month, first.year))}</a></td>
+          <td>${baseInfo}</td>
+          <td>${status}</td>
+        </tr>`;
+      })
       .join('');
 
     // Черновики за выбранный период (обе команды) — если бюджеты уже собраны.
@@ -538,8 +560,8 @@ export async function buildServer(bot: Bot) {
         </form></div>
       ${draftsCard}
       <div class="card"><table>
-        <thead><tr><th>Месяц</th><th>Команда</th><th>Базовый</th><th>Статус</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
+        <thead><tr><th>Месяц</th><th>Базовый взнос</th><th>Статус</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Бюджеты', body, { flash: msg }));
   });
@@ -605,16 +627,38 @@ export async function buildServer(bot: Bot) {
     }
   });
 
+  // Бюджеты обеих команд за месяц данного бюджета (существующие), отсортированы RED, BLACK.
+  const monthBudgetsOf = async (month: number, year: number) => {
+    const found = await Promise.all(
+      (['RED', 'BLACK'] as Team[]).map((t) => getBudget(t, month, year)),
+    );
+    return found.filter((b): b is NonNullable<typeof b> => !!b);
+  };
+
   app.get('/budgets/:id', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const msg = (req.query as Record<string, string>).msg;
     const budget = await getBudgetById(id);
     if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
-    const charges = await getCharges(id);
-    const rows = charges
+
+    // Общий список обеих команд: собираем начисления и помечаем командой.
+    const monthBudgets = await monthBudgetsOf(budget.month, budget.year);
+    const combined: (Charge & { team: Team })[] = [];
+    for (const b of monthBudgets) {
+      for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team });
+    }
+    combined.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ru'));
+
+    const total = combined.reduce((s, c) => s + Number(c.amount), 0);
+    const paidSum = combined.filter((c) => c.paid).reduce((s, c) => s + Number(c.amount), 0);
+    const paidCount = combined.filter((c) => c.paid).length;
+    const anySent = monthBudgets.some((b) => b.message_id);
+
+    const rows = combined
       .map(
         (c) => `<tr>
         <td>${esc(c.name ?? '')}</td>
+        <td>${teamBadge(c.team)}</td>
         <td class="muted">${esc(c.tg_login)}</td>
         <td>${esc(c.base_amount)}₽</td>
         <td>${c.game_amount ? '+' + esc(c.game_amount) + '₽' : ''}</td>
@@ -622,38 +666,52 @@ export async function buildServer(bot: Bot) {
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
         <td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
           <input type="hidden" name="value" value="${c.paid ? 'no' : 'yes'}">
-          <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Оплачено'}</button>
+          <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Сдал деньги'}</button>
         </form></td></tr>`,
       )
       .join('');
-    const paidCount = charges.filter((c) => c.paid).length;
-    const body = `<h1>${esc(monthLabel(budget.month, budget.year))} ${teamBadge(budget.team)}</h1>
-      <div class="card row">
-        <form class="inline" method="post" action="/budgets/${id}/send"><button>${budget.message_id ? 'Переотправить сбор' : 'Отправить сбор в чат'}</button></form>
+
+    const body = `<h1>Бюджет ${esc(monthLabel(budget.month, budget.year))}</h1>
+      <div class="card row" style="align-items:center">
+        <form class="inline" method="post" action="/budgets/${id}/send"><button>${anySent ? 'Переотправить сбор' : 'Отправить сбор в чат'}</button></form>
         <form class="inline" method="post" action="/budgets/${id}/debtors"><button class="ghost">Напомнить должникам</button></form>
-        <span class="muted">Оплатили ${paidCount} из ${charges.length}</span>
+        <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}</span>
       </div>
+      <div class="card">${progressBar(paidSum, total)}</div>
       <div class="card"><table>
-        <thead><tr><th>ФИО</th><th>tg</th><th>База</th><th>Игры</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
-    return html(reply, layout(monthLabel(budget.month, budget.year), body, { flash: msg }));
+        <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
+    return html(reply, layout(`Бюджет ${monthLabel(budget.month, budget.year)}`, body, { flash: msg }));
   });
 
+  // Переотправить сбор в чаты обеих команд (за месяц открытого бюджета).
   app.post('/budgets/:id/send', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
+    const budget = await getBudgetById(id);
+    if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
     try {
-      await sendBudgetToChat(api, id);
-      return redirect(reply, `/budgets/${id}`, 'Сбор отправлен в чат');
+      let sent = 0;
+      for (const b of await monthBudgetsOf(budget.month, budget.year)) {
+        await sendBudgetToChat(api, b.id);
+        sent++;
+      }
+      return redirect(reply, `/budgets/${id}`, `Сбор отправлен в чаты (команд: ${sent})`);
     } catch (err) {
       return redirect(reply, `/budgets/${id}`, `Ошибка: ${(err as Error).message}`);
     }
   });
 
+  // Напомнить должникам в чатах обеих команд (за месяц открытого бюджета).
   app.post('/budgets/:id/debtors', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
+    const budget = await getBudgetById(id);
+    if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
     try {
-      const { count } = await sendDebtors(api, id);
-      return redirect(reply, `/budgets/${id}`, count ? `Напоминание отправлено (${count})` : 'Должников нет');
+      let count = 0;
+      for (const b of await monthBudgetsOf(budget.month, budget.year)) {
+        count += (await sendDebtors(api, b.id)).count;
+      }
+      return redirect(reply, `/budgets/${id}`, count ? `Напоминание отправлено (должников: ${count})` : 'Должников нет');
     } catch (err) {
       return redirect(reply, `/budgets/${id}`, `Ошибка: ${(err as Error).message}`);
     }

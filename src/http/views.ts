@@ -80,6 +80,20 @@ export function syncButtons(section: string): string {
   </div>`;
 }
 
+/** Прогресс-бар сбора: сколько собрано из нужной суммы + процент. */
+export function progressBar(paid: number, total: number): string {
+  const pct = total > 0 ? Math.round((paid / total) * 100) : 0;
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+      <span class="muted">Собрано ${paid}₽ из ${total}₽</span>
+      <b style="font-size:1.1rem">${pct}%</b>
+    </div>
+    <div style="height:12px;background:#11141a;border:1px solid var(--line);border-radius:999px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:var(--ok);transition:width .2s"></div>
+    </div>
+  </div>`;
+}
+
 export function teamBadge(team: string): string {
   const cls = team === 'RED' ? 'red' : 'black';
   return `<span class="badge ${cls}">${esc(team)}</span>`;

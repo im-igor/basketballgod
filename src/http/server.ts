@@ -478,6 +478,38 @@ export async function buildServer(bot: Bot) {
     return { month: cur === 12 ? 1 : cur + 1, year: now.getFullYear() };
   };
 
+  // Понятный сегмент URL бюджета: «MM-YYYY» (напр. 08-2026).
+  const periodOf = (month: number, year: number): string =>
+    `${String(month).padStart(2, '0')}-${year}`;
+  const parsePeriod = (s: string | undefined): { month: number; year: number } | null => {
+    const m = /^(\d{1,2})-(\d{4})$/.exec(s ?? '');
+    if (!m) return null;
+    const month = Number(m[1]);
+    const year = Number(m[2]);
+    if (!(month >= 1 && month <= 12) || !(year >= 2024)) return null;
+    return { month, year };
+  };
+
+  // Дата-время (Date или ISO из БД) → «дд.мм.гггг ЧЧ:ММ» в таймзоне приложения.
+  const fmtDateTime = (v: string | Date | null): string => {
+    if (!v) return '';
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) return '';
+    try {
+      return d.toLocaleString('ru-RU', {
+        timeZone: env.TZ,
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      const p = (n: number) => String(n).padStart(2, '0');
+      return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+  };
+
   app.get('/budgets', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
@@ -512,7 +544,7 @@ export async function buildServer(bot: Bot) {
               ? '<span class="badge yes">отправлен</span>'
               : '<span class="badge red">частично</span>';
         return `<tr>
-          <td><a href="/budgets/${first.id}">${esc(monthLabel(first.month, first.year))}</a></td>
+          <td><a href="/budgets/${periodOf(first.month, first.year)}">${esc(monthLabel(first.month, first.year))}</a></td>
           <td>${baseInfo}</td>
           <td>${status}</td>
         </tr>`;
@@ -533,7 +565,7 @@ export async function buildServer(bot: Bot) {
         if (!rendered) continue;
         previews.push(
           `<div style="margin-top:12px">
-            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${b.id}">открыть</a></div>
+            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a></div>
             <div style="white-space:pre-wrap;background:#11141a;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere">${rendered.text}</div>
           </div>`,
         );
@@ -635,14 +667,15 @@ export async function buildServer(bot: Bot) {
     return found.filter((b): b is NonNullable<typeof b> => !!b);
   };
 
-  app.get('/budgets/:id', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
+  app.get('/budgets/:period', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
     const msg = (req.query as Record<string, string>).msg;
-    const budget = await getBudgetById(id);
-    if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
-    const monthBudgets = await monthBudgetsOf(budget.month, budget.year);
+    const monthBudgets = await monthBudgetsOf(period.month, period.year);
+    if (monthBudgets.length === 0) return redirect(reply, '/budgets', 'Бюджет не найден');
     const combined: (Charge & { team: Team })[] = [];
     for (const b of monthBudgets) {
       for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team });
@@ -653,6 +686,12 @@ export async function buildServer(bot: Bot) {
     const paidSum = combined.filter((c) => c.paid).reduce((s, c) => s + Number(c.amount), 0);
     const paidCount = combined.filter((c) => c.paid).length;
     const anySent = monthBudgets.some((b) => b.message_id);
+
+    // Последняя отметка «Перевёл» = максимальный paid_at среди оплативших.
+    const lastPaidMs = combined
+      .filter((c) => c.paid && c.paid_at)
+      .reduce((m, c) => Math.max(m, new Date(c.paid_at as string | Date).getTime()), 0);
+    const lastCheck = lastPaidMs ? fmtDateTime(new Date(lastPaidMs)) : '';
 
     const rows = combined
       .map(
@@ -666,54 +705,54 @@ export async function buildServer(bot: Bot) {
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
         <td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
           <input type="hidden" name="value" value="${c.paid ? 'no' : 'yes'}">
-          <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Сдал деньги'}</button>
+          <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Перевёл'}</button>
         </form></td></tr>`,
       )
       .join('');
 
-    const body = `<h1>Бюджет ${esc(monthLabel(budget.month, budget.year))}</h1>
+    const body = `<h1>Бюджет ${esc(monthLabel(period.month, period.year))}</h1>
       <div class="card row" style="align-items:center">
-        <form class="inline" method="post" action="/budgets/${id}/send"><button>${anySent ? 'Переотправить сбор' : 'Отправить сбор в чат'}</button></form>
-        <form class="inline" method="post" action="/budgets/${id}/debtors"><button class="ghost">Напомнить должникам</button></form>
-        <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}</span>
+        <form class="inline" method="post" action="/budgets/${seg}/send"><button>${anySent ? 'Переотправить сбор' : 'Отправить сбор в чат'}</button></form>
+        <form class="inline" method="post" action="/budgets/${seg}/debtors"><button class="ghost">Напомнить должникам</button></form>
+        <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
       <div class="card"><table>
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
-    return html(reply, layout(`Бюджет ${monthLabel(budget.month, budget.year)}`, body, { flash: msg }));
+    return html(reply, layout(`Бюджет ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
   });
 
-  // Переотправить сбор в чаты обеих команд (за месяц открытого бюджета).
-  app.post('/budgets/:id/send', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
-    const budget = await getBudgetById(id);
-    if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
+  // Переотправить сбор в чаты обеих команд (за месяц бюджета).
+  app.post('/budgets/:period/send', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const seg = periodOf(period.month, period.year);
     try {
       let sent = 0;
-      for (const b of await monthBudgetsOf(budget.month, budget.year)) {
+      for (const b of await monthBudgetsOf(period.month, period.year)) {
         await sendBudgetToChat(api, b.id);
         sent++;
       }
-      return redirect(reply, `/budgets/${id}`, `Сбор отправлен в чаты (команд: ${sent})`);
+      return redirect(reply, `/budgets/${seg}`, `Сбор отправлен в чаты (команд: ${sent})`);
     } catch (err) {
-      return redirect(reply, `/budgets/${id}`, `Ошибка: ${(err as Error).message}`);
+      return redirect(reply, `/budgets/${seg}`, `Ошибка: ${(err as Error).message}`);
     }
   });
 
-  // Напомнить должникам в чатах обеих команд (за месяц открытого бюджета).
-  app.post('/budgets/:id/debtors', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
-    const budget = await getBudgetById(id);
-    if (!budget) return redirect(reply, '/budgets', 'Бюджет не найден');
+  // Напомнить должникам в чатах обеих команд (за месяц бюджета).
+  app.post('/budgets/:period/debtors', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const seg = periodOf(period.month, period.year);
     try {
       let count = 0;
-      for (const b of await monthBudgetsOf(budget.month, budget.year)) {
+      for (const b of await monthBudgetsOf(period.month, period.year)) {
         count += (await sendDebtors(api, b.id)).count;
       }
-      return redirect(reply, `/budgets/${id}`, count ? `Напоминание отправлено (должников: ${count})` : 'Должников нет');
+      return redirect(reply, `/budgets/${seg}`, count ? `Напоминание отправлено (должников: ${count})` : 'Должников нет');
     } catch (err) {
-      return redirect(reply, `/budgets/${id}`, `Ошибка: ${(err as Error).message}`);
+      return redirect(reply, `/budgets/${seg}`, `Ошибка: ${(err as Error).message}`);
     }
   });
 
@@ -721,8 +760,10 @@ export async function buildServer(bot: Bot) {
     const id = Number((req.params as { id: string }).id);
     const value = (req.body as { value?: string }).value === 'yes';
     const charge = await setChargePaid(id, value);
-    if (charge) await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
-    const back = charge ? `/budgets/${charge.budget_id}` : '/budgets';
+    if (!charge) return redirect(reply, '/budgets', 'Оплата обновлена');
+    await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
+    const budget = await getBudgetById(charge.budget_id);
+    const back = budget ? `/budgets/${periodOf(budget.month, budget.year)}` : '/budgets';
     return redirect(reply, back, 'Оплата обновлена');
   });
 

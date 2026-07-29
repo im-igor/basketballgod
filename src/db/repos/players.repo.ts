@@ -60,7 +60,12 @@ export async function upsertPlayer(p: {
   return rows[0]!;
 }
 
-/** Установить статус активности и диапазон дат. */
+/**
+ * Установить статус активности и диапазон дат.
+ * При активации задаём active_from и ОЧИЩАЕМ active_to (иначе осталась бы устаревшая
+ * дата окончания от прошлой деактивации, которая выкидывала бы игрока из расчёта).
+ * При деактивации задаём active_to, сохраняя active_from.
+ */
 export async function setActive(
   tgLogin: string,
   active: boolean,
@@ -71,7 +76,7 @@ export async function setActive(
     `update players set
        active = $2,
        active_from = case when $2 then $3 else active_from end,
-       active_to   = case when $2 then active_to else $4 end,
+       active_to   = case when $2 then null else $4 end,
        updated_at = now()
      where lower(tg_login) = lower($1)
      returning *`,

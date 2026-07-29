@@ -1,5 +1,6 @@
 import { readPlayersSheet } from '../google/sheets.js';
 import { listPlayers, upsertPlayer, setActive } from '../db/repos/players.repo.js';
+import { reconcileActivityDates } from '../domain/activity.js';
 import { log } from '../util/logger.js';
 
 /**
@@ -18,14 +19,16 @@ export async function importPlayersFromSheet(): Promise<{ imported: number; deac
 
   let imported = 0;
   for (const p of sheetPlayers) {
+    // Согласуем даты: устаревший active_to (раньше active_from) не тащим в БД.
+    const { active_from, active_to } = reconcileActivityDates(p.active_from, p.active_to);
     await upsertPlayer({
       name: p.name,
       tg_login: p.tg_login,
       team: p.team,
       is_employee: p.is_employee,
       active: p.active,
-      active_from: p.active_from,
-      active_to: p.active_to,
+      active_from,
+      active_to,
       notes: p.notes,
     });
     imported++;

@@ -7,7 +7,7 @@ import { log } from '../util/logger.js';
 import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
 import { isoToRu } from '../google/sheets.js';
 import { normalizeLogin } from '../util/args.js';
-import { computeActivityDates } from '../domain/activity.js';
+import { computeActivityDates, reconcileActivityDates } from '../domain/activity.js';
 import {
   listPlayers,
   getByLogin,
@@ -271,14 +271,19 @@ export async function buildServer(bot: Bot) {
       return redirect(reply, '/players', 'Заполни ФИО, tg_login и команду');
     }
     const tgLogin = normalizeLogin(tgLoginRaw);
+    // Согласуем даты: устаревший active_to (раньше active_from) обнуляем.
+    const dates = reconcileActivityDates(
+      b.active_from ? b.active_from : null,
+      b.active_to ? b.active_to : null,
+    );
     await upsertPlayer({
       name,
       tg_login: tgLogin,
       team: b.team as Team,
       is_employee: b.is_employee === 'yes',
       active: b.active === 'yes',
-      active_from: b.active_from ? b.active_from : null,
-      active_to: b.active_to ? b.active_to : null,
+      active_from: dates.active_from,
+      active_to: dates.active_to,
       notes: (b.notes ?? '').trim() || null,
     });
     // Переименование tg_login: удаляем старую строку, если логин сменился.

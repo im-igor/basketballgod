@@ -13,6 +13,7 @@ import {
   type ChargeInput,
 } from '../db/repos/budgets.repo.js';
 import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
+import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer } from '../domain/gamefee.js';
 import { buildBudgetMessage, type ChargeView } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
@@ -23,9 +24,11 @@ const TEAMS: Team[] = ['RED', 'BLACK'];
 /** Активен ли игрок в указанном месяце (с учётом active_from / active_to). */
 function isActiveInMonth(p: Player, month: number, year: number): boolean {
   if (!p.active) return false;
+  // Правило «побеждает поздняя дата»: устаревший active_to (раньше active_from) не учитываем.
+  const { active_from, active_to } = reconcileActivityDates(p.active_from, p.active_to);
   const firstDay = new Date(year, month - 1, 1);
-  if (p.active_from && new Date(p.active_from) > firstDay) return false;
-  if (p.active_to && new Date(p.active_to) < firstDay) return false;
+  if (active_from && new Date(active_from) > firstDay) return false;
+  if (active_to && new Date(active_to) < firstDay) return false;
   return true;
 }
 

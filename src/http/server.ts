@@ -47,6 +47,7 @@ import {
   exportTagsToSheet,
 } from '../services/sheetSync.service.js';
 import { monthLabel } from '../domain/dates.js';
+import { formatFullName } from '../domain/messages.js';
 import type { Team, Player, Charge } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
@@ -680,7 +681,8 @@ export async function buildServer(bot: Bot) {
     for (const b of monthBudgets) {
       for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team });
     }
-    combined.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ru'));
+    // Сортировка и отображение — в формате «Имя Отчество Фамилия» (как в сообщении в чат).
+    combined.sort((a, b) => formatFullName(a.name).localeCompare(formatFullName(b.name), 'ru'));
 
     const total = combined.reduce((s, c) => s + Number(c.amount), 0);
     const paidSum = combined.filter((c) => c.paid).reduce((s, c) => s + Number(c.amount), 0);
@@ -696,7 +698,7 @@ export async function buildServer(bot: Bot) {
     const rows = combined
       .map(
         (c) => `<tr>
-        <td>${esc(c.name ?? '')}</td>
+        <td>${esc(formatFullName(c.name))}</td>
         <td>${teamBadge(c.team)}</td>
         <td class="muted">${esc(c.tg_login)}</td>
         <td>${esc(c.base_amount)}₽</td>

@@ -3,8 +3,8 @@ import { adminOnly } from '../middlewares/auth.js';
 import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
 import { monthLabel } from '../../domain/dates.js';
-import { listPlayers } from '../../db/repos/players.repo.js';
-import { findPlayerInSheet, upsertPlayerInSheet, isoToRu } from '../../google/sheets.js';
+import { listPlayers, getByLogin, setActive } from '../../db/repos/players.repo.js';
+import { isoToRu } from '../../google/sheets.js';
 import { importPlayersFromSheet } from '../../services/playersImport.service.js';
 import { importTariffsFromSheet } from '../../services/tariffsImport.service.js';
 import { syncAllFromSheet } from '../../services/sheetSync.service.js';
@@ -27,8 +27,8 @@ const TEAMS: Team[] = ['RED', 'BLACK'];
 
 const HELP = `<b>basketballgod — команды</b>
 
-<b>Игроки (правят Google-таблицу — источник правды):</b>
-/active @login yes|no — активность игрока на след. месяц
+<b>Игроки (источник правды — БД, таблица = бэкап):</b>
+/active @login yes|no — активность игрока на след. месяц (пишет в БД)
 /sync_players — загрузить вкладку Players в БД
 /sync_all — загрузить все вкладки (Players, Tariffs, Cron, Tags) из таблицы в БД
 
@@ -60,7 +60,7 @@ export function registerCommands(bot: Bot): void {
     await ctx.reply(HELP, { parse_mode: 'HTML' });
   });
 
-  // /active @login yes|no — пишет в таблицу
+  // /active @login yes|no — меняет активность в БД (источник правды).
   bot.command('active', adminOnly(safe(async (ctx) => {
     const m = argText(ctx).trim().match(/^(@?[A-Za-z0-9_]+)\s+(yes|no)$/i);
     if (!m) {
@@ -69,20 +69,21 @@ export function registerCommands(bot: Bot): void {
     }
     const login = normalizeLogin(m[1]!);
     const active = m[2]!.toLowerCase() === 'yes';
-    const existing = await findPlayerInSheet(login);
+    const existing = await getByLogin(login);
     if (!existing) {
-      await ctx.reply(`Игрок ${login} не найден в таблице.`);
+      await ctx.reply(`Игрок ${login} не найден в базе.`);
       return;
     }
     const { active_from, active_to } = computeActivityDates(active);
-    // active=yes → задаём active_from (active_to не трогаем); active=no → задаём active_to.
-    const updated = await upsertPlayerInSheet(login, {
-      tg_login: login,
-      active,
-      ...(active ? { active_from } : { active_to }),
-    });
+    // active=yes → active_from = 1-е след. месяца, active_to очищается (см. setActive);
+    // active=no → active_to = конец текущего месяца.
+    const updated = await setActive(login, active, active_from, active_to);
+    if (!updated) {
+      await ctx.reply(`Не удалось обновить игрока ${login}.`);
+      return;
+    }
     await ctx.reply(
-      `Изменения применены (в таблице):\n` +
+      `Изменения применены (в базе):\n` +
         `tg_login: ${updated.tg_login}\n` +
         `active: ${updated.active ? 'YES' : 'NO'}\n` +
         `active_from: ${isoToRu(updated.active_from)}\n` +

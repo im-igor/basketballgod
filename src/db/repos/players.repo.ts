@@ -75,8 +75,8 @@ export async function setActive(
   const { rows } = await query<Player>(
     `update players set
        active = $2,
-       active_from = case when $2 then $3 else active_from end,
-       active_to   = case when $2 then null else $4 end,
+       active_from = case when $2 then $3::date else active_from end,
+       active_to   = case when $2 then null else $4::date end,
        updated_at = now()
      where lower(tg_login) = lower($1)
      returning *`,

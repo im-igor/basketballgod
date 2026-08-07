@@ -29,11 +29,9 @@ registerBudgetAdjust(bot);
 export async function setupBotCommandsMenu(): Promise<void> {
   await bot.api.setMyCommands([
     { command: 'help', description: 'Справка по командам' },
-    { command: 'player_add', description: 'Добавить игрока: Имя | @login | RED|BLACK' },
-    { command: 'player_set', description: 'Изменить игрока: @login поле=значение' },
-    { command: 'player_del', description: 'Удалить игрока: /player_del @login' },
     { command: 'active', description: 'Активность игрока: /active @login yes|no' },
     { command: 'sync_players', description: 'Импорт таблицы игроков в БД' },
+    { command: 'sync_all', description: 'Импорт всех вкладок из таблицы в БД' },
     { command: 'budget', description: 'Черновик бюджета: /budget RED|BLACK MM YYYY [url …]' },
     { command: 'debtors', description: 'Черновик должников в личку: /debtors [RED|BLACK] [MM YYYY]' },
     { command: 'pay', description: 'Оплаты кнопками (✅ переключает): /pay [MM YYYY]' },

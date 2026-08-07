@@ -27,7 +27,12 @@ async function main(): Promise<void> {
     log.info(`[bot] webhook установлен: ${url}`);
   } else {
     await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(() => undefined);
-    void bot.start({ onStart: () => log.info('[bot] long polling запущен') });
+    // ВАЖНО: bot.catch() ловит только ошибки обработки апдейтов, а НЕ старт polling.
+    // Без .catch() отказ getUpdates (напр. 409 Conflict — уже запущен другой инстанс
+    // с тем же токеном) остаётся невидимым: процесс жив, админка работает, а бот молчит.
+    void bot
+      .start({ onStart: (me) => log.info(`[bot] long polling запущен как @${me.username}`) })
+      .catch((e) => log.error('[bot] polling НЕ запущен:', (e as Error).message));
   }
 
   // 4. Планировщик (расписание читается из вкладки `cron` Google-таблицы с фолбэком на env).

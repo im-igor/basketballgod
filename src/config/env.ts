@@ -40,6 +40,10 @@ const schema = z.object({
   TELEGRAM_USE_WEBHOOK: boolish.default('false'),
   WEBHOOK_DOMAIN: z.string().url().optional(),
   WEBHOOK_SECRET: z.string().optional(),
+  // Если api.telegram.org недоступен напрямую (блокировка egress в RU-облаке) —
+  // адрес HTTPS-релея к Bot API (напр. https://proxy.basketballgod.ru:9443).
+  // Пусто = ходим напрямую в Telegram.
+  TELEGRAM_API_ROOT: z.string().url().optional(),
 
   BLACK_CHAT_ID: z.coerce.number().int(),
   BLACK_THREAD_ID: z.coerce.number().int().optional(),

@@ -729,7 +729,7 @@ export async function buildServer(bot: Bot) {
         <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
-      <div class="card"><table>
+      <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
     return html(reply, layout(`Бюджет ${monthLabel(period.month, period.year)}`, body, { flash: msg }));

@@ -42,7 +42,19 @@ button.ok { background:var(--ok); }
 .right { text-align:right; }
 .flash { background:rgba(46,204,113,.12); border:1px solid var(--ok); color:#aef0c8; padding:10px 12px; border-radius:8px; margin:8px 0; }
 .login-wrap { max-width:360px; margin:10vh auto; }
-@media (max-width:600px){ th:nth-child(n+4), td:nth-child(n+4){ display:none; } main{padding:10px;} }
+@media (max-width:600px){
+  main{padding:10px;}
+  /* Обычные таблицы (игроки и т.п.): прячем второстепенные колонки 4+. */
+  table:not(.pay-table) th:nth-child(n+4),
+  table:not(.pay-table) td:nth-child(n+4){ display:none; }
+  /* Таблица оплат: на узком экране оставляем только ФИО(1), Итого(6) и кнопку(8),
+     иначе кнопка «Перевёл» уезжает за край и недоступна в портретной ориентации. */
+  .pay-table th:nth-child(2), .pay-table td:nth-child(2),
+  .pay-table th:nth-child(3), .pay-table td:nth-child(3),
+  .pay-table th:nth-child(4), .pay-table td:nth-child(4),
+  .pay-table th:nth-child(5), .pay-table td:nth-child(5),
+  .pay-table th:nth-child(7), .pay-table td:nth-child(7){ display:none; }
+}
 `;
 
 export function layout(title: string, body: string, opts: { nav?: boolean; flash?: string } = {}): string {

@@ -8,3 +8,7 @@ npm-debug.log*
 coverage/
 secrets/
 service-account*.json
+
+# Бэкапы (см. scripts/BACKUP.md) — на случай, если BACKUP_DIR указывает внутрь репозитория
+basketballgod-backups/
+*.tar.gz

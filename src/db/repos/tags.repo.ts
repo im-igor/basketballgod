@@ -1,4 +1,4 @@
-import { pool, query } from '../pool.js';
+import { query } from '../pool.js';
 import type { Tag } from '../types.js';
 
 export type TagInput = {
@@ -33,32 +33,4 @@ export async function upsertTag(t: TagInput): Promise<Tag> {
 
 export async function deleteTag(id: number): Promise<void> {
   await query('delete from tags where id = $1', [id]);
-}
-
-/** Полностью заменить справочник (для импорта из таблицы). Транзакция: очистка + вставка. */
-export async function replaceAllTags(rows: TagInput[]): Promise<number> {
-  const client = await pool.connect();
-  try {
-    await client.query('begin');
-    await client.query('truncate tags restart identity');
-    let inserted = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const t = rows[i]!;
-      await client.query(
-        `insert into tags (tag_key, tag_value, description, sort_order)
-         values ($1, $2, $3, $4)
-         on conflict (tag_key, tag_value) do update set
-           description = excluded.description, sort_order = excluded.sort_order`,
-        [t.tag_key, t.tag_value, t.description ?? null, t.sort_order ?? (i + 1) * 10],
-      );
-      inserted++;
-    }
-    await client.query('commit');
-    return inserted;
-  } catch (err) {
-    await client.query('rollback');
-    throw err;
-  } finally {
-    client.release();
-  }
 }

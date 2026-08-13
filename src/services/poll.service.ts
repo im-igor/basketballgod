@@ -9,11 +9,34 @@ import {
   type PollDraftRow,
 } from '../db/repos/pollDrafts.repo.js';
 import { eventLabel } from '../domain/dates.js';
+import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { log } from '../util/logger.js';
 import type { Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 const other = (t: Team): Team => (t === 'RED' ? 'BLACK' : 'RED');
+
+/** Вид рассылки: тренировки или игры — у каждого своё расписание и горизонт. */
+export type PollKind = 'training' | 'game';
+
+/** Подходит ли событие под вид рассылки по тегу TYPE. */
+function matchesKind(ev: CalendarEvent, kind: PollKind): boolean {
+  return kind === 'training'
+    ? ev.tags.TYPE === 'TRAINING'
+    : ev.tags.TYPE === 'GAME' || ev.tags.TYPE === 'FRIENDLY';
+}
+
+/** Горизонт (дней) для вида рассылки: cron_config → фолбэк на env. */
+async function horizonFor(kind: PollKind): Promise<number> {
+  const fallback = kind === 'training' ? env.POLL_TRAINING_HORIZON_DAYS : env.POLL_GAME_HORIZON_DAYS;
+  try {
+    const cfg = await getCronConfig();
+    const days = kind === 'training' ? cfg.poll_training_horizon_days : cfg.poll_game_horizon_days;
+    return days && days > 0 ? days : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 const QUESTION_MAX = 300; // лимит вопроса опроса Telegram
 
@@ -78,10 +101,10 @@ async function sendPollForEvent(
   return { messageId: msg.message_id, pollId: msg.poll?.id ?? null, forwarded };
 }
 
-/** События обеих команд на ближайшие POLL_HORIZON_DAYS дней. */
-async function eventsForWeek(): Promise<{ team: Team; events: CalendarEvent[] }[]> {
+/** События обеих команд на ближайшие horizonDays дней. */
+async function eventsInWindow(horizonDays: number): Promise<{ team: Team; events: CalendarEvent[] }[]> {
   const now = new Date();
-  const timeMax = new Date(now.getTime() + env.POLL_HORIZON_DAYS * 24 * 60 * 60 * 1000);
+  const timeMax = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
   const out: { team: Team; events: CalendarEvent[] }[] = [];
   for (const team of TEAMS) {
     try {
@@ -94,16 +117,23 @@ async function eventsForWeek(): Promise<{ team: Team; events: CalendarEvent[] }[
 }
 
 /**
- * Разослать опросы по событиям на ближайшие POLL_HORIZON_DAYS дней (авторассылка по cron).
- * Тренировки (TYPE=TRAINING) дублируются (forward) в чат другой команды —
- * игроки могут посещать оба зала.
+ * Разослать опросы одного вида (авторассылка по cron).
+ * kind='training' — события TYPE=TRAINING, дублируются (forward) в чат другой команды
+ * (игроки посещают оба зала); горизонт — poll_training_horizon_days.
+ * kind='game' — события TYPE=GAME|FRIENDLY, без форварда; горизонт — poll_game_horizon_days.
  */
-export async function sendWeeklyPolls(api: Api): Promise<{ sent: number; forwarded: number }> {
+export async function sendWeeklyPolls(
+  api: Api,
+  kind: PollKind,
+): Promise<{ sent: number; forwarded: number }> {
   let sent = 0;
   let forwarded = 0;
+  const forward = kind === 'training';
+  const horizon = await horizonFor(kind);
 
-  for (const { team, events } of await eventsForWeek()) {
+  for (const { team, events } of await eventsInWindow(horizon)) {
     for (const ev of events) {
+      if (!matchesKind(ev, kind)) continue;
       try {
         const res = await sendPollForEvent(api, {
           team,
@@ -111,7 +141,7 @@ export async function sendWeeklyPolls(api: Api): Promise<{ sent: number; forward
           options: env.POLL_OPTIONS,
           eventUid: ev.uid,
           eventStart: ev.start,
-          forward: ev.tags.TYPE === 'TRAINING',
+          forward,
         });
         sent++;
         if (res.forwarded) forwarded++;
@@ -121,7 +151,7 @@ export async function sendWeeklyPolls(api: Api): Promise<{ sent: number; forward
     }
   }
 
-  log.info(`[polls] отправлено ${sent}, переслано ${forwarded}`);
+  log.info(`[polls:${kind}] отправлено ${sent}, переслано ${forwarded}`);
   return { sent, forwarded };
 }
 
@@ -132,20 +162,25 @@ export async function sendWeeklyPolls(api: Api): Promise<{ sent: number; forward
  */
 export async function buildPollDrafts(): Promise<PollDraftRow[]> {
   const drafts: PollDraftRow[] = [];
-  for (const { team, events } of await eventsForWeek()) {
-    for (const ev of events) {
-      const isTraining = ev.tags.TYPE === 'TRAINING';
-      const id = await createPollDraft({
-        team,
-        event_uid: ev.uid,
-        question: questionFor(ev),
-        options: env.POLL_OPTIONS,
-        event_start: ev.start,
-        is_training: isTraining,
-        forward: isTraining,
-      });
-      const draft = await getPollDraft(id);
-      if (draft) drafts.push(draft);
+  // По каждому виду — свой горизонт и фильтр по TYPE; форвард только для тренировок.
+  // Виды не пересекаются (TRAINING vs GAME/FRIENDLY), поэтому события не дублируются.
+  for (const kind of ['training', 'game'] as const) {
+    const forward = kind === 'training';
+    for (const { team, events } of await eventsInWindow(await horizonFor(kind))) {
+      for (const ev of events) {
+        if (!matchesKind(ev, kind)) continue;
+        const id = await createPollDraft({
+          team,
+          event_uid: ev.uid,
+          question: questionFor(ev),
+          options: env.POLL_OPTIONS,
+          event_start: ev.start,
+          is_training: forward,
+          forward,
+        });
+        const draft = await getPollDraft(id);
+        if (draft) drafts.push(draft);
+      }
     }
   }
   log.info(`[polls] подготовлено черновиков: ${drafts.length}`);

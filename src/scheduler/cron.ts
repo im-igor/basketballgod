@@ -4,8 +4,6 @@ import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
 import { sendBudgetDraftToAdmins, sendBudgetFixationNotice } from '../services/notify.service.js';
-import { importPlayersFromSheet } from '../services/playersImport.service.js';
-import { importTariffsFromSheet } from '../services/tariffsImport.service.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { CronConfig } from '../db/types.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
@@ -23,7 +21,8 @@ function job(name: string, fn: () => Promise<void>): () => void {
 
 interface Schedule {
   tz: string;
-  pollCron: string;
+  pollTrainingCron: string;
+  pollGameCron: string;
   fixationCron: string;
   budgetCron: string;
 }
@@ -50,23 +49,34 @@ const RECONCILE_CRON = '7 * * * *'; // как часто перечитыват�
 function envSchedule(): Schedule {
   return {
     tz: env.TZ,
-    pollCron: env.POLL_CRON,
+    pollTrainingCron: env.POLL_TRAINING_CRON,
+    pollGameCron: env.POLL_GAME_CRON,
     fixationCron: env.MONTHLY_FIXATION_CRON,
     budgetCron: env.MONTHLY_CRON,
   };
 }
 
+/** «день недели + время» → cron-выражение, иначе фолбэк. */
+function weeklyCron(
+  time: string | null | undefined,
+  weekday: number | null | undefined,
+  fallback: string,
+): string {
+  const t = parseHm(time);
+  const dow = toCronDow(weekday);
+  return t && dow !== null ? `${t.m} ${t.h} * * ${dow}` : fallback;
+}
+
 /** Собрать расписание из значений cron_config; каждое поле — с фолбэком на env/дефолты. */
 function buildSchedule(cfg: CronConfig): Schedule {
   const fb = envSchedule();
-  const pollT = parseHm(cfg.poll_time);
-  const pollDow = toCronDow(cfg.poll_weekday);
   const fixT = parseHm(cfg.fixation_time);
   const budT = parseHm(cfg.budget_time);
   const dayOk = (d: number | null | undefined): d is number => d != null && d >= 1 && d <= 28;
   return {
     tz: cfg.timezone || fb.tz,
-    pollCron: pollT && pollDow !== null ? `${pollT.m} ${pollT.h} * * ${pollDow}` : fb.pollCron,
+    pollTrainingCron: weeklyCron(cfg.poll_training_time, cfg.poll_training_weekday, fb.pollTrainingCron),
+    pollGameCron: weeklyCron(cfg.poll_game_time, cfg.poll_game_weekday, fb.pollGameCron),
     fixationCron: fixT && dayOk(cfg.fixation_day) ? `${fixT.m} ${fixT.h} ${cfg.fixation_day} * *` : fb.fixationCron,
     budgetCron: budT && dayOk(cfg.budget_day) ? `${budT.m} ${budT.h} ${cfg.budget_day} * *` : fb.budgetCron,
   };
@@ -76,18 +86,18 @@ function buildSchedule(cfg: CronConfig): Schedule {
  * Прочитать расписание из cron_config (БД). fromDb=false, если БД прочитать не удалось —
  * тогда при реконсиляции НЕ трогаем текущее расписание (защита от «тряски» при сбоях).
  */
-async function loadSchedule(): Promise<{ sch: Schedule; fromSheet: boolean }> {
+async function loadSchedule(): Promise<{ sch: Schedule; fromDb: boolean }> {
   try {
     const cfg = await getCronConfig();
-    return { sch: buildSchedule(cfg), fromSheet: true };
+    return { sch: buildSchedule(cfg), fromDb: true };
   } catch (err) {
     log.warn('[cron] cron_config недоступен — расписание из env/дефолтов', (err as Error).message);
-    return { sch: envSchedule(), fromSheet: false };
+    return { sch: envSchedule(), fromDb: false };
   }
 }
 
 function scheduleKey(s: Schedule): string {
-  return `${s.tz}|${s.pollCron}|${s.fixationCron}|${s.budgetCron}`;
+  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.fixationCron}|${s.budgetCron}`;
 }
 
 // Активные задачи расписания (пересоздаются при смене конфига) и «ключ» текущего расписания.
@@ -96,7 +106,7 @@ let currentKey = '';
 
 /** Остановить старые задачи и запланировать заново по данному расписанию. */
 function applySchedule(api: Api, sch: Schedule): void {
-  for (const expr of [sch.pollCron, sch.fixationCron, sch.budgetCron]) {
+  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.fixationCron, sch.budgetCron]) {
     if (!cron.validate(expr)) {
       log.error(`[cron] некорректное выражение "${expr}" — расписание не изменено`);
       return;
@@ -105,9 +115,14 @@ function applySchedule(api: Api, sch: Schedule): void {
 
   for (const t of tasks) t.stop();
   tasks = [
-    // Рассылка опросов (по умолчанию пятница 12:00).
-    cron.schedule(sch.pollCron, job('weekly-polls', async () => {
-      await sendWeeklyPolls(api);
+    // Опросы на тренировки (TYPE=TRAINING, с форвардом в чат другой команды).
+    cron.schedule(sch.pollTrainingCron, job('weekly-polls-training', async () => {
+      await sendWeeklyPolls(api, 'training');
+    }), { timezone: sch.tz }),
+
+    // Опросы на игры (TYPE=GAME|FRIENDLY, без форварда).
+    cron.schedule(sch.pollGameCron, job('weekly-polls-game', async () => {
+      await sendWeeklyPolls(api, 'game');
     }), { timezone: sch.tz }),
 
     // Уведомление о фиксации участников: за сутки до сбора шлём в чаты обеих команд.
@@ -115,21 +130,19 @@ function applySchedule(api: Api, sch: Schedule): void {
       await sendBudgetFixationNotice(api);
     }), { timezone: sch.tz }),
 
-    // Бюджет: импортируем игроков и тарифы из таблицы, собираем бюджеты обеих команд,
+    // Бюджет: собираем бюджеты обеих команд по составу и тарифам из БД,
     // отправляем ЧЕРНОВИКИ администраторам в личку (в чаты публикует админ кнопкой).
     cron.schedule(sch.budgetCron, job('monthly-budget', async () => {
       const { month, year } = nextMonthOf(new Date());
-      log.info(`[cron] импорт игроков и тарифов из таблицы, сбор бюджета за ${monthLabel(month, year)}`);
-      await importPlayersFromSheet();
-      await importTariffsFromSheet();
+      log.info(`[cron] сбор бюджета за ${monthLabel(month, year)}`);
       const built = await buildAndSaveBudgets(month, year);
       await sendBudgetDraftToAdmins(api, built);
     }), { timezone: sch.tz }),
   ];
   currentKey = scheduleKey(sch);
   log.info(
-    `[cron] расписание активно (TZ=${sch.tz}) — опросы "${sch.pollCron}", ` +
-      `фиксация "${sch.fixationCron}", бюджет "${sch.budgetCron}"`,
+    `[cron] расписание активно (TZ=${sch.tz}) — опросы: тренировки "${sch.pollTrainingCron}", ` +
+      `игры "${sch.pollGameCron}"; фиксация "${sch.fixationCron}", бюджет "${sch.budgetCron}"`,
   );
 }
 
@@ -141,8 +154,8 @@ export async function startScheduler(api: Api): Promise<void> {
   // Так правки cron_config (через админку/синк) подхватываются без перезапуска бота.
   cron.schedule(RECONCILE_CRON, () => {
     void loadSchedule()
-      .then(({ sch: next, fromSheet }) => {
-        if (!fromSheet) return; // не смогли прочитать — оставляем текущее
+      .then(({ sch: next, fromDb }) => {
+        if (!fromDb) return; // не смогли прочитать — оставляем текущее
         if (scheduleKey(next) === currentKey) return; // без изменений
         log.info('[cron] расписание изменилось в таблице — переприменяю');
         applySchedule(api, next);

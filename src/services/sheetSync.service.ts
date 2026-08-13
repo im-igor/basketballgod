@@ -1,44 +1,25 @@
 import {
-  readPlayersSheet,
   writePlayersSheet,
-  readCronConfigFromSheet,
   writeCronToSheet,
   writeTariffsToSheet,
-  readTagsFromSheet,
   writeTagsToSheet,
   type SheetPlayer,
 } from '../google/sheets.js';
-import { importPlayersFromSheet } from './playersImport.service.js';
-import { importTariffsFromSheet } from './tariffsImport.service.js';
 import { listPlayers } from '../db/repos/players.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
-import { getCronConfig, updateCronConfig } from '../db/repos/cronConfig.repo.js';
-import { listTags, replaceAllTags } from '../db/repos/tags.repo.js';
+import { getCronConfig } from '../db/repos/cronConfig.repo.js';
+import { listTags } from '../db/repos/tags.repo.js';
 import { log } from '../util/logger.js';
 
 /**
- * Двусторонняя синхронизация конфигурационных вкладок Google-таблицы и БД.
+ * Односторонняя выгрузка БД → Google-таблица (витрина «показать человеку»).
  *
- * БД — источник правды для приложения, таблица — бэкап/обмен.
- * `import…FromSheet` — таблица → БД; `export…ToSheet` — БД → таблица.
- * Разделы: Players, Tariffs (`tariffs`), Cron (`cron`), Tags (`Tags`).
+ * БД — единственный источник правды; обратной загрузки нет, и таблица на данные
+ * приложения никак не влияет. Разделы: Players, Tariffs (`tariffs`),
+ * Cron (`cron`), Tags (`Tags`).
  */
 
 // ── Cron ────────────────────────────────────────────────────────────────
-export async function importCronFromSheet(): Promise<string> {
-  const cfg = await readCronConfigFromSheet();
-  await updateCronConfig({
-    timezone: cfg.timezone ?? undefined,
-    poll_weekday: cfg.poll_weekday ?? undefined,
-    poll_time: cfg.poll_time ?? undefined,
-    fixation_day: cfg.fixation_day ?? undefined,
-    fixation_time: cfg.fixation_time ?? undefined,
-    budget_day: cfg.budget_day ?? undefined,
-    budget_time: cfg.budget_time ?? undefined,
-  });
-  return 'Крон: загружен из таблицы';
-}
-
 export async function exportCronToSheet(): Promise<string> {
   const c = await getCronConfig();
   await writeCronToSheet(c);
@@ -46,11 +27,6 @@ export async function exportCronToSheet(): Promise<string> {
 }
 
 // ── Tariffs ─────────────────────────────────────────────────────────────
-export async function importTariffsToDb(): Promise<string> {
-  await importTariffsFromSheet();
-  return 'Тарифы: загружены из таблицы';
-}
-
 export async function exportTariffsToSheet(): Promise<string> {
   const t = await getTariffs();
   await writeTariffsToSheet(t);
@@ -58,11 +34,6 @@ export async function exportTariffsToSheet(): Promise<string> {
 }
 
 // ── Players ─────────────────────────────────────────────────────────────
-export async function importPlayersToDb(): Promise<string> {
-  const { imported, deactivated } = await importPlayersFromSheet();
-  return `Игроки: загружено ${imported}, деактивировано ${deactivated}`;
-}
-
 export async function exportPlayersToSheet(): Promise<string> {
   const players = await listPlayers();
   const sheetPlayers: SheetPlayer[] = players.map((p) => ({
@@ -80,19 +51,6 @@ export async function exportPlayersToSheet(): Promise<string> {
 }
 
 // ── Tags ────────────────────────────────────────────────────────────────
-export async function importTagsToDb(): Promise<string> {
-  const rows = await readTagsFromSheet();
-  const n = await replaceAllTags(
-    rows.map((t, i) => ({
-      tag_key: t.tag_key,
-      tag_value: t.tag_value,
-      description: t.description,
-      sort_order: (i + 1) * 10,
-    })),
-  );
-  return `Теги: загружено ${n}`;
-}
-
 export async function exportTagsToSheet(): Promise<string> {
   const tags = await listTags();
   await writeTagsToSheet(
@@ -101,12 +59,17 @@ export async function exportTagsToSheet(): Promise<string> {
   return `Теги: выгружено ${tags.length}`;
 }
 
-// ── Агрегаты (все вкладки разом) ──────────────────────────────────────────
+// ── Все вкладки разом ────────────────────────────────────────────────────
 
-/** Прогнать список шагов, собрав сводку; ошибку по шагу логируем и продолжаем. */
-async function runAll(steps: Array<() => Promise<string>>): Promise<string> {
+/** Все вкладки: БД → таблица. Ошибку по шагу логируем и продолжаем. */
+export async function syncAllToSheet(): Promise<string> {
   const report: string[] = [];
-  for (const step of steps) {
+  for (const step of [
+    exportPlayersToSheet,
+    exportTariffsToSheet,
+    exportCronToSheet,
+    exportTagsToSheet,
+  ]) {
     try {
       report.push('✅ ' + (await step()));
     } catch (err) {
@@ -116,14 +79,4 @@ async function runAll(steps: Array<() => Promise<string>>): Promise<string> {
     }
   }
   return report.join('\n');
-}
-
-/** Все вкладки: таблица → БД. */
-export async function syncAllFromSheet(): Promise<string> {
-  return runAll([importPlayersToDb, importTariffsToDb, importCronFromSheet, importTagsToDb]);
-}
-
-/** Все вкладки: БД → таблица. */
-export async function syncAllToSheet(): Promise<string> {
-  return runAll([exportPlayersToSheet, exportTariffsToSheet, exportCronToSheet, exportTagsToSheet]);
 }

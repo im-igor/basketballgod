@@ -52,11 +52,15 @@ const schema = z.object({
 
   ADMIN_TG_IDS: csvNumbers.default('524515690'),
   POLL_OPTIONS: csvStrings.default('Да,Нет,Для Родиона'),
-  POLL_HORIZON_DAYS: z.coerce.number().int().positive().default(7),
+  // Фолбэк-горизонты опросов (дней вперёд), если поле в cron_config пустое.
+  POLL_TRAINING_HORIZON_DAYS: z.coerce.number().int().positive().default(7),
+  POLL_GAME_HORIZON_DAYS: z.coerce.number().int().positive().default(7),
 
   // Schedule
   TZ: z.string().default('Europe/Moscow'),
-  POLL_CRON: z.string().default('0 12 * * 5'),
+  // Раздельные расписания опросов (фолбэк для cron_config): тренировки и игры.
+  POLL_TRAINING_CRON: z.string().default('0 12 * * 5'),
+  POLL_GAME_CRON: z.string().default('0 12 * * 5'),
   // Уведомление в чаты о фиксации участников — 25-го вечером (за сутки до сбора).
   MONTHLY_FIXATION_CRON: z.string().default('0 20 25 * *'),
   // Черновик бюджета админам в личку — 26-го вечером.

@@ -36,11 +36,10 @@ export async function setupBotCommandsMenu(): Promise<void> {
   await bot.api.setMyCommands([
     { command: 'help', description: 'Справка по командам' },
     { command: 'active', description: 'Активность игрока: /active @login yes|no' },
-    { command: 'sync_players', description: 'Импорт таблицы игроков в БД' },
-    { command: 'sync_all', description: 'Импорт всех вкладок из таблицы в БД' },
+    { command: 'sheet', description: 'Выгрузить данные из БД в Google-таблицу' },
     { command: 'budget', description: 'Черновик бюджета: /budget RED|BLACK MM YYYY [url …]' },
     { command: 'debtors', description: 'Черновик должников в личку: /debtors [RED|BLACK] [MM YYYY]' },
     { command: 'pay', description: 'Оплаты кнопками (✅ переключает): /pay [MM YYYY]' },
-    { command: 'poll', description: 'Черновики опросов на неделю в личку (с правкой)' },
+    { command: 'poll', description: 'Черновики опросов (тренировки и игры) на неделю в личку' },
   ]);
 }

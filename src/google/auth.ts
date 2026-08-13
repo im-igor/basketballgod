@@ -10,7 +10,7 @@ import { env } from '../config/env.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
-  // Таблица — источник правды по игрокам: нужен доступ на запись (read/write).
+  // В таблицу только пишем (выгрузка из БД), но узкого write-only scope у Sheets нет.
   'https://www.googleapis.com/auth/spreadsheets',
 ];
 

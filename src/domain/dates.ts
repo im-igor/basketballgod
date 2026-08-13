@@ -69,6 +69,22 @@ export function toRuDate(iso: string | Date | null): string {
   return `${p.day}.${p.month}.${p.year}`;
 }
 
+/**
+ * ISO `YYYY-MM-DD` (или Date) → `dd.mm.yyyy` (или ''). В отличие от `toRuDate`
+ * работает со строкой напрямую, без разбора в Date, — для «календарных» дат
+ * без времени (active_from/active_to), где таймзона не нужна.
+ */
+export function isoToRu(v: string | Date | null | undefined): string {
+  if (!v) return '';
+  if (v instanceof Date) {
+    const dd = String(v.getDate()).padStart(2, '0');
+    const mm = String(v.getMonth() + 1).padStart(2, '0');
+    return `${dd}.${mm}.${v.getFullYear()}`;
+  }
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+}
+
 /** Человекочитаемая дата+время события для вопроса опроса (в таймзоне env.TZ). */
 export function eventLabel(iso: string, withTime: boolean): string {
   const p = partsInTZ(new Date(iso));

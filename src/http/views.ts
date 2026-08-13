@@ -57,8 +57,7 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
         <a href="/budgets">Бюджеты</a>
       </nav>
       <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
-        <form class="inline" method="post" action="/sync/pull"><button class="ghost" title="Загрузить все вкладки из таблицы в БД">⬇ Всё из таблицы</button></form>
-        <form class="inline" method="post" action="/sync/push"><button class="ghost" title="Выгрузить все данные из БД в таблицу">⬆ Всё в таблицу</button></form>
+        <form class="inline" method="post" action="/sync/push"><button class="ghost" title="Выгрузить все данные из БД в Google-таблицу (только показать; обратно не читается)">⬆ Всё в таблицу</button></form>
         <form class="inline" method="post" action="/logout"><button class="ghost">Выйти</button></form>
       </div>
     </header>`;
@@ -70,12 +69,11 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
 }
 
 /**
- * Пара кнопок синхронизации раздела с соответствующей вкладкой Google-таблицы:
- * «загрузить из таблицы» (таблица → БД) и «выгрузить в таблицу» (БД → таблица).
+ * Кнопка выгрузки раздела в соответствующую вкладку Google-таблицы (БД → таблица).
+ * Синхронизация односторонняя: таблица — витрина для показа, обратно не читается.
  */
 export function syncButtons(section: string): string {
   return `<div style="display:flex;gap:8px;flex-wrap:wrap">
-    <form class="inline" method="post" action="/${section}/pull"><button class="ghost">⬇ Загрузить из таблицы</button></form>
     <form class="inline" method="post" action="/${section}/push"><button class="ghost">⬆ Выгрузить в таблицу</button></form>
   </div>`;
 }

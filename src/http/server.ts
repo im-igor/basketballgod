@@ -5,7 +5,6 @@ import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
 import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
-import { isoToRu } from '../google/sheets.js';
 import { normalizeLogin } from '../util/args.js';
 import { computeActivityDates, reconcileActivityDates } from '../domain/activity.js';
 import {
@@ -35,18 +34,13 @@ import {
 } from '../services/notify.service.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import {
-  syncAllFromSheet,
   syncAllToSheet,
-  importPlayersToDb,
   exportPlayersToSheet,
-  importTariffsToDb,
   exportTariffsToSheet,
-  importCronFromSheet,
   exportCronToSheet,
-  importTagsToDb,
   exportTagsToSheet,
 } from '../services/sheetSync.service.js';
-import { monthLabel } from '../domain/dates.js';
+import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
 import type { Team, Player, Charge } from '../db/types.js';
 
@@ -142,7 +136,8 @@ export async function buildServer(bot: Bot) {
     const body = `<h1>Панель управления</h1>
       <div class="card"><h2>Быстрые действия</h2>
         <div class="row">
-          <form method="post" action="/polls/run"><button>Разослать опросы на неделю</button></form>
+          <form method="post" action="/polls/run/training"><button>Разослать опросы на тренировки</button></form>
+          <form method="post" action="/polls/run/game"><button>Разослать опросы на игры</button></form>
           <form method="post" action="/budgets/build" class="row">
             <div><label>Месяц</label><input name="month" type="number" min="1" max="12" required></div>
             <div><label>Год</label><input name="year" type="number" min="2024" max="2100" required></div>
@@ -154,7 +149,7 @@ export async function buildServer(bot: Bot) {
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
-  // ── Players (источник правды — БД; синк с вкладкой Players по кнопкам) ────
+  // ── Players (источник правды — БД; выгрузка во вкладку Players по кнопке) ────
   // date-значение из БД (Date или ISO-строка) → YYYY-MM-DD для input[type=date].
   const isoDate = (v: string | Date | null | undefined): string => {
     if (!v) return '';
@@ -234,8 +229,9 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Игроки <span class="muted">(${players.length})</span></h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД. Синхронизация с вкладкой
-          «Players» Google-таблицы — кнопками справа.</div>
+        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД — это единственный источник правды.
+          Кнопка справа выгружает состав во вкладку «Players» Google-таблицы (чтобы показать человеку);
+          обратно таблица не читается.</div>
         ${syncButtons('players')}
       </div></div>
       <div class="card"><h2>Добавить / обновить</h2>${playerForm()}</div>
@@ -315,7 +311,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/players', 'Игрок удалён из БД');
   });
 
-  app.post('/players/pull', syncRoute('/players', importPlayersToDb));
   app.post('/players/push', syncRoute('/players', exportPlayersToSheet));
 
   // ── Tariffs ──────────────────────────────────────────────
@@ -326,7 +321,7 @@ export async function buildServer(bot: Bot) {
       `<div><label>${label}</label><input name="${name}" type="number" step="1" value="${val}"></div>`;
     const body = `<h1>Тарифы</h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Правки пишутся в БД. Синхронизация с вкладкой «tariffs» — кнопками справа.</div>
+        <div class="muted" style="flex:1">Правки пишутся в БД. Кнопка справа — выгрузка во вкладку «tariffs» (только показать).</div>
         ${syncButtons('tariffs')}
       </div></div>
       <div class="card"><form method="post" action="/tariffs"><div class="row">
@@ -352,7 +347,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/tariffs', 'Тарифы сохранены');
   });
 
-  app.post('/tariffs/pull', syncRoute('/tariffs', importTariffsToDb));
   app.post('/tariffs/push', syncRoute('/tariffs', exportTariffsToSheet));
 
   // ── Cron (расписание планировщика в cron_config) ─────────
@@ -367,14 +361,24 @@ export async function buildServer(bot: Bot) {
     const body = `<h1>Крон</h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
         <div class="muted" style="flex:1">Расписание планировщика (в БД). Пустое поле → берётся значение из env/дефолтов.
-          Синхронизация с вкладкой «cron» — кнопками справа.</div>
+          Кнопка справа — выгрузка во вкладку «cron» (только показать).</div>
         ${syncButtons('cron')}
       </div></div>
       <div class="card"><form method="post" action="/cron">
         <div class="row">
           ${text('timezone', 'Таймзона', c.timezone, 'Europe/Moscow')}
-          ${numf('poll_weekday', 'Опрос: день недели (1=Пн…7=Вс)', c.poll_weekday, '5')}
-          ${text('poll_time', 'Опрос: время (ЧЧ:ММ)', c.poll_time, '12:00')}
+        </div>
+        <h2 style="margin-top:12px">Опросы на тренировки</h2>
+        <div class="row">
+          ${numf('poll_training_weekday', 'День недели (1=Пн…7=Вс)', c.poll_training_weekday, '5')}
+          ${text('poll_training_time', 'Время (ЧЧ:ММ)', c.poll_training_time, '12:00')}
+          ${numf('poll_training_horizon_days', 'Горизонт (дней вперёд)', c.poll_training_horizon_days, '7')}
+        </div>
+        <h2 style="margin-top:12px">Опросы на игры</h2>
+        <div class="row">
+          ${numf('poll_game_weekday', 'День недели (1=Пн…7=Вс)', c.poll_game_weekday, '5')}
+          ${text('poll_game_time', 'Время (ЧЧ:ММ)', c.poll_game_time, '12:00')}
+          ${numf('poll_game_horizon_days', 'Горизонт (дней вперёд)', c.poll_game_horizon_days, '7')}
         </div>
         <div class="row" style="margin-top:8px">
           ${numf('fixation_day', 'Фиксация: день месяца (1–28)', c.fixation_day, '25')}
@@ -400,8 +404,12 @@ export async function buildServer(bot: Bot) {
     };
     await updateCronConfig({
       timezone: str(b.timezone),
-      poll_weekday: int(b.poll_weekday),
-      poll_time: str(b.poll_time),
+      poll_training_weekday: int(b.poll_training_weekday),
+      poll_training_time: str(b.poll_training_time),
+      poll_training_horizon_days: int(b.poll_training_horizon_days),
+      poll_game_weekday: int(b.poll_game_weekday),
+      poll_game_time: str(b.poll_game_time),
+      poll_game_horizon_days: int(b.poll_game_horizon_days),
       fixation_day: int(b.fixation_day),
       fixation_time: str(b.fixation_time),
       budget_day: int(b.budget_day),
@@ -410,7 +418,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/cron', 'Расписание сохранено');
   });
 
-  app.post('/cron/pull', syncRoute('/cron', importCronFromSheet));
   app.post('/cron/push', syncRoute('/cron', exportCronToSheet));
 
   // ── Tags (справочник тегов календарных событий) ──────────
@@ -432,7 +439,7 @@ export async function buildServer(bot: Bot) {
     const body = `<h1>Теги <span class="muted">(${tags.length})</span></h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
         <div class="muted" style="flex:1">Справочник тегов календарных событий (легенда KEY=VALUE). Хранится в БД;
-          синхронизация с вкладкой «Tags» — кнопками справа. На валидацию парсинга не влияет.</div>
+          кнопка справа — выгрузка во вкладку «Tags» (только показать). На валидацию парсинга не влияет.</div>
         ${syncButtons('tags')}
       </div></div>
       <div class="card"><h2>Добавить / обновить</h2>
@@ -469,11 +476,9 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/tags', 'Тег удалён');
   });
 
-  app.post('/tags/pull', syncRoute('/tags', importTagsToDb));
   app.post('/tags/push', syncRoute('/tags', exportTagsToSheet));
 
   // ── Синхронизация всех вкладок (кнопки в шапке) ──────────
-  app.post('/sync/pull', syncRoute('/', syncAllFromSheet));
   app.post('/sync/push', syncRoute('/', syncAllToSheet));
 
   // ── Budgets ──────────────────────────────────────────────
@@ -775,10 +780,12 @@ export async function buildServer(bot: Bot) {
   });
 
   // ── Misc actions ─────────────────────────────────────────
-  app.post('/polls/run', async (_req, reply) => {
+  app.post('/polls/run/:kind', async (req, reply) => {
+    const kind = (req.params as { kind: string }).kind === 'game' ? 'game' : 'training';
+    const label = kind === 'game' ? 'на игры' : 'на тренировки';
     try {
-      const { sent, forwarded } = await sendWeeklyPolls(api);
-      return redirect(reply, '/', `Опросы отправлены: ${sent}, переслано: ${forwarded}`);
+      const { sent, forwarded } = await sendWeeklyPolls(api, kind);
+      return redirect(reply, '/', `Опросы ${label} отправлены: ${sent}, переслано: ${forwarded}`);
     } catch (err) {
       return redirect(reply, '/', `Ошибка: ${(err as Error).message}`);
     }

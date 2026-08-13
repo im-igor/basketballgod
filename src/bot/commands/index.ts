@@ -2,12 +2,9 @@ import type { Bot, Context } from 'grammy';
 import { adminOnly } from '../middlewares/auth.js';
 import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
-import { monthLabel } from '../../domain/dates.js';
+import { monthLabel, isoToRu } from '../../domain/dates.js';
 import { listPlayers, getByLogin, setActive } from '../../db/repos/players.repo.js';
-import { isoToRu } from '../../google/sheets.js';
-import { importPlayersFromSheet } from '../../services/playersImport.service.js';
-import { importTariffsFromSheet } from '../../services/tariffsImport.service.js';
-import { syncAllFromSheet } from '../../services/sheetSync.service.js';
+import { syncAllToSheet } from '../../services/sheetSync.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
 import { getTariffs } from '../../db/repos/tariffs.repo.js';
 import { buildAndSaveBudgets } from '../../services/budget.service.js';
@@ -27,16 +24,15 @@ const TEAMS: Team[] = ['RED', 'BLACK'];
 
 const HELP = `<b>basketballgod — команды</b>
 
-<b>Игроки (источник правды — БД, таблица = бэкап):</b>
+<b>Игроки (источник правды — БД; состав правится в админке):</b>
 /active @login yes|no — активность игрока на след. месяц (пишет в БД)
-/sync_players — загрузить вкладку Players в БД
-/sync_all — загрузить все вкладки (Players, Tariffs, Cron, Tags) из таблицы в БД
+/sheet — выгрузить БД в Google-таблицу (Players, Tariffs, Cron, Tags) — витрина «показать человеку», обратно не читается
 
 <b>Бюджет и оплаты:</b>
 /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
 /debtors [RED|BLACK] [MM YYYY] — черновик списка должников в личку с кнопкой «Отправить в чат» (без команды — обе; по умолч. текущий месяц)
 /pay [MM YYYY] — оплаты кнопками: все игроки обеих команд, ✅ у оплативших, нажатие переключает (по умолч. текущий месяц)
-/poll — черновики опросов на неделю в личку: правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
+/poll — черновики опросов на неделю в личку (тренировки и игры, каждый со своим горизонтом): правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
 
 Игры в /budget: каждый сыгравший должен быть в ростере указанной команды с active=YES и employee=TRUE, иначе игра не принимается.`;
 
@@ -91,17 +87,10 @@ export function registerCommands(bot: Bot): void {
     );
   })));
 
-  // /sync_players — импорт вкладки Players в БД
-  bot.command('sync_players', adminOnly(safe(async (ctx) => {
-    await ctx.reply('Импортирую игроков из таблицы в БД…');
-    const { imported, deactivated } = await importPlayersFromSheet();
-    await ctx.reply(`✅ Импорт завершён. Обновлено: ${imported}, деактивировано: ${deactivated}.`);
-  })));
-
-  // /sync_all — импорт всех вкладок (Players, Tariffs, Cron, Tags) таблица → БД
-  bot.command('sync_all', adminOnly(safe(async (ctx) => {
-    await ctx.reply('Синхронизирую все вкладки из таблицы в БД…');
-    const summary = await syncAllFromSheet();
+  // /sheet — выгрузить все вкладки (Players, Tariffs, Cron, Tags) из БД в таблицу
+  bot.command('sheet', adminOnly(safe(async (ctx) => {
+    await ctx.reply('Выгружаю данные из БД в таблицу…');
+    const summary = await syncAllToSheet();
     await ctx.reply(`Готово:\n${summary}`);
   })));
 
@@ -113,11 +102,7 @@ export function registerCommands(bot: Bot): void {
       return;
     }
     const { team, month, year, games } = value;
-    await ctx.reply(
-      `Импортирую игроков и тарифы из таблицы и считаю бюджет ${team} за ${monthLabel(month, year)}…`,
-    );
-    await importPlayersFromSheet();
-    await importTariffsFromSheet();
+    await ctx.reply(`Считаю бюджет ${team} за ${monthLabel(month, year)}…`);
 
     // Игры (если есть): сперва валидируем все, и только если без ошибок — сохраняем.
     if (games.length > 0) {

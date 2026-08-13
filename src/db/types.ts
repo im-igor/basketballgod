@@ -23,8 +23,14 @@ export interface Tariffs {
 
 export interface CronConfig {
   timezone: string | null;
-  poll_weekday: number | null; // 1=Пн … 7=Вс
-  poll_time: string | null; // «ЧЧ:ММ»
+  // Опросы на тренировки (TYPE=TRAINING) — своё расписание и горизонт.
+  poll_training_weekday: number | null; // 1=Пн … 7=Вс
+  poll_training_time: string | null; // «ЧЧ:ММ»
+  poll_training_horizon_days: number | null; // окно опроса, дней вперёд
+  // Опросы на игры (TYPE=GAME|FRIENDLY) — отдельное расписание и горизонт.
+  poll_game_weekday: number | null;
+  poll_game_time: string | null;
+  poll_game_horizon_days: number | null;
   fixation_day: number | null;
   fixation_time: string | null;
   budget_day: number | null;

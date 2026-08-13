@@ -54,6 +54,12 @@ button.ok { background:var(--ok); }
   .pay-table th:nth-child(4), .pay-table td:nth-child(4),
   .pay-table th:nth-child(5), .pay-table td:nth-child(5),
   .pay-table th:nth-child(7), .pay-table td:nth-child(7){ display:none; }
+  /* Таблица игроков: оставляем ФИО(1), Статус(4) и колонку действий(7)
+     (Изменить / Активировать / удалить), скрываем tg(2), Команду(3), даты(5,6). */
+  .players-table th:nth-child(2), .players-table td:nth-child(2),
+  .players-table th:nth-child(3), .players-table td:nth-child(3),
+  .players-table th:nth-child(5), .players-table td:nth-child(5),
+  .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
 }
 `;
 

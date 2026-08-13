@@ -235,7 +235,7 @@ export async function buildServer(bot: Bot) {
         ${syncButtons('players')}
       </div></div>
       <div class="card"><h2>Добавить / обновить</h2>${playerForm()}</div>
-      <div class="card"><table>
+      <div class="card"><table class="players-table">
         <thead><tr>
           ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
           ${sortHeader('tg', 'tg_login', '/players', { sort, dir })}

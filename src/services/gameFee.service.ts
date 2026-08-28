@@ -1,8 +1,13 @@
 import { fetchGameStats, selectTeamPlayers } from '../gamefee/parser.js';
-import { saveGame, deleteGamesByUrl } from '../db/repos/games.repo.js';
+import {
+  saveGame,
+  deleteGamesByUrl,
+  getGameById,
+  updateGameFee,
+} from '../db/repos/games.repo.js';
 import { getByLogin } from '../db/repos/players.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
-import { feePerPlayer } from '../domain/gamefee.js';
+import { computeGameFee } from '../domain/gamefee.js';
 import { normalizeLogin } from '../util/args.js';
 import type { GameParticipant, Player, Tariffs, Team } from '../db/types.js';
 
@@ -16,7 +21,7 @@ function nameTokens(fullName: string): string[] {
 }
 
 /**
- * Сопоставление имени со страницы с игроком из (уже отфильтрованного по команде) ростера.
+ * Сопоставление имени со страницы с игроком из ростера (обеих команд — кросс-команда).
  * Матчим по **ФИО**: засчитываем игрока, только если ВСЕ токены имени со страницы (и имя,
  * и фамилия) есть в записи ростера. Это исключает ложные совпадения по общему имени
  * (несколько «Александров») и различает однофамильцев-братьев (Решин Кирилл / Решин Максим).
@@ -57,13 +62,14 @@ export type GameValidation = { ok: true; plan: GamePlan } | { ok: false; errors:
 
 /**
  * Спарсить и проверить игру БЕЗ записи в БД. Каждый вышедший на паркет (время > 0) должен
- * быть игроком указанной команды с `active=YES` и `employee=TRUE`. Иначе — список ошибок.
+ * находиться в ростере (любой команды — кросс-команда) с `active=YES` и `employee=TRUE`.
+ * Иначе — список ошибок. `roster` — активные игроки обеих команд.
  */
 export async function validateGame(
   url: string,
   team: Team,
   date: string | null,
-  teamRoster: Player[],
+  roster: Player[],
   tariffs: Tariffs,
 ): Promise<GameValidation> {
   const game = await fetchGameStats(url);
@@ -75,9 +81,9 @@ export async function validateGame(
   const errors: string[] = [];
   const participants: GameParticipant[] = [];
   for (const p of sel.played) {
-    const matched = matchPlayer(p.name, teamRoster);
+    const matched = matchPlayer(p.name, roster);
     if (!matched) {
-      errors.push(`${url} (${team}): «${p.name}» не найден в ростере ${team}`);
+      errors.push(`${url} (${team}): «${p.name}» не найден в ростере (RED/BLACK)`);
     } else if (!matched.active) {
       errors.push(`${url} (${team}): «${matched.name}» неактивен (active=NO)`);
     } else if (!matched.is_employee) {
@@ -88,7 +94,8 @@ export async function validateGame(
   }
   if (errors.length > 0) return { ok: false, errors };
 
-  const fee = feePerPlayer(tariffs.coach_per_game, sel.played.length);
+  // Авто-игры (лига): тренер по умолчанию был, судьи нет; при необходимости правится тумблером.
+  const fee = computeGameFee(tariffs, { coach_present: true, judge: false }, sel.played.length);
   return {
     ok: true,
     plan: {
@@ -126,8 +133,7 @@ export async function registerFriendly(
   }
   if (matched.length === 0) return { matched: 0, unmatched, fee: 0 };
 
-  const total = (opts.coach ? tariffs.coach_per_game : 0) + (opts.judge ? tariffs.referee_default : 0);
-  const fee = feePerPlayer(total, matched.length);
+  const fee = computeGameFee(tariffs, { coach_present: opts.coach, judge: opts.judge }, matched.length);
   const participants: GameParticipant[] = matched.map((p) => ({
     name: p.name,
     tg_login: p.tg_login,
@@ -141,6 +147,8 @@ export async function registerFriendly(
     stat_url: null,
     fee_per_player: fee,
     participants,
+    coach_present: opts.coach,
+    judge: opts.judge,
     month,
     year,
   });
@@ -163,8 +171,78 @@ export async function registerValidatedGames(
       stat_url: plan.url,
       fee_per_player: plan.fee,
       participants: plan.participants,
+      coach_present: true,
+      judge: false,
       month,
       year,
     });
   }
+}
+
+/**
+ * Ручной ввод игры (основной путь для лиги BLACK/МЛБЛ — её стат-сайт не парсится).
+ * Состав задаётся списком @login (кросс-командно, `getByLogin` без фильтра команды),
+ * взнос — из флагов тренер/судья. `team` — только метка (лига/фикстура), на учёт не влияет:
+ * взнос каждому падает в бюджет его домашней команды.
+ */
+export async function registerManualGame(
+  opts: {
+    team: Team | 'MIXED';
+    opponent: string | null;
+    date: string | null;
+    logins: string[];
+    coach: boolean;
+    judge: boolean;
+  },
+  month: number,
+  year: number,
+): Promise<{ matched: number; unmatched: string[]; fee: number }> {
+  const tariffs = await getTariffs();
+  const matched: Player[] = [];
+  const unmatched: string[] = [];
+  for (const raw of opts.logins) {
+    const login = normalizeLogin(raw);
+    const p = await getByLogin(login);
+    if (p) matched.push(p);
+    else unmatched.push(login);
+  }
+  if (matched.length === 0) return { matched: 0, unmatched, fee: 0 };
+
+  const fee = computeGameFee(tariffs, { coach_present: opts.coach, judge: opts.judge }, matched.length);
+  const participants: GameParticipant[] = matched.map((p) => ({
+    name: p.name,
+    tg_login: p.tg_login,
+    matched_player_id: p.id,
+  }));
+  await saveGame({
+    event_uid: null,
+    team: opts.team,
+    opponent: opts.opponent,
+    played_on: opts.date,
+    stat_url: null,
+    fee_per_player: fee,
+    participants,
+    coach_present: opts.coach,
+    judge: opts.judge,
+    month,
+    year,
+  });
+  return { matched: matched.length, unmatched, fee };
+}
+
+/**
+ * Пересчитать взнос игры из пер-игровых флагов (после тумблера «тренер был» в админке).
+ * Возвращает обновлённую игру или null, если игра не найдена.
+ */
+export async function recomputeGameFee(
+  gameId: number,
+  flags: { coach_present: boolean; judge: boolean },
+): Promise<{ month: number | null; year: number | null } | null> {
+  const game = await getGameById(gameId);
+  if (!game) return null;
+  const tariffs = await getTariffs();
+  const played = game.participants?.length ?? 0;
+  const fee = computeGameFee(tariffs, flags, played);
+  await updateGameFee(gameId, { coach_present: flags.coach_present, judge: flags.judge, fee_per_player: fee });
+  return { month: game.month, year: game.year };
 }

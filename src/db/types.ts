@@ -98,6 +98,8 @@ export interface Game {
   stat_url: string | null;
   fee_per_player: number | null;
   participants: GameParticipant[];
+  coach_present: boolean; // тренер был на игре → в взнос входит coach_per_game
+  judge: boolean; // был судья → в взнос входит referee_default
   month: number | null;
   year: number | null;
 }

@@ -60,6 +60,12 @@ button.ok { background:var(--ok); }
   .players-table th:nth-child(3), .players-table td:nth-child(3),
   .players-table th:nth-child(5), .players-table td:nth-child(5),
   .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
+  /* Таблица игр: оставляем Соперник(3), Тренер(6), Судья(7) и удаление(8),
+     чтобы тумблеры и кнопка были доступны в портретной ориентации. */
+  .games-table th:nth-child(1), .games-table td:nth-child(1),
+  .games-table th:nth-child(2), .games-table td:nth-child(2),
+  .games-table th:nth-child(4), .games-table td:nth-child(4),
+  .games-table th:nth-child(5), .games-table td:nth-child(5){ display:none; }
 }
 `;
 
@@ -73,6 +79,7 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
         <a href="/cron">Крон</a>
         <a href="/tags">Теги</a>
         <a href="/budgets">Бюджеты</a>
+        <a href="/games">Игры</a>
       </nav>
       <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
         <form class="inline" method="post" action="/sync/push"><button class="ghost" title="Выгрузить все данные из БД в Google-таблицу (только показать; обратно не читается)">⬆ Всё в таблицу</button></form>

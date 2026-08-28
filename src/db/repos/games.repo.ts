@@ -9,12 +9,14 @@ export async function saveGame(g: {
   stat_url: string | null;
   fee_per_player: number;
   participants: GameParticipant[];
+  coach_present?: boolean;
+  judge?: boolean;
   month: number;
   year: number;
 }): Promise<Game> {
   const { rows } = await query<Game>(
-    `insert into games (event_uid, team, opponent, played_on, stat_url, fee_per_player, participants, month, year)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `insert into games (event_uid, team, opponent, played_on, stat_url, fee_per_player, participants, coach_present, judge, month, year)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      returning *`,
     [
       g.event_uid,
@@ -24,6 +26,8 @@ export async function saveGame(g: {
       g.stat_url,
       g.fee_per_player,
       JSON.stringify(g.participants),
+      g.coach_present ?? true,
+      g.judge ?? false,
       g.month,
       g.year,
     ],
@@ -66,9 +70,44 @@ export async function listGamesForMonth(
   return rows;
 }
 
+/**
+ * Все игры месяца без фильтра по команде. Взносы теперь атрибутируются по участнику
+ * (matched_player_id), а не по команде игры — поэтому бюджет считается по единому пулу.
+ */
+export async function listAllGamesForMonth(month: number, year: number): Promise<Game[]> {
+  const { rows } = await query<Game>(
+    `select * from games
+     where month = $1 and year = $2
+     order by played_on nulls last, id`,
+    [month, year],
+  );
+  return rows;
+}
+
 export async function listGames(limit = 50): Promise<Game[]> {
   const { rows } = await query<Game>('select * from games order by played_on desc nulls last limit $1', [
     limit,
   ]);
   return rows;
+}
+
+export async function getGameById(id: number): Promise<Game | null> {
+  const { rows } = await query<Game>('select * from games where id = $1', [id]);
+  return rows[0] ?? null;
+}
+
+/** Обновить флаги присутствия и пересчитанный взнос (после тумблера в админке). */
+export async function updateGameFee(
+  id: number,
+  patch: { coach_present: boolean; judge: boolean; fee_per_player: number },
+): Promise<void> {
+  await query(
+    'update games set coach_present = $2, judge = $3, fee_per_player = $4 where id = $1',
+    [id, patch.coach_present, patch.judge, patch.fee_per_player],
+  );
+}
+
+export async function deleteGameById(id: number): Promise<Game | null> {
+  const { rows } = await query<Game>('delete from games where id = $1 returning *', [id]);
+  return rows[0] ?? null;
 }

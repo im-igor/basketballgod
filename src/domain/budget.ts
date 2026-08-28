@@ -45,7 +45,7 @@ export interface BudgetInput {
   tariffs: Tariffs;
   events: BudgetEvent[]; // события обеих команд за месяц
   active: Record<Team, Player[]>;
-  games: Record<Team, GameForBudget[]>; // игры команды за месяц (включая MIXED)
+  games: GameForBudget[]; // единый пул игр месяца; взнос атрибутируется по участнику
 }
 
 const isPaidGym = (e: BudgetEvent) => e.tags.GYM === 'PAID';
@@ -59,7 +59,9 @@ const isTrainingCoach = (e: BudgetEvent) =>
  *   gym = ceil((кол-во_платных_залов * gym_price + locker) / всего_активных)
  * Тренер за тренировки — отдельно по командам:
  *   coach[team] = ceil(трен_команды * coach_per_session / активные_команды)
- * Взносы за игры начисляются персонально тем, кто играл.
+ * Взносы за игры начисляются персонально тем, кто играл — по всему пулу игр месяца,
+ * независимо от команды-метки игры. Так игрок RED, сыгравший за BLACK, получает взнос
+ * в свой (RED) бюджет: строка начисления есть только в его домашней команде.
  */
 export function computeBudgets(input: BudgetInput): Record<Team, TeamBudget> {
   const { tariffs } = input;
@@ -88,7 +90,7 @@ export function computeBudgets(input: BudgetInput): Record<Team, TeamBudget> {
     const basePerPerson = gymPerPerson + coachPerPerson;
 
     const charges: PlayerCharge[] = teamActive.map((player) => {
-      const game = gameFeeForPlayer(player.id, input.games[team]);
+      const game = gameFeeForPlayer(player.id, input.games);
       return {
         player,
         base_amount: basePerPerson,

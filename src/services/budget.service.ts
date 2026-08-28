@@ -2,7 +2,7 @@ import { env } from '../config/env.js';
 import { listEvents } from '../google/calendar.js';
 import { listPlayers } from '../db/repos/players.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
-import { listGamesForMonth } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import {
   saveBudget,
   getBudget,
@@ -70,15 +70,26 @@ export async function buildAndSaveBudgets(
     BLACK: allPlayers.filter((p) => p.team === 'BLACK' && isActiveInMonth(p, month, year)),
   };
 
-  const [redGames, blackGames] = await Promise.all([
-    listGamesForMonth('RED', month, year),
-    listGamesForMonth('BLACK', month, year),
-  ]);
-  const gamesRaw: Record<Team, Game[]> = { RED: redGames, BLACK: blackGames };
-  const games: Record<Team, GameForBudget[]> = {
-    RED: redGames.map((g) => ({ team: g.team, fee_per_player: g.fee_per_player, participants: g.participants })),
-    BLACK: blackGames.map((g) => ({ team: g.team, fee_per_player: g.fee_per_player, participants: g.participants })),
+  // Единый пул игр месяца: взнос атрибутируется по участнику, а не по команде игры.
+  const allGames = await listAllGamesForMonth(month, year);
+  const games: GameForBudget[] = allGames.map((g) => ({
+    team: g.team,
+    fee_per_player: g.fee_per_player,
+    participants: g.participants,
+  }));
+
+  // Для сообщения-черновика показываем игры, где сыграл ≥1 активный игрок команды,
+  // чтобы в сборе RED не светились чисто-BLACK игры и наоборот.
+  const activeIds: Record<Team, Set<number>> = {
+    RED: new Set(active.RED.map((p) => p.id)),
+    BLACK: new Set(active.BLACK.map((p) => p.id)),
   };
+  const gamesForTeam = (t: Team): Game[] =>
+    allGames.filter((g) =>
+      (g.participants ?? []).some(
+        (pt) => pt.matched_player_id != null && activeIds[t].has(pt.matched_player_id),
+      ),
+    );
 
   const computed = computeBudgets({ month, year, tariffs, events, active, games });
 
@@ -131,14 +142,14 @@ export async function buildAndSaveBudgets(
         amount: base + c.game_amount,
         paid: false,
       })),
-      games: gamesRaw[team].map((g) => ({
+      games: gamesForTeam(team).map((g) => ({
         played_on: g.played_on,
         opponent: g.opponent,
         fee_per_player: g.fee_per_player,
       })),
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
-    out.push({ team, budgetId: saved.id, result, message, gamesCount: gamesRaw[team].length });
+    out.push({ team, budgetId: saved.id, result, message, gamesCount: gamesForTeam(team).length });
   }
   return out;
 }
@@ -164,10 +175,10 @@ export async function recalcBudget(
   if (!budget || !budget.details) return null;
   const d = budget.details as BudgetDetails;
 
-  const [tariffs, charges, games] = await Promise.all([
+  const [tariffs, charges, allGames] = await Promise.all([
     getTariffs(),
     getCharges(budgetId),
-    listGamesForMonth(budget.team, budget.month, budget.year),
+    listAllGamesForMonth(budget.month, budget.year),
   ]);
 
   const coachDelta = (d.coach_delta ?? 0) + (opts.coachDeltaChange ?? 0);
@@ -177,11 +188,22 @@ export async function recalcBudget(
   const coachPer = d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session) / d.players_team) : 0;
   const base = d.gym_per_person + coachPer;
 
-  const gamesForBudget: GameForBudget[] = games.map((g) => ({
+  // Взносы за игры — по всему пулу месяца (кросс-команда учитывается по участнику).
+  const gamesForBudget: GameForBudget[] = allGames.map((g) => ({
     team: g.team,
     fee_per_player: g.fee_per_player,
     participants: g.participants,
   }));
+
+  // Для сообщения показываем только игры, где сыграл кто-то из игроков этого бюджета.
+  const chargeIds = new Set(
+    charges.map((c) => c.player_id).filter((x): x is number => x != null),
+  );
+  const teamGames = allGames.filter((g) =>
+    (g.participants ?? []).some(
+      (pt) => pt.matched_player_id != null && chargeIds.has(pt.matched_player_id),
+    ),
+  );
 
   const views: ChargeView[] = [];
   for (const c of charges) {
@@ -207,7 +229,7 @@ export async function recalcBudget(
     details: newDetails,
     tariffs,
     charges: views,
-    games: games.map((g) => ({
+    games: teamGames.map((g) => ({
       played_on: g.played_on,
       opponent: g.opponent,
       fee_per_player: g.fee_per_player,

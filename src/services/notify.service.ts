@@ -10,6 +10,7 @@ import {
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
+import { loginsToFlag } from './chatCheck.service.js';
 import { monthLabel, nextMonthOf } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, Team } from '../db/types.js';
@@ -30,8 +31,16 @@ export function draftKeyboard(budgetId: number, team: Team): InlineKeyboard {
     .text(`✅ Опубликовать в чат ${team}`, `budpub:${budgetId}`);
 }
 
-/** Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат). */
-export async function renderBudgetFromDb(budgetId: number): Promise<{
+/**
+ * Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат).
+ * Если передан `api` — это черновик в личку: дополнительно проверяем присутствие
+ * начисляемых игроков в чате команды и помечаем «🟡 проверить в чате» отсутствующих.
+ * Для публикации в чат команды `api` не передаём — сообщение остаётся чистым.
+ */
+export async function renderBudgetFromDb(
+  budgetId: number,
+  opts: { api?: Api } = {},
+): Promise<{
   team: Team;
   chatId: number | null;
   messageId: number | null;
@@ -44,12 +53,16 @@ export async function renderBudgetFromDb(budgetId: number): Promise<{
     getTariffs(),
     listGamesForMonth(budget.team, budget.month, budget.year),
   ]);
+  const flag = opts.api
+    ? await loginsToFlag(opts.api, budget.team, charges.map((c) => c.tg_login))
+    : new Set<string>();
   const views: ChargeView[] = charges.map((c) => ({
     name: c.name,
     tg_login: c.tg_login,
     game_amount: c.game_amount,
     amount: c.amount,
     paid: c.paid,
+    chatFlag: flag.has(c.tg_login.toLowerCase()),
   }));
   const text = buildBudgetMessage({
     team: budget.team,
@@ -95,6 +108,9 @@ export async function sendBudgetDraftToAdmins(
     const team = b.team;
     const monthName = monthLabel(b.result.month, b.result.year);
     const gamesLine = b.gamesCount > 0 ? ` Учтено игр: ${b.gamesCount}.` : '';
+    // Черновик с проверкой чата: у кого нет присутствия в чате команды — пометим «🟡 проверить».
+    const rendered = await renderBudgetFromDb(b.budgetId, { api });
+    const draftText = rendered?.text ?? b.message;
     // Первое сообщение — инфо/инструкция (отдельно от самого драфта).
     const info =
       `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
@@ -115,7 +131,7 @@ export async function sendBudgetDraftToAdmins(
         .catch(warn);
       // Второе сообщение — сам драфт сбора, с кнопкой публикации.
       await api
-        .sendMessage(adminId, b.message, {
+        .sendMessage(adminId, draftText, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
@@ -138,7 +154,8 @@ export async function sendBudgetDraftsByMonth(
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
-    const rendered = await renderBudgetFromDb(budget.id);
+    // Черновик в личку → передаём api: помечаем «🟡 проверить» отсутствующих в чате.
+    const rendered = await renderBudgetFromDb(budget.id, { api });
     if (!rendered) continue;
 
     const [charges, games] = await Promise.all([

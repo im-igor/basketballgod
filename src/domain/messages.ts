@@ -51,6 +51,8 @@ export interface ChargeView {
   game_amount: number;
   amount: number;
   paid: boolean;
+  /** Только для черновика в личку: игрока нет в чате команды (или проверить нечем) → пометить. */
+  chatFlag?: boolean;
 }
 
 export interface GameView {
@@ -137,7 +139,8 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const usersList = input.charges
     .map((c) => {
       const flag = c.paid ? '✅' : '❗️';
-      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}`;
+      const check = c.chatFlag ? ' 🟡 проверить в чате' : '';
+      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}${check}`;
     })
     .join('\n');
 

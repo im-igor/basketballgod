@@ -2,7 +2,7 @@ import type { Api, Bot } from 'grammy';
 import { isAdmin } from './middlewares/auth.js';
 import { recalcBudget, type RecalcResult } from '../services/budget.service.js';
 import { registerFriendly } from '../services/gameFee.service.js';
-import { draftKeyboard, refreshBudgetMessage } from '../services/notify.service.js';
+import { draftKeyboard, refreshBudgetMessage, renderBudgetFromDb } from '../services/notify.service.js';
 import { getBudget, getBudgetById } from '../db/repos/budgets.repo.js';
 import { deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { log } from '../util/logger.js';
@@ -24,8 +24,10 @@ interface Pending {
 const pending = new Map<number, Pending>();
 
 async function redrawDraft(api: Api, p: Pending, r: RecalcResult): Promise<void> {
+  // Перерисовываем черновик через рендер с проверкой чата (метка «🟡 проверить» сохраняется).
+  const rendered = await renderBudgetFromDb(r.budgetId, { api });
   await api
-    .editMessageText(p.chatId, p.msgId, r.message, {
+    .editMessageText(p.chatId, p.msgId, rendered?.text ?? r.message, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       reply_markup: draftKeyboard(r.budgetId, r.team),
@@ -48,8 +50,9 @@ export function registerBudgetAdjust(bot: Bot): void {
         await ctx.answerCallbackQuery({ text: 'Бюджет не найден', show_alert: true });
         return;
       }
+      const rendered = await renderBudgetFromDb(r.budgetId, { api: ctx.api });
       await ctx
-        .editMessageText(r.message, {
+        .editMessageText(rendered?.text ?? r.message, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
           reply_markup: draftKeyboard(r.budgetId, r.team),
@@ -118,8 +121,9 @@ export function registerBudgetAdjust(bot: Bot): void {
       const removed = await deleteLastManualFriendly(budget.month, budget.year);
       const r = await recalcBudget(id);
       if (r) {
+        const rendered = await renderBudgetFromDb(r.budgetId, { api: ctx.api });
         await ctx
-          .editMessageText(r.message, {
+          .editMessageText(rendered?.text ?? r.message, {
             parse_mode: 'HTML',
             link_preview_options: { is_disabled: true },
             reply_markup: draftKeyboard(r.budgetId, r.team),

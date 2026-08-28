@@ -197,6 +197,34 @@ export async function buildServer(bot: Bot) {
     active_to: (a, b) => isoDate(a.active_to).localeCompare(isoDate(b.active_to)),
   };
 
+  // Клиентский фильтр списка игроков: контекстный поиск по ФИО + скрытие неактивных.
+  // Работает поверх серверной сортировки, состояние чекбокса помним в localStorage.
+  const playersFilterScript = `(function(){
+    var search = document.getElementById('player-search');
+    var hide = document.getElementById('hide-inactive');
+    var empty = document.getElementById('player-empty');
+    if (!search || !hide) return;
+    var rows = Array.prototype.slice.call(document.querySelectorAll('.players-table tbody tr'));
+    var KEY = 'bbg_hide_inactive';
+    hide.checked = localStorage.getItem(KEY) === '1';
+    function apply(){
+      var q = (search.value || '').trim().toLowerCase();
+      var hideInactive = hide.checked;
+      var shown = 0;
+      rows.forEach(function(tr){
+        var name = tr.getAttribute('data-name') || '';
+        var active = tr.getAttribute('data-active') === '1';
+        var ok = (!q || name.indexOf(q) !== -1) && (!hideInactive || active);
+        tr.style.display = ok ? '' : 'none';
+        if (ok) shown++;
+      });
+      if (empty) empty.style.display = shown === 0 ? '' : 'none';
+    }
+    search.addEventListener('input', apply);
+    hide.addEventListener('change', function(){ localStorage.setItem(KEY, hide.checked ? '1' : '0'); apply(); });
+    apply();
+  })();`;
+
   app.get('/players', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
@@ -207,7 +235,7 @@ export async function buildServer(bot: Bot) {
     players.sort((a, b) => (dir === 'desc' ? -cmp(a, b) : cmp(a, b)));
     const rows = players
       .map(
-        (p) => `<tr>
+        (p) => `<tr data-name="${esc(p.name.toLowerCase())}" data-active="${p.active ? '1' : '0'}">
         <td>${esc(p.name)}</td>
         <td class="muted">${esc(p.tg_login)}</td>
         <td>${teamBadge(p.team)}</td>
@@ -236,7 +264,15 @@ export async function buildServer(bot: Bot) {
           обратно таблица не читается.</div>
         ${syncButtons('players')}
       </div></div>
-      <div class="card"><h2>Добавить / обновить</h2>${playerForm()}</div>
+      <details class="card"><summary style="cursor:pointer;font-weight:600;font-size:1.05rem">Добавить / обновить игрока</summary>
+        <div style="margin-top:12px">${playerForm()}</div></details>
+      <div class="card"><div class="row" style="align-items:end">
+        <div style="flex:1"><label>Поиск по ФИО</label>
+          <input id="player-search" placeholder="начни вводить фамилию или имя…" autocomplete="off"></div>
+        <div style="flex:0"><label>&nbsp;</label>
+          <label style="display:flex;gap:6px;align-items:center;white-space:nowrap;color:var(--fg)">
+            <input type="checkbox" id="hide-inactive" style="width:auto"> скрыть неактивных</label></div>
+      </div></div>
       <div class="card"><table class="players-table">
         <thead><tr>
           ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
@@ -247,7 +283,9 @@ export async function buildServer(bot: Bot) {
           ${sortHeader('По', 'active_to', '/players', { sort, dir })}
           <th></th>
         </tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
+        <tbody>${rows}</tbody></table>
+        <div id="player-empty" class="muted" style="display:none;padding:8px 10px">Никого не нашлось</div></div>
+      <script>${playersFilterScript}</script>`;
     return html(reply, layout('Игроки', body, { flash: msg }));
   });
 

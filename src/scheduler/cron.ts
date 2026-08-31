@@ -3,7 +3,7 @@ import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetDraftToAdmins, sendBudgetFixationNotice } from '../services/notify.service.js';
+import { sendBudgetDraftToAdmins } from '../services/notify.service.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { CronConfig } from '../db/types.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
@@ -23,7 +23,6 @@ interface Schedule {
   tz: string;
   pollTrainingCron: string;
   pollGameCron: string;
-  fixationCron: string;
   budgetCron: string;
 }
 
@@ -51,7 +50,6 @@ function envSchedule(): Schedule {
     tz: env.TZ,
     pollTrainingCron: env.POLL_TRAINING_CRON,
     pollGameCron: env.POLL_GAME_CRON,
-    fixationCron: env.MONTHLY_FIXATION_CRON,
     budgetCron: env.MONTHLY_CRON,
   };
 }
@@ -70,14 +68,12 @@ function weeklyCron(
 /** Собрать расписание из значений cron_config; каждое поле — с фолбэком на env/дефолты. */
 function buildSchedule(cfg: CronConfig): Schedule {
   const fb = envSchedule();
-  const fixT = parseHm(cfg.fixation_time);
   const budT = parseHm(cfg.budget_time);
   const dayOk = (d: number | null | undefined): d is number => d != null && d >= 1 && d <= 28;
   return {
     tz: cfg.timezone || fb.tz,
     pollTrainingCron: weeklyCron(cfg.poll_training_time, cfg.poll_training_weekday, fb.pollTrainingCron),
     pollGameCron: weeklyCron(cfg.poll_game_time, cfg.poll_game_weekday, fb.pollGameCron),
-    fixationCron: fixT && dayOk(cfg.fixation_day) ? `${fixT.m} ${fixT.h} ${cfg.fixation_day} * *` : fb.fixationCron,
     budgetCron: budT && dayOk(cfg.budget_day) ? `${budT.m} ${budT.h} ${cfg.budget_day} * *` : fb.budgetCron,
   };
 }
@@ -97,7 +93,7 @@ async function loadSchedule(): Promise<{ sch: Schedule; fromDb: boolean }> {
 }
 
 function scheduleKey(s: Schedule): string {
-  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.fixationCron}|${s.budgetCron}`;
+  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.budgetCron}`;
 }
 
 // Активные задачи расписания (пересоздаются при смене конфига) и «ключ» текущего расписания.
@@ -106,7 +102,7 @@ let currentKey = '';
 
 /** Остановить старые задачи и запланировать заново по данному расписанию. */
 function applySchedule(api: Api, sch: Schedule): void {
-  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.fixationCron, sch.budgetCron]) {
+  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.budgetCron]) {
     if (!cron.validate(expr)) {
       log.error(`[cron] некорректное выражение "${expr}" — расписание не изменено`);
       return;
@@ -125,11 +121,6 @@ function applySchedule(api: Api, sch: Schedule): void {
       await sendWeeklyPolls(api, 'game');
     }), { timezone: sch.tz }),
 
-    // Уведомление о фиксации участников: за сутки до сбора шлём в чаты обеих команд.
-    cron.schedule(sch.fixationCron, job('budget-fixation-notice', async () => {
-      await sendBudgetFixationNotice(api);
-    }), { timezone: sch.tz }),
-
     // Бюджет: собираем бюджеты обеих команд по составу и тарифам из БД,
     // отправляем ЧЕРНОВИКИ администраторам в личку (в чаты публикует админ кнопкой).
     cron.schedule(sch.budgetCron, job('monthly-budget', async () => {
@@ -142,7 +133,7 @@ function applySchedule(api: Api, sch: Schedule): void {
   currentKey = scheduleKey(sch);
   log.info(
     `[cron] расписание активно (TZ=${sch.tz}) — опросы: тренировки "${sch.pollTrainingCron}", ` +
-      `игры "${sch.pollGameCron}"; фиксация "${sch.fixationCron}", бюджет "${sch.budgetCron}"`,
+      `игры "${sch.pollGameCron}"; бюджет "${sch.budgetCron}"`,
   );
 }
 

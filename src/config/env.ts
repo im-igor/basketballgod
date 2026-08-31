@@ -61,8 +61,6 @@ const schema = z.object({
   // Раздельные расписания опросов (фолбэк для cron_config): тренировки и игры.
   POLL_TRAINING_CRON: z.string().default('0 12 * * 5'),
   POLL_GAME_CRON: z.string().default('0 12 * * 5'),
-  // Уведомление в чаты о фиксации участников — 25-го вечером (за сутки до сбора).
-  MONTHLY_FIXATION_CRON: z.string().default('0 20 25 * *'),
   // Черновик бюджета админам в личку — 26-го вечером.
   MONTHLY_CRON: z.string().default('0 20 26 * *'),
 

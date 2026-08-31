@@ -11,7 +11,7 @@ import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
 import { loginsToFlag } from './chatCheck.service.js';
-import { monthLabel, nextMonthOf } from '../domain/dates.js';
+import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, Team } from '../db/types.js';
 import type { BuiltBudget } from './budget.service.js';
@@ -106,37 +106,24 @@ export async function sendBudgetDraftToAdmins(
 ): Promise<void> {
   for (const b of built) {
     const team = b.team;
-    const monthName = monthLabel(b.result.month, b.result.year);
-    const gamesLine = b.gamesCount > 0 ? ` Учтено игр: ${b.gamesCount}.` : '';
-    // Черновик с проверкой чата: у кого нет присутствия в чате команды — пометим «🟡 проверить».
+    // Черновик с проверкой чата: у кого нет присутствия в чате команды — пометим «🟡».
     const rendered = await renderBudgetFromDb(b.budgetId, { api });
     const draftText = rendered?.text ?? b.message;
-    // Первое сообщение — инфо/инструкция (отдельно от самого драфта).
-    const info =
-      `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
-      `Базовый взнос ${b.result.base_per_person}₽ × ${b.result.charges.length} чел.${gamesLine}\n` +
-      `Проверь черновик ниже и нажми «Опубликовать в чат».`;
     const keyboard = draftKeyboard(b.budgetId, team);
     for (const adminId of env.ADMIN_TG_IDS) {
-      const warn = (err: unknown) =>
-        log.warn(
-          `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
-          (err as Error).message,
-        );
-      await api
-        .sendMessage(adminId, info, {
-          parse_mode: 'HTML',
-          link_preview_options: { is_disabled: true },
-        })
-        .catch(warn);
-      // Второе сообщение — сам драфт сбора, с кнопкой публикации.
+      // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.
       await api
         .sendMessage(adminId, draftText, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
         })
-        .catch(warn);
+        .catch((err) =>
+          log.warn(
+            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+            (err as Error).message,
+          ),
+        );
     }
   }
 }
@@ -154,39 +141,25 @@ export async function sendBudgetDraftsByMonth(
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
-    // Черновик в личку → передаём api: помечаем «🟡 проверить» отсутствующих в чате.
+    // Черновик в личку → передаём api: помечаем «🟡» отсутствующих в чате.
     const rendered = await renderBudgetFromDb(budget.id, { api });
     if (!rendered) continue;
-
-    const [charges, games] = await Promise.all([
-      getCharges(budget.id),
-      listGamesForMonth(team, month, year),
-    ]);
-    const monthName = monthLabel(month, year);
-    const gamesLine = games.length > 0 ? ` Учтено игр: ${games.length}.` : '';
-    const base = budget.total_per_player ?? (budget.details as BudgetDetails).base_per_person;
-    const info =
-      `✅ <b>Черновик бюджета ${team} за ${monthName}</b>\n` +
-      `Базовый взнос ${base}₽ × ${charges.length} чел.${gamesLine}\n` +
-      `Проверь черновик ниже и нажми «Опубликовать в чат».`;
     const keyboard = draftKeyboard(budget.id, team);
 
     for (const adminId of env.ADMIN_TG_IDS) {
-      const warn = (err: unknown) =>
-        log.warn(
-          `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
-          (err as Error).message,
-        );
-      await api
-        .sendMessage(adminId, info, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
-        .catch(warn);
+      // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.
       await api
         .sendMessage(adminId, rendered.text, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
         })
-        .catch(warn);
+        .catch((err) =>
+          log.warn(
+            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+            (err as Error).message,
+          ),
+        );
     }
     sent++;
   }
@@ -206,27 +179,6 @@ export async function refreshBudgetMessage(api: Api, budgetId: number): Promise<
   } catch (err) {
     log.warn('[notify] не удалось обновить сообщение сбора', (err as Error).message);
     return false;
-  }
-}
-
-/**
- * Уведомление в чаты обеих команд, что состав участников бюджета на следующий
- * месяц зафиксирован (шлём за сутки до рассылки сбора — см. cron).
- */
-export async function sendBudgetFixationNotice(api: Api): Promise<void> {
-  const { month, year } = nextMonthOf(new Date());
-  const text = `🔒 <b>Участники бюджета на ${monthLabel(month, year)} зафиксированы.</b>`;
-  for (const team of TEAMS) {
-    const chat = env.chats[team];
-    await api
-      .sendMessage(chat.chatId, text, {
-        parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
-        ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
-      })
-      .catch((err) =>
-        log.warn(`[notify] не удалось отправить уведомление о фиксации (${team})`, (err as Error).message),
-      );
   }
 }
 

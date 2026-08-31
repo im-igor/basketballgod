@@ -135,12 +135,12 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
 
   const quote = `<blockquote>${calcInner}${gamesInner}</blockquote>\n`;
 
-  // Перед именем: ❗️ у должника, ✅ у оплатившего.
+  // Перед именем: 🟡 если игрока надо проверить в чате (только черновик в личку),
+  // иначе ❗️ у должника / ✅ у оплатившего.
   const usersList = input.charges
     .map((c) => {
-      const flag = c.paid ? '✅' : '❗️';
-      const check = c.chatFlag ? ' 🟡 проверить в чате' : '';
-      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}${check}`;
+      const flag = c.chatFlag ? '🟡' : c.paid ? '✅' : '❗️';
+      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}`;
     })
     .join('\n');
 

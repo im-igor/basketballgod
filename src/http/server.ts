@@ -421,10 +421,6 @@ export async function buildServer(bot: Bot) {
           ${numf('poll_game_horizon_days', 'Горизонт (дней вперёд)', c.poll_game_horizon_days, '7')}
         </div>
         <div class="row" style="margin-top:8px">
-          ${numf('fixation_day', 'Фиксация: день месяца (1–28)', c.fixation_day, '25')}
-          ${text('fixation_time', 'Фиксация: время (ЧЧ:ММ)', c.fixation_time, '20:00')}
-        </div>
-        <div class="row" style="margin-top:8px">
           ${numf('budget_day', 'Бюджет: день месяца (1–28)', c.budget_day, '26')}
           ${text('budget_time', 'Бюджет: время (ЧЧ:ММ)', c.budget_time, '20:00')}
         </div>
@@ -450,8 +446,6 @@ export async function buildServer(bot: Bot) {
       poll_game_weekday: int(b.poll_game_weekday),
       poll_game_time: str(b.poll_game_time),
       poll_game_horizon_days: int(b.poll_game_horizon_days),
-      fixation_day: int(b.fixation_day),
-      fixation_time: str(b.fixation_time),
       budget_day: int(b.budget_day),
       budget_time: str(b.budget_time),
     });

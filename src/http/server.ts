@@ -611,7 +611,7 @@ export async function buildServer(bot: Bot) {
         previews.push(
           `<div style="margin-top:12px">
             <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a></div>
-            <div style="white-space:pre-wrap;background:#11141a;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere">${rendered.text}</div>
+            <div style="white-space:pre-wrap;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere">${rendered.text}</div>
           </div>`,
         );
       }

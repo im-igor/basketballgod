@@ -35,9 +35,25 @@ export async function saveGame(g: {
   return rows[0]!;
 }
 
-/** Удалить ранее сохранённые игры по ссылке (дедуп при повторной регистрации). */
+/**
+ * Удалить ранее сохранённые игры по ссылке (дедуп при повторной регистрации).
+ * Query/hash и завершающий `/` не являются частью идентичности матча: ссылка МЛБЛ
+ * может быть скопирована с `#protocol`, `lang` и по-разному закодированным `apiUrl`.
+ */
 export async function deleteGamesByUrl(statUrl: string): Promise<void> {
-  await query('delete from games where stat_url = $1', [statUrl]);
+  let identity = statUrl;
+  try {
+    const url = new URL(statUrl);
+    identity = `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+  } catch {
+    // Ссылки до сохранения валидируются парсером; оставляем точное сравнение как фолбэк.
+  }
+  await query(
+    `delete from games
+     where stat_url = $1
+        or regexp_replace(regexp_replace(stat_url, '[?#].*$', ''), '/+$', '') = $2`,
+    [statUrl, identity],
+  );
 }
 
 /** Удалить последний добавленный вручную товарищеский (MIXED, без stat_url) за месяц. */

@@ -61,10 +61,11 @@ th { color:var(--muted); font-weight:650; font-size:12px; text-transform:upperca
 .badge.no { background:var(--danger-soft); color:var(--danger); }
 .badge.red { background:var(--danger-soft); color:var(--danger); }
 .badge.black { background:var(--track); color:var(--fg); }
-input,select,button { font:inherit; }
-input,select { background:var(--field); color:var(--fg); border:1px solid var(--field-line); border-radius:9px; padding:9px 11px; width:100%; min-height:40px; outline:none; transition:border-color .15s,box-shadow .15s,background .15s; }
-input:hover,select:hover { border-color:var(--muted); }
-input:focus,select:focus { background:var(--card); border-color:var(--accent); box-shadow:0 0 0 3px rgba(232,93,42,.13); }
+input,select,textarea,button { font:inherit; }
+input,select,textarea { background:var(--field); color:var(--fg); border:1px solid var(--field-line); border-radius:9px; padding:9px 11px; width:100%; min-height:40px; outline:none; transition:border-color .15s,box-shadow .15s,background .15s; }
+textarea { resize:vertical; }
+input:hover,select:hover,textarea:hover { border-color:var(--muted); }
+input:focus,select:focus,textarea:focus { background:var(--card); border-color:var(--accent); box-shadow:0 0 0 3px rgba(232,93,42,.13); }
 input[type="checkbox"] { accent-color:var(--accent); min-height:auto; }
 .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
 .row > div { flex:1; min-width:120px; }
@@ -77,6 +78,8 @@ button.ghost:hover { background:var(--hover); border-color:var(--muted); color:v
 .theme-toggle { width:40px; padding:0; display:grid; place-items:center; font-size:17px; }
 button.ok { background:var(--ok); border-color:var(--ok); }
 button.ok:hover { background:var(--ok-hover); border-color:var(--ok-hover); }
+button.danger { background:var(--danger); border-color:var(--danger); }
+button.danger:hover { filter:brightness(.92); }
 .inline { display:inline; }
 .muted { color:var(--muted); }
 .right { text-align:right; }
@@ -93,8 +96,8 @@ button.ok:hover { background:var(--ok-hover); border-color:var(--ok-hover); }
   .card { padding:15px; border-radius:12px; overflow-x:auto; }
   button { min-height:38px; }
   /* Обычные таблицы (игроки и т.п.): прячем второстепенные колонки 4+. */
-  table:not(.pay-table) th:nth-child(n+4),
-  table:not(.pay-table) td:nth-child(n+4){ display:none; }
+  table:not(.pay-table):not(.schedule-table) th:nth-child(n+4),
+  table:not(.pay-table):not(.schedule-table) td:nth-child(n+4){ display:none; }
   /* Таблица оплат: на узком экране оставляем только ФИО(1), Итого(6) и кнопку(8),
      иначе кнопка «Перевёл» уезжает за край и недоступна в портретной ориентации. */
   .pay-table th:nth-child(2), .pay-table td:nth-child(2),
@@ -114,13 +117,17 @@ button.ok:hover { background:var(--ok-hover); border-color:var(--ok-hover); }
   .games-table th:nth-child(2), .games-table td:nth-child(2),
   .games-table th:nth-child(4), .games-table td:nth-child(4),
   .games-table th:nth-child(5), .games-table td:nth-child(5){ display:none; }
+  /* Расписание: на мобильном оставляем пары команд, дату, время и площадку. */
+  .schedule-table th:nth-child(1), .schedule-table td:nth-child(1),
+  .schedule-table th:nth-child(2), .schedule-table td:nth-child(2),
+  .schedule-table th:nth-child(9), .schedule-table td:nth-child(9){ display:none; }
 }
 `;
 
 export function layout(title: string, body: string, opts: { nav?: boolean; flash?: string } = {}): string {
   const sections = [
     ['Игроки', '/players'], ['Тарифы', '/tariffs'], ['Крон', '/cron'],
-    ['Теги', '/tags'], ['Бюджеты', '/budgets'], ['Игры', '/games'],
+    ['Теги', '/tags'], ['Бюджеты', '/budgets'], ['Игры', '/games'], ['Расписание', '/schedule'],
   ] as const;
   const navLinks = sections
     .map(([label, href]) => `<a href="${href}"${title === label || title.startsWith(label.slice(0, -1)) ? ' aria-current="page"' : ''}>${label}</a>`)

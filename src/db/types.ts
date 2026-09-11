@@ -103,3 +103,26 @@ export interface Game {
   month: number | null;
   year: number | null;
 }
+
+export type ScheduleSource = 'LCHB' | 'MLBL';
+
+/** Матч из расписания лиги; не смешивается с учётом сыгравших и взносов в `games`. */
+export interface ScheduledGame {
+  id: string;
+  source: ScheduleSource;
+  source_url: string;
+  external_id: string;
+  team: Team;
+  team_a: string;
+  team_b: string;
+  game_date: string | Date;
+  game_time: string | null;
+  location: string | null;
+  details_url: string | null;
+  calendar_event_id: string | null;
+  coach_present: boolean | null;
+  coach_override: boolean;
+  coach_conflict: boolean;
+  created_at: string | Date;
+  updated_at: string | Date;
+}

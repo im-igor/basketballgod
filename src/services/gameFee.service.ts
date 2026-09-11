@@ -1,4 +1,9 @@
-import { fetchGameStats, selectTeamPlayers } from '../gamefee/parser.js';
+import {
+  canonicalGameStatsUrl,
+  fetchGameStats,
+  gameStatsRef,
+  selectTeamPlayers,
+} from '../gamefee/parser.js';
 import {
   saveGame,
   deleteGamesByUrl,
@@ -6,6 +11,10 @@ import {
   updateGameFee,
 } from '../db/repos/games.repo.js';
 import { getByLogin } from '../db/repos/players.repo.js';
+import {
+  findScheduledGameForManualEntry,
+  getScheduledGameByExternalId,
+} from '../db/repos/scheduledGames.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { computeGameFee } from '../domain/gamefee.js';
 import { normalizeLogin } from '../util/args.js';
@@ -56,6 +65,8 @@ export interface GamePlan {
   fee: number;
   participants: GameParticipant[];
   playedCount: number;
+  coachPresent: boolean;
+  calendarEventId: string | null;
 }
 
 export type GameValidation = { ok: true; plan: GamePlan } | { ok: false; errors: string[] };
@@ -72,6 +83,8 @@ export async function validateGame(
   roster: Player[],
   tariffs: Tariffs,
 ): Promise<GameValidation> {
+  const ref = gameStatsRef(url);
+  const scheduled = await getScheduledGameByExternalId(ref.source, ref.externalId);
   const game = await fetchGameStats(url);
   const sel = selectTeamPlayers(game, team);
   if (!sel || sel.played.length === 0) {
@@ -94,19 +107,40 @@ export async function validateGame(
   }
   if (errors.length > 0) return { ok: false, errors };
 
-  // Авто-игры (лига): тренер по умолчанию был, судьи нет; при необходимости правится тумблером.
-  const fee = computeGameFee(tariffs, { coach_present: true, judge: false }, sel.played.length);
+  if (scheduled?.coach_conflict && scheduled.coach_present === null) {
+    return {
+      ok: false,
+      errors: [
+        `${url} (${team}): матч пересекается с другой игрой. ` +
+        'Сначала выбери в разделе «Расписание», на какой игре будет тренер.',
+      ],
+    };
+  }
+
+  const coachPresent = scheduled?.coach_present ?? true;
+
+  // МЛБЛ отдаёт дату в JSON протокола. Для ЛЧБ используем переданную дату либо
+  // дату ранее импортированного расписания.
+  const scheduledDate = scheduled?.game_date instanceof Date
+    ? scheduled.game_date.toISOString().slice(0, 10)
+    : scheduled?.game_date ? String(scheduled.game_date).slice(0, 10) : null;
+  const playedOn = game.date ?? date ?? scheduledDate;
+
+  // План тренера берём из импортированного расписания. Без расписания сохраняем прежний дефолт «был».
+  const fee = computeGameFee(tariffs, { coach_present: coachPresent, judge: false }, sel.played.length);
   return {
     ok: true,
     plan: {
-      url,
+      url: canonicalGameStatsUrl(ref),
       team,
       teamName: sel.teamName,
       opponent: sel.opponent,
-      date,
+      date: playedOn,
       fee,
       participants,
       playedCount: sel.played.length,
+      coachPresent,
+      calendarEventId: scheduled?.calendar_event_id ?? null,
     },
   };
 }
@@ -164,14 +198,14 @@ export async function registerValidatedGames(
   for (const plan of plans) {
     await deleteGamesByUrl(plan.url);
     await saveGame({
-      event_uid: null,
+      event_uid: plan.calendarEventId,
       team: plan.team,
       opponent: plan.opponent,
       played_on: plan.date,
       stat_url: plan.url,
       fee_per_player: plan.fee,
       participants: plan.participants,
-      coach_present: true,
+      coach_present: plan.coachPresent,
       judge: false,
       month,
       year,
@@ -180,7 +214,7 @@ export async function registerValidatedGames(
 }
 
 /**
- * Ручной ввод игры (основной путь для лиги BLACK/МЛБЛ — её стат-сайт не парсится).
+ * Ручной ввод игры для товарищеских матчей и исключений.
  * Состав задаётся списком @login (кросс-командно, `getByLogin` без фильтра команды),
  * взнос — из флагов тренер/судья. `team` — только метка (лига/фикстура), на учёт не влияет:
  * взнос каждому падает в бюджет его домашней команды.
@@ -198,6 +232,13 @@ export async function registerManualGame(
   year: number,
 ): Promise<{ matched: number; unmatched: string[]; fee: number }> {
   const tariffs = await getTariffs();
+  const scheduled = opts.team !== 'MIXED' && opts.date && opts.opponent
+    ? await findScheduledGameForManualEntry(opts.team, opts.date, opts.opponent)
+    : null;
+  if (scheduled?.coach_conflict && scheduled.coach_present === null) {
+    throw new Error('У этой игры не решён конфликт тренера. Сначала выбери игру в разделе «Расписание».');
+  }
+  const coachPresent = scheduled?.coach_present ?? opts.coach;
   const matched: Player[] = [];
   const unmatched: string[] = [];
   for (const raw of opts.logins) {
@@ -208,21 +249,21 @@ export async function registerManualGame(
   }
   if (matched.length === 0) return { matched: 0, unmatched, fee: 0 };
 
-  const fee = computeGameFee(tariffs, { coach_present: opts.coach, judge: opts.judge }, matched.length);
+  const fee = computeGameFee(tariffs, { coach_present: coachPresent, judge: opts.judge }, matched.length);
   const participants: GameParticipant[] = matched.map((p) => ({
     name: p.name,
     tg_login: p.tg_login,
     matched_player_id: p.id,
   }));
   await saveGame({
-    event_uid: null,
+    event_uid: scheduled?.calendar_event_id ?? null,
     team: opts.team,
     opponent: opts.opponent,
     played_on: opts.date,
     stat_url: null,
     fee_per_player: fee,
     participants,
-    coach_present: opts.coach,
+    coach_present: coachPresent,
     judge: opts.judge,
     month,
     year,

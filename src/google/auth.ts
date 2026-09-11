@@ -9,7 +9,8 @@ import { env } from '../config/env.js';
  */
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/calendar.readonly',
+  // Импорт расписания создаёт и обновляет матчи в календарях команд.
+  'https://www.googleapis.com/auth/calendar',
   // В таблицу только пишем (выгрузка из БД), но узкого write-only scope у Sheets нет.
   'https://www.googleapis.com/auth/spreadsheets',
 ];

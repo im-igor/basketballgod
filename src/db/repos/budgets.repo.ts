@@ -91,6 +91,19 @@ export async function listBudgets(): Promise<Budget[]> {
   return rows;
 }
 
+/** Удалить бюджет одной команды; связанные начисления удаляются каскадно. */
+export async function deleteBudget(
+  team: Team,
+  month: number,
+  year: number,
+): Promise<Budget | null> {
+  const { rows } = await query<Budget>(
+    'delete from budgets where team = $1 and month = $2 and year = $3 returning *',
+    [team, month, year],
+  );
+  return rows[0] ?? null;
+}
+
 export async function setBudgetMessage(
   budgetId: number,
   chatId: number,

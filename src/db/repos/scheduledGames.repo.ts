@@ -57,7 +57,7 @@ export async function setScheduledGameCalendarEventId(id: string, calendarEventI
 export async function listScheduledGames(limit = 250): Promise<ScheduledGame[]> {
   const { rows } = await query<ScheduledGame>(
     `select * from scheduled_games
-     order by game_date desc, game_time desc nulls last, id desc
+     order by game_date asc, game_time asc nulls last, id asc
      limit $1`,
     [limit],
   );

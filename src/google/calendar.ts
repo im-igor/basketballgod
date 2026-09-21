@@ -111,7 +111,7 @@ function calendarBody(event: ScheduledCalendarEvent) {
     `Источник: ${event.detailsUrl ?? event.sourceUrl}`,
   ].join('\n');
   const common = {
-    summary: `${prefix}${event.teamA} — ${event.teamB}`,
+    summary: `Игра ${prefix}${event.teamA} - ${event.teamB}`,
     description,
     location: event.location ?? undefined,
     // 11 — красный (не решено), 10 — зелёный (тренер назначен), 8 — серый (без тренера).

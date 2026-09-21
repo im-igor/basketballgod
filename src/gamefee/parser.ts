@@ -88,7 +88,8 @@ export function gameStatsRef(rawUrl: string): GameStatsRef {
   if (url.protocol !== 'https:') throw new Error('Ссылка на статистику должна использовать HTTPS');
 
   const host = url.hostname.toLowerCase();
-  const lchb = url.pathname.match(/^\/matches\/(\d+)\/?$/);
+  // У ЛЧБ ссылка может быть как /matches/ID/, так и /<сезон>/matches/ID/.
+  const lchb = url.pathname.match(/(?:^|\/)matches\/(\d+)\/?$/);
   if (host === 'basketball.businesschampions.ru' && lchb?.[1]) {
     return { source: 'LCHB', externalId: lchb[1], url };
   }
@@ -104,7 +105,7 @@ export function gameStatsRef(rawUrl: string): GameStatsRef {
 /** Канонический URL не зависит от #protocol, lang и способа кодирования apiUrl. */
 export function canonicalGameStatsUrl(ref: GameStatsRef): string {
   const path = ref.source === 'LCHB'
-    ? `/matches/${ref.externalId}/`
+    ? `${ref.url.pathname.replace(/\/+$/, '')}/`
     : `/games/${ref.externalId}`;
   const canonical = new URL(path, ref.url.origin);
   const apiRaw = ref.source === 'MLBL' ? ref.url.searchParams.get('apiUrl') : null;

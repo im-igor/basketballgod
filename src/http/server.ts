@@ -912,6 +912,11 @@ export async function buildServer(bot: Bot) {
         Работает как /budget: сыгравшие определяются по времени на площадке &gt; 0, сопоставляются с ростером, а взнос добавляется в выбранный месяц бюджета.
         Для МЛБЛ дата берётся автоматически из протокола. Можно указать несколько ссылок; для ЛЧБ после ссылки допустима дата ДД.ММ.ГГГГ.
       </div>
+      <div class="muted" style="margin-bottom:12px;overflow-wrap:anywhere">
+        Примеры статистики:<br>
+        МЛБЛ — <a href="https://moscow.ilovebasket.ru/games/1090210?apiUrl=https%3A%2F%2Freg.infobasket.su#protocol" target="_blank" rel="noopener">https://moscow.ilovebasket.ru/games/1090210?apiUrl=https://reg.infobasket.su#protocol</a><br>
+        ЛЧБ — <a href="https://basketball.businesschampions.ru/vesna-2026/matches/1469962/" target="_blank" rel="noopener">https://basketball.businesschampions.ru/vesna-2026/matches/1469962/</a>
+      </div>
       <form method="post" action="/games/import">
         <div class="row">
           <div style="flex:0"><label>Команда</label><select name="team"><option value="BLACK">BLACK</option><option value="RED">RED</option></select></div>
@@ -1058,6 +1063,13 @@ export async function buildServer(bot: Bot) {
   app.get('/schedule', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
     const games = await listScheduledGames();
+    const googleCalendarUrl = (team: Team) =>
+      `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(env.calendars[team])}`;
+    const calendarLinks = `<div class="card row" style="align-items:center">
+      <span class="muted">Открыть календарь:</span>
+      <a href="${esc(googleCalendarUrl('RED'))}" target="_blank" rel="noopener">${teamBadge('RED')}</a>
+      <a href="${esc(googleCalendarUrl('BLACK'))}" target="_blank" rel="noopener">${teamBadge('BLACK')}</a>
+    </div>`;
     const rows = games.map((g) => {
       const date = g.game_date instanceof Date
         ? isoToRu(g.game_date)
@@ -1097,10 +1109,16 @@ export async function buildServer(bot: Bot) {
     }).join('');
 
     const body = `<h1>Расписание игр</h1>
+      ${calendarLinks}
       <div class="card"><h2>Импортировать расписание</h2>
         <div class="muted" style="margin-bottom:12px">
           RED: страница команды на basketball.businesschampions.ru. BLACK: общая страница /schedule на moscow.ilovebasket.ru — из неё будут выбраны только матчи Yandex Black.
           Повторный импорт безопасен: существующие матчи и события обновятся по ID.
+          <div style="margin-top:6px;overflow-wrap:anywhere">
+            Примеры расписаний:<br>
+            МЛБЛ — <a href="https://moscow.ilovebasket.ru/schedule" target="_blank" rel="noopener">https://moscow.ilovebasket.ru/schedule</a><br>
+            ЛЧБ — <a href="https://basketball.businesschampions.ru/vesna-2026/komandy/142588/" target="_blank" rel="noopener">https://basketball.businesschampions.ru/vesna-2026/komandy/142588/</a>
+          </div>
         </div>
         <form method="post" action="/schedule/import">
           <div class="row">

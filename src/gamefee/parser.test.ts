@@ -19,6 +19,18 @@ test('извлекает источник и ID из ссылки на прот�
   );
 });
 
+test('принимает сезонную ссылку на протокол ЛЧБ', () => {
+  const ref = gameStatsRef(
+    'https://basketball.businesschampions.ru/vesna-2026/matches/1469962/',
+  );
+  assert.equal(ref.source, 'LCHB');
+  assert.equal(ref.externalId, '1469962');
+  assert.equal(
+    canonicalGameStatsUrl(ref),
+    'https://basketball.businesschampions.ru/vesna-2026/matches/1469962/',
+  );
+});
+
 test('парсит СВ из JSON МЛБЛ и оставляет только реально сыгравших', () => {
   const game = parseMlblOnlineJson({
     GameDate: '20.09.2026',

@@ -37,10 +37,25 @@ a:hover { color:var(--accent); }
 header { background:var(--header); border-bottom:1px solid var(--line); padding:0 24px; min-height:64px; display:flex; gap:28px; align-items:center; position:sticky; top:0; z-index:10; backdrop-filter:blur(12px); }
 .brand { color:var(--fg); text-decoration:none; font-size:16px; font-weight:750; letter-spacing:-.02em; display:flex; align-items:center; gap:9px; white-space:nowrap; }
 .brand-mark { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:var(--accent-soft); font-size:17px; }
-header nav { display:flex; gap:4px; align-self:stretch; align-items:center; }
-header nav a { color:var(--muted); font-weight:550; padding:8px 11px; border-radius:8px; transition:background .15s,color .15s; }
-header nav a:hover { color:var(--fg); background:var(--hover); }
-header nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); }
+.primary-nav { display:flex; gap:4px; align-self:stretch; align-items:center; }
+.primary-nav a { color:var(--muted); font-weight:650; padding:8px 11px; border-radius:8px; transition:background .15s,color .15s; white-space:nowrap; }
+.primary-nav a:hover { color:var(--fg); background:var(--hover); }
+.primary-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); }
+.step-number { display:inline-grid; place-items:center; width:20px; height:20px; margin-right:6px; border:1px solid var(--field-line); border-radius:999px; color:var(--muted); font-size:11px; line-height:1; }
+.primary-nav a[aria-current="page"] .step-number { border-color:var(--accent); color:var(--accent); }
+.nav-menu { position:relative; }
+.nav-menu > summary { list-style:none; cursor:pointer; color:var(--muted); font-weight:600; padding:8px 11px; border-radius:8px; white-space:nowrap; transition:background .15s,color .15s; }
+.nav-menu > summary::-webkit-details-marker { display:none; }
+.nav-menu > summary:hover, .nav-menu[open] > summary { color:var(--fg); background:var(--hover); }
+.nav-menu > summary[aria-current="page"] { color:var(--accent); background:var(--accent-soft); }
+.nav-menu-caret { display:inline-block; margin-left:4px; transition:transform .15s; }
+.nav-menu[open] .nav-menu-caret { transform:rotate(180deg); }
+.management-compact { display:none; font-size:18px; line-height:1; letter-spacing:1px; }
+.nav-menu-panel { position:absolute; top:calc(100% + 8px); right:0; z-index:20; min-width:220px; padding:7px; background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); }
+.nav-menu-panel a, .nav-menu-panel button { display:block; width:100%; min-height:0; padding:9px 11px; border:0; border-radius:8px; background:transparent; color:var(--ghost-fg); text-align:left; font-weight:550; line-height:1.4; }
+.nav-menu-panel a:hover, .nav-menu-panel button:hover { background:var(--hover); color:var(--fg); }
+.nav-menu-panel a[aria-current="page"] { background:var(--accent-soft); color:var(--accent); }
+.nav-menu-panel form { margin:4px 0 0; padding-top:4px; border-top:1px solid var(--line); }
 .header-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
 main { max-width:1120px; margin:0 auto; padding:32px 24px 56px; }
 h1 { margin:0 0 20px; font-size:26px; line-height:1.2; letter-spacing:-.025em; }
@@ -84,13 +99,23 @@ button.danger:hover { filter:brightness(.92); }
 .muted { color:var(--muted); }
 .right { text-align:right; }
 .flash { background:var(--ok-soft); border:1px solid var(--flash-line); color:var(--flash-fg); padding:11px 14px; border-radius:10px; margin:0 0 16px; font-weight:550; }
+.workflow-check { display:flex; align-items:center; gap:12px; justify-content:space-between; padding:13px 15px; margin:0 0 14px; border:1px solid var(--line); border-radius:11px; background:var(--field); }
+.workflow-check-main { display:flex; align-items:flex-start; gap:10px; min-width:0; }
+.workflow-check-text { min-width:0; }
+.workflow-check-text strong { display:block; margin-bottom:2px; }
+.workflow-check a { flex:none; font-weight:650; }
 .login-wrap { max-width:390px; margin:12vh auto; padding:28px; }
 @media (max-width:600px){
   header { padding:10px 14px; min-height:auto; gap:10px; flex-wrap:wrap; }
   .brand { flex:1; }
-  header nav { order:3; width:100%; overflow-x:auto; padding-top:2px; }
-  header nav a { white-space:nowrap; padding:7px 9px; }
-  .header-actions form:first-child { display:none; }
+  .brand > span:last-child { display:none; }
+  .primary-nav { order:3; width:100%; min-width:0; overflow-x:auto; padding-top:2px; }
+  .primary-nav a { padding:7px 9px; }
+  .nav-menu-panel { right:0; }
+  .management-label { display:none; }
+  .management-compact { display:inline; }
+  .nav-menu > summary { padding:7px 8px; }
+  .workflow-check { align-items:flex-start; }
   main{padding:22px 12px 40px;}
   h1 { font-size:23px; margin-bottom:16px; }
   .card { padding:15px; border-radius:12px; overflow-x:auto; }
@@ -126,20 +151,39 @@ button.danger:hover { filter:brightness(.92); }
 `;
 
 export function layout(title: string, body: string, opts: { nav?: boolean; flash?: string } = {}): string {
-  const sections = [
-    ['Игроки', '/players'], ['Тарифы', '/tariffs'], ['Крон', '/cron'],
-    ['Теги', '/tags'], ['Бюджеты', '/budgets'], ['Разовые сборы', '/extra-fees'], ['Игры', '/games'], ['Расписание', '/schedule'],
+  const primarySections = [
+    ['1', 'Расписание', '/schedule'],
+    ['2', 'Игры', '/games'],
+    ['3', 'Бюджеты', '/budgets'],
   ] as const;
-  const navLinks = sections
-    .map(([label, href]) => `<a href="${href}"${title === label || title.startsWith(label.slice(0, -1)) ? ' aria-current="page"' : ''}>${label}</a>`)
+  const managementSections = [
+    ['Игроки', '/players'],
+    ['Разовые сборы', '/extra-fees'],
+    ['Тарифы', '/tariffs'],
+    ['Теги', '/tags'],
+    ['Крон', '/cron'],
+  ] as const;
+  const isCurrent = (label: string) => title === label || title.startsWith(label.slice(0, -1));
+  const primaryLinks = primarySections
+    .map(([step, label, href]) => `<a href="${href}"${isCurrent(label) ? ' aria-current="page"' : ''}><span class="step-number">${step}</span>${label}</a>`)
+    .join('');
+  const managementActive = managementSections.some(([label]) => isCurrent(label));
+  const managementLinks = managementSections
+    .map(([label, href]) => `<a href="${href}"${isCurrent(label) ? ' aria-current="page"' : ''}>${label}</a>`)
     .join('');
   const nav = opts.nav === false ? '' : `
     <header>
       <a class="brand" href="/"><span class="brand-mark">🏀</span><span>basketballgod</span></a>
-      <nav>${navLinks}</nav>
+      <nav class="primary-nav" aria-label="Основной рабочий процесс">${primaryLinks}</nav>
       <div class="header-actions">
+        <details class="nav-menu"${managementActive ? ' open' : ''}>
+          <summary aria-label="Управление"${managementActive ? ' aria-current="page"' : ''}><span class="management-label">Управление</span><span class="management-compact" aria-hidden="true">•••</span><span class="nav-menu-caret">▾</span></summary>
+          <div class="nav-menu-panel">
+            ${managementLinks}
+            <form method="post" action="/sync/push"><button type="submit" title="Выгрузить все данные из БД в Google-таблицу">Выгрузить всё</button></form>
+          </div>
+        </details>
         <button class="ghost theme-toggle" id="theme-toggle" type="button" aria-label="Включить тёмную тему" title="Включить тёмную тему">☾</button>
-        <form class="inline" method="post" action="/sync/push"><button class="ghost" title="Выгрузить все данные из БД в Google-таблицу (только показать; обратно не читается)">Выгрузить всё</button></form>
         <form class="inline" method="post" action="/logout"><button class="ghost">Выйти</button></form>
       </div>
     </header>`;
@@ -150,7 +194,8 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
 <script>(function(){try{var saved=localStorage.getItem('bbg_theme');var theme=saved||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch(e){}})()</script>
 <style>${STYLE}</style></head>
 <body>${nav}<main>${flash}${body}</main>
-<script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})()</script>
+<script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})()
+(function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})()</script>
 </body></html>`;
 }
 

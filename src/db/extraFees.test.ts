@@ -213,6 +213,12 @@ test('админка: авторизация, валидация, создани
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Меддопуск &lt;МЛБЛ&gt;/);
     assert.match(page.body, /Начислено 1 чел\. \/ 380 ₽/);
+    const budgetsPage = await app.inject({ method: 'GET', url: '/budgets?month=10&year=2026', cookies });
+    assert.match(budgetsPage.body, /Разовые сборы за Октябрь 2026/);
+    assert.match(budgetsPage.body, /активно: 1/);
+    assert.match(budgetsPage.body, /Меддопуск &lt;МЛБЛ&gt; — 380 ₽\/чел\., сыгравшим, BLACK/);
+    const previousMonth = await app.inject({ method: 'GET', url: '/budgets?month=9&year=2026', cookies });
+    assert.match(previousMonth.body, /Для выбранного месяца активных разовых сборов нет/);
     assert.match(page.body, /href="\/budgets\/10-2026"/);
     const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
     assert.equal(budgetPage.statusCode, 200);

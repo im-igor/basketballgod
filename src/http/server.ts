@@ -27,6 +27,7 @@ import {
   deleteBudget,
 } from '../db/repos/budgets.repo.js';
 import { listAllGamesForMonth, deleteGameById } from '../db/repos/games.repo.js';
+import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { listScheduledGames } from '../db/repos/scheduledGames.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import {
@@ -578,7 +579,14 @@ export async function buildServer(bot: Bot) {
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
 
     // Список — один общий бюджет на месяц (обе команды в одной строке).
-    const budgets = await listBudgets();
+    const [budgets, extraFees] = await Promise.all([listBudgets(), listExtraFees()]);
+    const selectedPeriod = year * 100 + month;
+    const relevantExtraFees = extraFees.filter((fee) =>
+      fee.active && selectedPeriod >= fee.start_period &&
+      (fee.mode === 'BUDGET'
+        ? selectedPeriod === fee.start_period
+        : fee.end_period === null || selectedPeriod <= fee.end_period),
+    );
     const byMonth = new Map<string, typeof budgets>();
     for (const b of budgets) {
       const k = `${b.year}-${String(b.month).padStart(2, '0')}`;
@@ -643,9 +651,26 @@ export async function buildServer(bot: Bot) {
       </div>`;
     }
 
+    const extraFeesText = relevantExtraFees.length > 0
+      ? relevantExtraFees.map((fee) => {
+          const audience = fee.mode === 'PLAYED' ? 'сыгравшим' : 'всем участникам бюджета';
+          const team = fee.team === 'BOTH' ? 'обе команды' : fee.team;
+          return `${esc(fee.title)} — ${esc(fee.amount_per_player)} ₽/чел., ${audience}, ${team}`;
+        }).join('<br>')
+      : 'Для выбранного месяца активных разовых сборов нет.';
+    const extraFeesStatus = relevantExtraFees.length > 0
+      ? `<span class="badge yes">активно: ${relevantExtraFees.length}</span>`
+      : '<span class="badge black">нет активных</span>';
+
     const body = `<h1>Бюджеты</h1>
-      <p><a href="/extra-fees">Разовые сборы: настроить взносы и проверить начисления</a></p>
       <div class="card"><h2>Собрать черновик</h2>
+        <div class="workflow-check">
+          <div class="workflow-check-main">${extraFeesStatus}<div class="workflow-check-text">
+            <strong>Разовые сборы за ${esc(monthLabel(month, year))}</strong>
+            <span class="muted">${extraFeesText}</span>
+          </div></div>
+          <a href="/extra-fees">Проверить</a>
+        </div>
         <form method="post" action="/budgets/build" class="row">
           <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
           <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>

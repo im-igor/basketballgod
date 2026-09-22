@@ -60,6 +60,7 @@ export async function renderBudgetFromDb(
     name: c.name,
     tg_login: c.tg_login,
     game_amount: c.game_amount,
+    extra_items: c.extra_items,
     amount: c.amount,
     paid: c.paid,
     chatFlag: flag.has(c.tg_login.toLowerCase()),

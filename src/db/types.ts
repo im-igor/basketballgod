@@ -78,9 +78,35 @@ export interface Charge {
   name: string | null;
   base_amount: number;
   game_amount: number;
+  extra_amount: number;
+  extra_items: ExtraFeeItem[];
   amount: number;
   paid: boolean;
   paid_at: string | null;
+}
+
+export interface ExtraFee {
+  id: number;
+  title: string;
+  amount_per_player: number;
+  team: Team | 'BOTH';
+  mode: 'PLAYED' | 'BUDGET';
+  league: 'ANY' | 'MLBL' | 'LCHB';
+  start_period: number;
+  end_period: number | null;
+  active: boolean;
+}
+
+export interface ExtraFeeItem {
+  fee_id: number;
+  title: string;
+  amount: number;
+}
+
+export interface ExtraFeeAllocation extends ExtraFeeItem {
+  player_id: number | null;
+  tg_login: string;
+  budget_id: number;
 }
 
 export interface GameParticipant {

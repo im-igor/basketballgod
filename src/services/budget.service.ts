@@ -8,14 +8,12 @@ import {
   getBudget,
   getBudgetById,
   getCharges,
-  updateBudgetDetails,
-  updateChargeAmount,
   type ChargeInput,
 } from '../db/repos/budgets.repo.js';
 import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
 import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer } from '../domain/gamefee.js';
-import { buildBudgetMessage, type ChargeView } from '../domain/messages.js';
+import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
 import type { BudgetDetails, Game, Player, Team } from '../db/types.js';
 
@@ -129,19 +127,21 @@ export async function buildAndSaveBudgets(
       amount: base + c.game_amount,
     }));
     const saved = await saveBudget({ team, month, year, total_per_player: base, details, charges });
+    const savedCharges = await getCharges(saved.id);
+    for (const c of result.charges) {
+      const stored = savedCharges.find((s) => s.player_id === c.player.id)!;
+      c.base_amount = stored.base_amount;
+      c.extra_amount = stored.extra_amount;
+      c.extra_items = stored.extra_items;
+      c.amount = stored.amount;
+    }
     const message = buildBudgetMessage({
       team,
       month,
       year,
       details,
       tariffs,
-      charges: result.charges.map((c) => ({
-        name: c.player.name,
-        tg_login: c.player.tg_login,
-        game_amount: c.game_amount,
-        amount: base + c.game_amount,
-        paid: false,
-      })),
+      charges: savedCharges,
       games: gamesForTeam(team).map((g) => ({
         played_on: g.played_on,
         opponent: g.opponent,
@@ -205,13 +205,10 @@ export async function recalcBudget(
     ),
   );
 
-  const views: ChargeView[] = [];
-  for (const c of charges) {
+  const updatedCharges = charges.map((c) => {
     const game = c.player_id ? gameFeeForPlayer(c.player_id, gamesForBudget) : c.game_amount;
-    const amount = base + game;
-    await updateChargeAmount(c.id, base, game, amount);
-    views.push({ name: c.name, tg_login: c.tg_login, game_amount: game, amount, paid: c.paid });
-  }
+    return { ...c, base_amount: base, game_amount: game, amount: base + game };
+  });
 
   const newDetails: BudgetDetails = {
     ...d,
@@ -220,7 +217,10 @@ export async function recalcBudget(
     coach_per_person: coachPer,
     base_per_person: base,
   };
-  await updateBudgetDetails(budgetId, base, newDetails);
+  await saveBudget({
+    team: budget.team, month: budget.month, year: budget.year,
+    total_per_player: base, details: newDetails, charges: updatedCharges,
+  });
 
   const message = buildBudgetMessage({
     team: budget.team,
@@ -228,7 +228,7 @@ export async function recalcBudget(
     year: budget.year,
     details: newDetails,
     tariffs,
-    charges: views,
+    charges: await getCharges(budgetId),
     games: teamGames.map((g) => ({
       played_on: g.played_on,
       opponent: g.opponent,

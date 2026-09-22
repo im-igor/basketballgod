@@ -5,6 +5,7 @@ import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
 import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
+import { registerExtraFeeRoutes } from './extraFees.js';
 import { normalizeLogin, parseBudgetArgs } from '../util/args.js';
 import { computeActivityDates, reconcileActivityDates } from '../domain/activity.js';
 import {
@@ -109,6 +110,8 @@ export async function buildServer(bot: Bot) {
   });
 
   // ── Login ────────────────────────────────────────────────
+  registerExtraFeeRoutes(app);
+
   app.get('/login', async (req, reply) => {
     const err = (req.query as Record<string, string>).err ? '<p class="badge no">Неверный логин или пароль</p>' : '';
     const body = `<div class="login-wrap card">
@@ -641,6 +644,7 @@ export async function buildServer(bot: Bot) {
     }
 
     const body = `<h1>Бюджеты</h1>
+      <p><a href="/extra-fees">Разовые сборы: настроить взносы и проверить начисления</a></p>
       <div class="card"><h2>Собрать черновик</h2>
         <form method="post" action="/budgets/build" class="row">
           <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
@@ -760,6 +764,7 @@ export async function buildServer(bot: Bot) {
         <td class="muted">${esc(c.tg_login)}</td>
         <td>${esc(c.base_amount)}₽</td>
         <td>${c.game_amount ? '+' + esc(c.game_amount) + '₽' : ''}</td>
+        <td>${c.extra_items.map((item) => `${esc(item.title)}: +${esc(item.amount)}₽`).join('<br>')}</td>
         <td><b>${esc(c.amount)}₽</b></td>
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
         <td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
@@ -777,12 +782,13 @@ export async function buildServer(bot: Bot) {
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
       <div class="card"><table class="pay-table">
-        <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
+        <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
       <details class="card">
         <summary style="cursor:pointer;font-weight:650;color:var(--danger)">Удалить бюджет из базы</summary>
         <div class="muted" style="margin:10px 0 12px">
-          Удалится бюджет выбранной команды и все его начисления. Игры в базе и уже отправленное сообщение в Telegram останутся.
+          Удалится бюджет выбранной команды и все его начисления, включая историю разовых взносов за этот месяц — они смогут начислиться заново.
+          Игры в базе и уже отправленное сообщение в Telegram останутся.
           Для подтверждения введи точную строку <b>${esc(confirmation)}</b>.
         </div>
         <form method="post" action="/budgets/${seg}/delete" class="row" onsubmit="return confirm('Удалить выбранный бюджет и начисления без возможности отмены?')">

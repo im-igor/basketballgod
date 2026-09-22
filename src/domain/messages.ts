@@ -1,4 +1,4 @@
-import type { BudgetDetails, Tariffs, Team } from '../db/types.js';
+import type { BudgetDetails, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
 import { monthLabel } from './dates.js';
 
 export function escapeHtml(s: string): string {
@@ -49,6 +49,7 @@ export interface ChargeView {
   name: string | null;
   tg_login: string;
   game_amount: number;
+  extra_items?: ExtraFeeItem[];
   amount: number;
   paid: boolean;
   /** Только для черновика в личку: игрока нет в чате команды (или проверить нечем) → пометить. */
@@ -133,14 +134,26 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
         `\n`
       : '';
 
-  const quote = `<blockquote>${calcInner}${gamesInner}</blockquote>\n`;
+  const extraFees = new Map<number, ExtraFeeItem>();
+  for (const c of input.charges) {
+    for (const item of c.extra_items ?? []) extraFees.set(item.fee_id, item);
+  }
+  const extraInner = extraFees.size
+    ? '\nРазовые взносы (начисляются каждому один раз):\n' +
+      [...extraFees.values()].map((item) => `${escapeHtml(item.title)}: +${item.amount} руб./чел.`).join('\n') + '\n'
+    : '';
+  const quote = `<blockquote>${calcInner}${gamesInner}${extraInner}</blockquote>\n`;
 
   // Перед именем: 🟡 если игрока надо проверить в чате (только черновик в личку),
   // иначе ❗️ у должника / ✅ у оплатившего.
   const usersList = input.charges
     .map((c) => {
       const flag = c.chatFlag ? '🟡' : c.paid ? '✅' : '❗️';
-      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}`;
+      const items = c.extra_items ?? [];
+      const extra = items.length
+        ? ` (в т.ч. разовые: ${items.map((item) => `${escapeHtml(item.title)} +${item.amount}`).join('; ')})`
+        : '';
+      return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}${extra}`;
     })
     .join('\n');
 

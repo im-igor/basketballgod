@@ -27,3 +27,20 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
 export async function closePool(): Promise<void> {
   await pool.end();
 }
+
+/** Общая блокировка расчёта: два бюджета не могут одновременно забрать один разовый взнос. */
+export async function budgetTransaction<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(3802026)');
+    const result = await work(client);
+    await client.query('commit');
+    return result;
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
+}

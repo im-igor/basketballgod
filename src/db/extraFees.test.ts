@@ -1,0 +1,226 @@
+import '../test/env.js';
+import assert from 'node:assert/strict';
+import { after, before, beforeEach, mock, test } from 'node:test';
+import { PGlite } from '@electric-sql/pglite';
+import { google } from 'googleapis';
+import { pool } from './pool.js';
+import { migrate } from './migrator.js';
+import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from './repos/budgets.repo.js';
+import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, setExtraFeeActive } from './repos/extraFees.repo.js';
+import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
+import { renderBudgetFromDb } from '../services/notify.service.js';
+import { buildServer } from '../http/server.js';
+import type { BudgetDetails, Team } from './types.js';
+import type { Bot } from 'grammy';
+
+const db = new PGlite();
+// Один PostgreSQL backend, как pool max=1: транзакции не перемешиваются.
+let queue = Promise.resolve();
+async function acquire() {
+  const previous = queue;
+  let release!: () => void;
+  queue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
+async function sql(text: string, params?: unknown[]) {
+  const result = params ? await db.query(text, params) : (await db.exec(text)).at(-1)!;
+  // Тот же numeric parser, что в production pg.Pool.
+  for (const field of result.fields) if (field.dataTypeID === 1700) {
+    for (const row of result.rows as Record<string, unknown>[]) {
+      if (row[field.name] !== null) row[field.name] = Number(row[field.name]);
+    }
+  }
+  return { ...result, rowCount: result.affectedRows || result.rows.length };
+}
+
+const details: BudgetDetails = {
+  total_players: 4, players_team: 3, players_other: 1, paid_gym_sessions: 0,
+  coach_sessions: 0, gym_per_person: 1000, coach_per_person: 0, base_per_person: 1000,
+};
+const feeInput = {
+  title: 'Меддопуск', amount_per_player: 380, team: 'BLACK' as const,
+  mode: 'PLAYED' as const, league: 'MLBL' as const, start_period: 202610, end_period: null,
+};
+const charge = (id: number) => ({ player_id: id, tg_login: `@p${id}`, name: `Игрок ${id}`, base_amount: 1000, game_amount: 0, amount: 1000 });
+const save = (month = 10, team: Team = 'BLACK', ids = [1, 2, 3]) => saveBudget({
+  team, month, year: 2026, total_per_player: 1000, details, charges: ids.map(charge),
+});
+async function game(month: number, ids: number[]) {
+  await sql(`insert into games (team, stat_url, played_on, month, year, fee_per_player, participants)
+    values ('BLACK', 'https://moscow.ilovebasket.ru/games/1090210', '2026-09-20', $1, 2026, 0, $2)`,
+  [month, JSON.stringify(ids.map((id) => ({ name: `Игрок ${id}`, matched_player_id: id })))]);
+}
+
+before(async () => {
+  mock.method(pool, 'query', async (text: string, params?: unknown[]) => {
+    const release = await acquire();
+    try { return await sql(text, params); } finally { release(); }
+  });
+  mock.method(pool, 'connect', async () => {
+    const release = await acquire();
+    return { query: sql, release };
+  });
+  mock.method(google, 'calendar', () => ({ events: { list: async () => ({ data: { items: [] } }) } }));
+  await migrate();
+  await migrate(); // повторный старт не ломает схему
+});
+beforeEach(async () => {
+  await db.exec('truncate extra_fee_allocations, extra_fees, charges, budgets, games, players restart identity cascade');
+  await db.exec(`insert into players (id, name, tg_login, team, active, is_employee) values
+    (1, 'Игрок 1', '@p1', 'BLACK', true, true), (2, 'Игрок 2', '@p2', 'BLACK', true, true),
+    (3, 'Игрок 3', '@p3', 'BLACK', true, true), (4, 'Игрок 4', '@p4', 'RED', true, true)`);
+});
+after(async () => { mock.restoreAll(); await db.close(); await pool.end(); });
+
+test('380 с сыгравших: первый месяц 1 и 2, следующий — только новый участник 3', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1, 2]);
+  await game(11, [1, 3]);
+  const october = await save();
+  assert.deepEqual((await getCharges(october.id)).map((c) => c.extra_amount), [380, 380, 0]);
+  const november = await save(11);
+  assert.deepEqual((await getCharges(november.id)).map((c) => c.extra_amount), [0, 0, 380]);
+  assert.equal((await listExtraFeeAllocations()).length, 3);
+});
+
+test('пересборка сохраняет id, paid, paid_at и единственное разовое начисление', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1]);
+  const budget = await save();
+  const first = (await getCharges(budget.id))[0]!;
+  const paid = await setChargePaid(first.id, true);
+  await save();
+  const rebuilt = (await getCharges(budget.id))[0]!;
+  assert.equal(rebuilt.id, first.id);
+  assert.equal(rebuilt.amount, 1380);
+  assert.equal(rebuilt.paid, true);
+  assert.deepEqual(rebuilt.paid_at, paid!.paid_at);
+  assert.equal((await listExtraFeeAllocations()).length, 1);
+});
+
+test('режим BUDGET включает всех выбранной команды без игр, только в одном месяце', async () => {
+  await createExtraFee({ ...feeInput, mode: 'BUDGET', league: 'ANY' });
+  const black = await save();
+  const red = await save(10, 'RED', [4]);
+  assert.deepEqual((await getCharges(black.id)).map((c) => c.extra_amount), [380, 380, 380]);
+  assert.equal((await getCharges(red.id))[0]!.extra_amount, 0);
+  assert.deepEqual((await getCharges((await save(11)).id)).map((c) => c.extra_amount), [0, 0, 0]);
+});
+
+test('игрок RED за BLACK: 380 в RED, после перехода команды повторно не начисляется', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [4]);
+  const red = await save(10, 'RED', [4]);
+  assert.equal((await getCharges(red.id))[0]!.extra_amount, 380);
+  const black = await save(10, 'BLACK', [1, 2, 3, 4]);
+  assert.equal((await getCharges(black.id))[3]!.extra_amount, 0);
+});
+
+test('параллельные пересборки оставляют одно назначение на человека', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1]);
+  await game(11, [1]);
+  await Promise.all([save(10), save(11), save(10)]);
+  assert.equal((await listExtraFeeAllocations()).length, 1);
+  const budgets = await Promise.all([getBudget('BLACK', 10, 2026), getBudget('BLACK', 11, 2026)]);
+  const charges = (await Promise.all(budgets.map((b) => getCharges(b!.id)))).flat();
+  assert.equal(charges.reduce((sum, c) => sum + c.extra_amount, 0), 380);
+});
+
+test('ошибка записи откатывает бюджет, начисления и историю сборов вместе', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1]);
+  const budget = await save();
+  const before = await getCharges(budget.id);
+  await assert.rejects(save(10, 'BLACK', [1, 999]), /foreign key/i);
+  assert.deepEqual(await getCharges(budget.id), before);
+  assert.equal((await listExtraFeeAllocations()).length, 1);
+});
+
+test('завершение останавливает новые начисления, сохраняя историю; удаление возможно только без начислений', async () => {
+  const fee = await createExtraFee(feeInput);
+  await game(10, [1]);
+  await game(11, [2]);
+  const october = await save();
+  await setExtraFeeActive(fee.id, false);
+  await save();
+  assert.equal((await getCharges(october.id))[0]!.extra_amount, 380);
+  assert.equal((await getCharges((await save(11)).id))[1]!.extra_amount, 0);
+  assert.equal(await deleteUnusedExtraFee(fee.id), false);
+  const unused = await createExtraFee({ ...feeInput, title: 'Ошибочный' });
+  assert.equal(await deleteUnusedExtraFee(unused.id), true);
+});
+
+test('удаление бюджета освобождает назначения только этого бюджета', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1]);
+  await game(11, [2]);
+  await save();
+  await save(11);
+  await deleteBudget('BLACK', 10, 2026);
+  assert.equal((await listExtraFeeAllocations()).length, 1);
+  const rebuilt = await save();
+  assert.equal((await getCharges(rebuilt.id))[0]!.extra_amount, 380);
+  assert.equal((await listExtraFeeAllocations()).length, 2);
+});
+
+test('пересчёт тренера и рендер из БД сохраняют разовый взнос и оплату', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1]);
+  const budget = await save();
+  await setChargePaid((await getCharges(budget.id))[0]!.id, true);
+  const result = await recalcBudget(budget.id, { coachDeltaChange: 1 });
+  const first = (await getCharges(budget.id))[0]!;
+  assert.equal(first.extra_amount, 380);
+  assert.equal(first.amount, 1000 + Math.ceil(5000 / 3) + 380);
+  assert.equal(first.paid, true);
+  assert.match(result!.message, /Меддопуск \+380/);
+  assert.match((await renderBudgetFromDb(budget.id))!.text, /Меддопуск \+380/);
+});
+
+test('полная сборка бюджета учитывает разовые суммы в БД, result и сообщении', async () => {
+  await createExtraFee(feeInput);
+  await game(10, [1, 4]);
+  const built = await buildAndSaveBudgets(10, 2026);
+  for (const b of built) {
+    assert.equal(b.result.charges.filter((c) => c.extra_amount === 380).length, 1);
+    assert.match(b.message, /Меддопуск \+380/);
+    for (const c of b.result.charges) assert.equal(c.amount, c.base_amount + c.game_amount + c.extra_amount);
+  }
+  assert.equal((await listExtraFeeAllocations()).length, 2);
+});
+
+test('админка: авторизация, валидация, создание, пересчёт, детализация и остановка сбора', async () => {
+  const bot = { api: {} } as Bot; // ни одного вызова Telegram
+  const app = await buildServer(bot);
+  try {
+    assert.equal((await app.inject({ method: 'GET', url: '/extra-fees' })).statusCode, 302);
+    assert.equal((await app.inject({ method: 'POST', url: '/extra-fees', payload: {} })).statusCode, 302);
+    const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
+    const cookies = { bbg_auth: login.cookies[0]!.value };
+    const invalid = await app.inject({ method: 'POST', url: '/extra-fees', cookies, payload: { title: 'Нет суммы' } });
+    assert.match(decodeURIComponent(invalid.headers.location!), /Проверь/);
+    const create = await app.inject({ method: 'POST', url: '/extra-fees', cookies, payload: {
+      title: 'Меддопуск <МЛБЛ>', amount_per_player: '380', team: 'BLACK', mode: 'PLAYED', league: 'MLBL', start_period: '2026-10', end_period: '',
+    } });
+    assert.equal(create.statusCode, 302);
+    await game(10, [1]);
+    await save();
+    const recalc = await app.inject({ method: 'POST', url: '/extra-fees/recalculate', cookies, payload: { period: '2026-10' } });
+    assert.match(recalc.headers.location!, /budgets\?month=10/);
+    const page = await app.inject({ method: 'GET', url: '/extra-fees', cookies });
+    assert.equal(page.statusCode, 200);
+    assert.match(page.body, /Меддопуск &lt;МЛБЛ&gt;/);
+    assert.match(page.body, /Начислено 1 чел\. \/ 380 ₽/);
+    assert.match(page.body, /href="\/budgets\/10-2026"/);
+    const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
+    assert.equal(budgetPage.statusCode, 200);
+    assert.match(budgetPage.body, /Разовые/);
+    assert.match(budgetPage.body, /Меддопуск &lt;МЛБЛ&gt;: \+380₽/);
+    const stop = await app.inject({ method: 'POST', url: '/extra-fees/1/status', cookies, payload: { active: 'no' } });
+    assert.equal(stop.statusCode, 302);
+    const removed = await app.inject({ method: 'POST', url: '/extra-fees/1/delete', cookies });
+    assert.match(decodeURIComponent(removed.headers.location!), /уже имеет начисления/);
+  } finally { await app.close(); }
+});

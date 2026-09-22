@@ -1,4 +1,4 @@
-import type { Player, Tariffs, Team, GameParticipant } from '../db/types.js';
+import type { Player, Tariffs, Team, GameParticipant, ExtraFeeItem } from '../db/types.js';
 import { gameFeeForPlayer } from './gamefee.js';
 
 /** Минимально нужная инфа о событии (чтобы не тащить тип google в домен). */
@@ -18,6 +18,8 @@ export interface PlayerCharge {
   player: Player;
   base_amount: number;
   game_amount: number;
+  extra_amount: number;
+  extra_items: ExtraFeeItem[];
   amount: number;
 }
 
@@ -95,6 +97,8 @@ export function computeBudgets(input: BudgetInput): Record<Team, TeamBudget> {
         player,
         base_amount: basePerPerson,
         game_amount: game,
+        extra_amount: 0, // Разовые взносы назначаются в транзакции сохранения бюджета.
+        extra_items: [],
         amount: basePerPerson + game,
       };
     });

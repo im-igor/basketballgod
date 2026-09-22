@@ -1,5 +1,6 @@
-import { query } from '../pool.js';
-import type { Budget, BudgetDetails, Charge, Team } from '../types.js';
+import { budgetTransaction, query } from '../pool.js';
+import type { Budget, BudgetDetails, Charge, ExtraFee, ExtraFeeAllocation, Game, Team } from '../types.js';
+import { extraFeesForPlayer, sumMoney } from '../../domain/extraFees.js';
 
 export interface ChargeInput {
   player_id: number | null;
@@ -19,52 +20,55 @@ export async function saveBudget(input: {
   details: BudgetDetails;
   charges: ChargeInput[];
 }): Promise<Budget> {
-  const { rows } = await query<Budget>(
-    `insert into budgets (team, month, year, total_per_player, details)
-     values ($1,$2,$3,$4,$5)
-     on conflict (team, month, year) do update set
-       total_per_player = excluded.total_per_player,
-       details = excluded.details,
-       updated_at = now()
-     returning *`,
-    [input.team, input.month, input.year, input.total_per_player, JSON.stringify(input.details)],
-  );
-  const budget = rows[0]!;
-
-  await query('delete from charges where budget_id = $1', [budget.id]);
-  for (const c of input.charges) {
-    await query(
-      `insert into charges (budget_id, player_id, tg_login, name, base_amount, game_amount, amount)
-       values ($1,$2,$3,$4,$5,$6,$7)`,
-      [budget.id, c.player_id, c.tg_login, c.name, c.base_amount, c.game_amount, c.amount],
+  return budgetTransaction(async (client) => {
+    const { rows } = await client.query<Budget>(
+      `insert into budgets (team, month, year, total_per_player, details)
+       values ($1,$2,$3,$4,$5)
+       on conflict (team, month, year) do update set
+         total_per_player = excluded.total_per_player,
+         details = excluded.details,
+         updated_at = now()
+       returning *`,
+      [input.team, input.month, input.year, input.total_per_player, JSON.stringify(input.details)],
     );
-  }
-  return budget;
-}
+    const budget = rows[0]!;
 
-/** Обновить итог и details бюджета (без трогания charges). */
-export async function updateBudgetDetails(
-  budgetId: number,
-  totalPerPlayer: number,
-  details: BudgetDetails,
-): Promise<void> {
-  await query(
-    'update budgets set total_per_player = $2, details = $3, updated_at = now() where id = $1',
-    [budgetId, totalPerPlayer, JSON.stringify(details)],
-  );
-}
+    const fees = (await client.query<ExtraFee>('select * from extra_fees order by id')).rows;
+    const allocations = (await client.query<ExtraFeeAllocation>('select * from extra_fee_allocations')).rows;
+    const games = (await client.query<Game>(
+      'select * from games where month = $1 and year = $2', [input.month, input.year],
+    )).rows;
 
-/** Мягко обновить суммы начисления (сохраняя paid/paid_at). */
-export async function updateChargeAmount(
-  chargeId: number,
-  baseAmount: number,
-  gameAmount: number,
-  amount: number,
-): Promise<void> {
-  await query(
-    'update charges set base_amount = $2, game_amount = $3, amount = $4 where id = $1',
-    [chargeId, baseAmount, gameAmount, amount],
-  );
+    // Удаляем только выбывших из бюджета. Остальным сохраняем id и отметки оплат.
+    const logins = input.charges.map((c) => c.tg_login);
+    await client.query('delete from charges where budget_id = $1 and not (tg_login = any($2::text[]))', [budget.id, logins]);
+    await client.query('delete from extra_fee_allocations where budget_id = $1', [budget.id]);
+    for (const c of input.charges) {
+      const extraItems = extraFeesForPlayer({
+        playerId: c.player_id, login: c.tg_login, team: input.team,
+        budgetId: budget.id, period: input.year * 100 + input.month, fees, allocations, games,
+      });
+      const extraAmount = sumMoney(extraItems.map((item) => item.amount));
+      for (const item of extraItems) {
+        await client.query(
+          `insert into extra_fee_allocations (fee_id, player_id, budget_id, tg_login, title, amount)
+           values ($1,$2,$3,$4,$5,$6)`,
+          [item.fee_id, c.player_id, budget.id, c.tg_login, item.title, item.amount],
+        );
+      }
+      await client.query(
+        `insert into charges (budget_id, player_id, tg_login, name, base_amount, game_amount, extra_amount, extra_items, amount)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         on conflict (budget_id, tg_login) do update set
+           player_id = excluded.player_id, name = excluded.name,
+           base_amount = excluded.base_amount, game_amount = excluded.game_amount,
+           extra_amount = excluded.extra_amount, extra_items = excluded.extra_items, amount = excluded.amount`,
+        [budget.id, c.player_id, c.tg_login, c.name, c.base_amount, c.game_amount,
+          extraAmount, JSON.stringify(extraItems), sumMoney([c.base_amount, c.game_amount, extraAmount])],
+      );
+    }
+    return budget;
+  });
 }
 
 export async function getBudget(
@@ -97,11 +101,13 @@ export async function deleteBudget(
   month: number,
   year: number,
 ): Promise<Budget | null> {
-  const { rows } = await query<Budget>(
-    'delete from budgets where team = $1 and month = $2 and year = $3 returning *',
-    [team, month, year],
-  );
-  return rows[0] ?? null;
+  return budgetTransaction(async (client) => {
+    const { rows } = await client.query<Budget>(
+      'delete from budgets where team = $1 and month = $2 and year = $3 returning *',
+      [team, month, year],
+    );
+    return rows[0] ?? null;
+  });
 }
 
 export async function setBudgetMessage(

@@ -1,5 +1,6 @@
 import {
   getScheduledGameById,
+  getScheduledGameByExternalId,
   listOverlappingScheduledGames,
   recomputeScheduleConflicts,
   setScheduledGameCoachPresent,
@@ -12,6 +13,7 @@ import type { ScheduledGame, Team } from '../db/types.js';
 
 export interface ScheduleImportResult {
   found: number;
+  newGames: number;
   saved: number;
   calendarSynced: number;
   errors: string[];
@@ -41,6 +43,7 @@ export async function importSchedule(team: Team, pageUrl: string): Promise<Sched
   const parsed = await fetchSchedulePage(pageUrl, team);
   const result: ScheduleImportResult = {
     found: parsed.length,
+    newGames: 0,
     saved: 0,
     calendarSynced: 0,
     errors: [],
@@ -48,8 +51,10 @@ export async function importSchedule(team: Team, pageUrl: string): Promise<Sched
   const rowsToSync = new Map<string, ScheduledGame>();
   for (const input of parsed) {
     try {
+      const existing = await getScheduledGameByExternalId(input.source, input.external_id);
       const row = await upsertScheduledGame(input);
       rowsToSync.set(row.id, row);
+      if (!existing) result.newGames++;
       result.saved++;
     } catch (err) {
       result.errors.push(`${input.team_a} — ${input.team_b}: БД: ${(err as Error).message}`);

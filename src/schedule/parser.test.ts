@@ -5,7 +5,15 @@ import {
   parseLchbScheduleHtml,
   parseMlblCompetitionsHtml,
   parseMlblGames,
+  scheduleSourceForUrl,
 } from './parser.js';
+
+test('определяет турнир только по разрешённым HTTPS-доменам', () => {
+  assert.equal(scheduleSourceForUrl('https://basketball.businesschampions.ru/season/team/'), 'LCHB');
+  assert.equal(scheduleSourceForUrl('https://moscow.ilovebasket.ru/schedule'), 'MLBL');
+  assert.throws(() => scheduleSourceForUrl('http://moscow.ilovebasket.ru/schedule'), /HTTPS/);
+  assert.throws(() => scheduleSourceForUrl('https://example.com/schedule'), /Поддерживаются только/);
+});
 
 test('парсит строку расписания ЛЧБ', () => {
   const html = `<section class="team-tab-content__schedule"><table><tbody>

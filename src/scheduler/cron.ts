@@ -8,6 +8,7 @@ import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { CronConfig } from '../db/types.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
+import { refreshConfiguredSchedules } from '../services/scheduleRefresh.service.js';
 
 /** Обёртка задачи: ошибки не должны ронять процесс. */
 function job(name: string, fn: () => Promise<void>): () => void {
@@ -24,6 +25,7 @@ interface Schedule {
   pollTrainingCron: string;
   pollGameCron: string;
   budgetCron: string;
+  scheduleImportCron: string | null;
 }
 
 /** «ЧЧ:ММ» → {h, m}, иначе null. */
@@ -42,7 +44,16 @@ function toCronDow(wd: number | null | undefined): number | null {
   return wd === 7 ? 0 : wd;
 }
 
-const RECONCILE_CRON = '7 * * * *'; // как часто перечитывать cron_config из БД (раз в час)
+const RECONCILE_CRON = '*/5 * * * *'; // правки cron_config подхватываются не позднее чем через 5 минут
+
+/** Поддерживаемые человеком интервалы → стабильное cron-выражение. */
+export function scheduleImportCron(intervalMinutes: number): string {
+  if (intervalMinutes === 15 || intervalMinutes === 30) return `*/${intervalMinutes} * * * *`;
+  if (intervalMinutes === 60) return '0 * * * *';
+  if ([120, 240, 360, 720].includes(intervalMinutes)) return `0 */${intervalMinutes / 60} * * *`;
+  if (intervalMinutes === 1440) return '0 3 * * *';
+  throw new Error(`Неподдерживаемый интервал проверки расписаний: ${intervalMinutes}`);
+}
 
 /** Расписание из env/дефолтов — фолбэк, когда таблица недоступна или поля не заданы. */
 function envSchedule(): Schedule {
@@ -51,6 +62,7 @@ function envSchedule(): Schedule {
     pollTrainingCron: env.POLL_TRAINING_CRON,
     pollGameCron: env.POLL_GAME_CRON,
     budgetCron: env.MONTHLY_CRON,
+    scheduleImportCron: null,
   };
 }
 
@@ -75,6 +87,9 @@ function buildSchedule(cfg: CronConfig): Schedule {
     pollTrainingCron: weeklyCron(cfg.poll_training_time, cfg.poll_training_weekday, fb.pollTrainingCron),
     pollGameCron: weeklyCron(cfg.poll_game_time, cfg.poll_game_weekday, fb.pollGameCron),
     budgetCron: budT && dayOk(cfg.budget_day) ? `${budT.m} ${budT.h} ${cfg.budget_day} * *` : fb.budgetCron,
+    scheduleImportCron: cfg.schedule_import_enabled
+      ? scheduleImportCron(cfg.schedule_import_interval_minutes || 60)
+      : null,
   };
 }
 
@@ -93,7 +108,7 @@ async function loadSchedule(): Promise<{ sch: Schedule; fromDb: boolean }> {
 }
 
 function scheduleKey(s: Schedule): string {
-  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.budgetCron}`;
+  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.budgetCron}|${s.scheduleImportCron ?? 'off'}`;
 }
 
 // Активные задачи расписания (пересоздаются при смене конфига) и «ключ» текущего расписания.
@@ -102,7 +117,7 @@ let currentKey = '';
 
 /** Остановить старые задачи и запланировать заново по данному расписанию. */
 function applySchedule(api: Api, sch: Schedule): void {
-  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.budgetCron]) {
+  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.budgetCron, sch.scheduleImportCron].filter((x): x is string => x !== null)) {
     if (!cron.validate(expr)) {
       log.error(`[cron] некорректное выражение "${expr}" — расписание не изменено`);
       return;
@@ -130,10 +145,22 @@ function applySchedule(api: Api, sch: Schedule): void {
       await sendBudgetDraftToAdmins(api, built);
     }), { timezone: sch.tz }),
   ];
+  if (sch.scheduleImportCron) {
+    tasks.push(cron.schedule(sch.scheduleImportCron, job('schedule-import', async () => {
+      const results = await refreshConfiguredSchedules();
+      for (const result of results) {
+        const summary = `${result.source}/${result.team}: найдено ${result.found}, новых ${result.newGames}, ` +
+          `Calendar ${result.calendarSynced}`;
+        if (result.ok) log.info(`[schedule-import] ${summary}`);
+        else log.warn(`[schedule-import] ${summary}; ${result.errors.join('; ')}`);
+      }
+    }), { timezone: sch.tz }));
+  }
   currentKey = scheduleKey(sch);
   log.info(
     `[cron] расписание активно (TZ=${sch.tz}) — опросы: тренировки "${sch.pollTrainingCron}", ` +
-      `игры "${sch.pollGameCron}"; бюджет "${sch.budgetCron}"`,
+      `игры "${sch.pollGameCron}"; бюджет "${sch.budgetCron}"; ` +
+      `импорт расписаний ${sch.scheduleImportCron ? `"${sch.scheduleImportCron}"` : 'выключен'}`,
   );
 }
 

@@ -29,6 +29,7 @@ import {
 import { listAllGamesForMonth, deleteGameById } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { listScheduledGames } from '../db/repos/scheduledGames.repo.js';
+import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import {
   registerManualGame,
@@ -38,6 +39,8 @@ import {
   type GamePlan,
 } from '../services/gameFee.service.js';
 import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
+import { refreshScheduleSource } from '../services/scheduleRefresh.service.js';
+import { scheduleSourceForUrl } from '../schedule/parser.js';
 import {
   sendBudgetToChat,
   refreshBudgetMessage,
@@ -55,10 +58,15 @@ import {
 } from '../services/sheetSync.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
-import type { Team, Player, Charge } from '../db/types.js';
+import type { Team, Player, Charge, ScheduleSource } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
+const SCHEDULE_IMPORT_INTERVALS = [15, 30, 60, 120, 240, 360, 720, 1440] as const;
+const SCHEDULE_SOURCE_TEAMS: Record<ScheduleSource, Team> = { LCHB: 'RED', MLBL: 'BLACK' };
+const scheduleIntervalLabel = (minutes: number): string => minutes < 60
+  ? `${minutes} мин.`
+  : minutes === 1440 ? '1 сутки' : `${minutes / 60} ч.`;
 
 function isAuthed(req: FastifyRequest): boolean {
   const raw = req.cookies[COOKIE];
@@ -411,6 +419,9 @@ export async function buildServer(bot: Bot) {
       `<div><label>${label}</label><input name="${name}" value="${esc(val(v))}" placeholder="${ph}"></div>`;
     const numf = (name: string, label: string, v: number | null, ph = '') =>
       `<div><label>${label}</label><input name="${name}" type="number" value="${esc(val(v))}" placeholder="${ph}"></div>`;
+    const intervalOptions = SCHEDULE_IMPORT_INTERVALS
+      .map((minutes) => `<option value="${minutes}"${c.schedule_import_interval_minutes === minutes ? ' selected' : ''}>${scheduleIntervalLabel(minutes)}</option>`)
+      .join('');
     const body = `<h1>Крон</h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
         <div class="muted" style="flex:1">Расписание планировщика (в БД). Пустое поле → берётся значение из env/дефолтов.
@@ -437,6 +448,16 @@ export async function buildServer(bot: Bot) {
           ${numf('budget_day', 'Бюджет: день месяца (1–28)', c.budget_day, '26')}
           ${text('budget_time', 'Бюджет: время (ЧЧ:ММ)', c.budget_time, '20:00')}
         </div>
+        <h2 style="margin-top:18px">Обновление расписаний турниров</h2>
+        <div class="row" style="align-items:center">
+          <label class="inline" style="display:flex;gap:7px;align-items:center;margin:0">
+            <input type="checkbox" name="schedule_import_enabled" value="yes" ${c.schedule_import_enabled ? 'checked' : ''} style="width:auto">
+            автоматически проверять сохранённые страницы ЛЧБ и МЛБЛ
+          </label>
+          <div style="max-width:240px"><label>Интервал проверки</label>
+            <select name="schedule_import_interval_minutes">${intervalOptions}</select></div>
+        </div>
+        <div class="muted" style="margin-top:6px">Ссылки сохраняются в разделе «Расписание». Изменения настроек подхватываются не позднее чем через 5 минут.</div>
         <button style="margin-top:12px">Сохранить</button>
       </form></div>`;
     return html(reply, layout('Крон', body, { flash: msg }));
@@ -451,6 +472,10 @@ export async function buildServer(bot: Bot) {
       const n = Number(s);
       return Number.isInteger(n) ? n : undefined;
     };
+    const scheduleImportInterval = int(b.schedule_import_interval_minutes);
+    if (scheduleImportInterval === undefined || !SCHEDULE_IMPORT_INTERVALS.includes(scheduleImportInterval as typeof SCHEDULE_IMPORT_INTERVALS[number])) {
+      return redirect(reply, '/cron', 'Выбери допустимый интервал проверки расписаний');
+    }
     await updateCronConfig({
       timezone: str(b.timezone),
       poll_training_weekday: int(b.poll_training_weekday),
@@ -461,6 +486,8 @@ export async function buildServer(bot: Bot) {
       poll_game_horizon_days: int(b.poll_game_horizon_days),
       budget_day: int(b.budget_day),
       budget_time: str(b.budget_time),
+      schedule_import_enabled: b.schedule_import_enabled === 'yes',
+      schedule_import_interval_minutes: scheduleImportInterval,
     });
     return redirect(reply, '/cron', 'Расписание сохранено');
   });
@@ -1093,7 +1120,11 @@ export async function buildServer(bot: Bot) {
   // ── Импорт расписания лиг → БД + Google Calendar ─────────
   app.get('/schedule', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
-    const games = await listScheduledGames();
+    const [games, sources, cronConfig] = await Promise.all([
+      listScheduledGames(),
+      listScheduleSources(),
+      getCronConfig(),
+    ]);
     const googleCalendarUrl = (team: Team) =>
       `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(env.calendars[team])}`;
     const calendarLinks = `<div class="card row" style="align-items:center">
@@ -1101,6 +1132,39 @@ export async function buildServer(bot: Bot) {
       <a href="${esc(googleCalendarUrl('RED'))}" target="_blank" rel="noopener">${teamBadge('RED')}</a>
       <a href="${esc(googleCalendarUrl('BLACK'))}" target="_blank" rel="noopener">${teamBadge('BLACK')}</a>
     </div>`;
+    const sourceByName = new Map(sources.map((source) => [source.source, source]));
+    const sourceCard = (source: ScheduleSource, example: string): string => {
+      const saved = sourceByName.get(source);
+      const team = SCHEDULE_SOURCE_TEAMS[source];
+      const checked = saved?.enabled !== false ? 'checked' : '';
+      const status = !saved
+        ? '<span class="muted">Источник ещё не настроен.</span>'
+        : saved.last_checked_at
+          ? `${saved.last_error ? '<span class="badge no">ошибка</span>' : '<span class="badge yes">проверено</span>'} ` +
+            `<span class="muted">${esc(fmtDateTime(saved.last_checked_at))}` +
+            `${saved.last_found !== null ? ` · найдено ${esc(saved.last_found)}, новых ${esc(saved.last_new ?? 0)}, сохранено ${esc(saved.last_saved ?? 0)}, Calendar ${esc(saved.last_calendar_synced ?? 0)}` : ''}</span>` +
+            `${saved.last_error ? `<div class="muted" style="margin-top:5px">${esc(saved.last_error)}</div>` : ''}`
+          : '<span class="muted">Ссылка сохранена, но ещё не проверялась.</span>';
+      return `<div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2 style="margin:0">${source} · ${teamBadge(team)}</h2><div>${status}</div>
+        </div>
+        <form method="post" action="/schedule/sources" style="margin-top:12px">
+          <input type="hidden" name="source" value="${source}">
+          <div class="row">
+            <div><label>Страница расписания ${source}</label><input name="url" type="url" value="${esc(saved?.url ?? '')}" placeholder="${esc(example)}" required></div>
+            <label class="inline" style="display:flex;gap:7px;align-items:center;margin-bottom:10px">
+              <input type="checkbox" name="enabled" value="yes" ${checked} style="width:auto"> использовать в автопроверке
+            </label>
+            <div style="flex:0"><button>Сохранить и проверить</button></div>
+          </div>
+        </form>
+        ${saved ? `<form class="inline" method="post" action="/schedule/sources/${source}/refresh"><button class="ghost">Проверить сейчас</button></form>` : ''}
+      </div>`;
+    };
+    const autoStatus = cronConfig.schedule_import_enabled
+      ? `<span class="badge yes">автопроверка включена · интервал ${esc(scheduleIntervalLabel(cronConfig.schedule_import_interval_minutes))}</span>`
+      : '<span class="badge black">автопроверка выключена</span>';
     const rows = games.map((g) => {
       const date = g.game_date instanceof Date
         ? isoToRu(g.game_date)
@@ -1141,29 +1205,53 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Расписание игр</h1>
       ${calendarLinks}
-      <div class="card"><h2>Импортировать расписание</h2>
-        <div class="muted" style="margin-bottom:12px">
-          RED: страница команды на basketball.businesschampions.ru. BLACK: общая страница /schedule на moscow.ilovebasket.ru — из неё будут выбраны только матчи Yandex Black.
-          Повторный импорт безопасен: существующие матчи и события обновятся по ID.
-          <div style="margin-top:6px;overflow-wrap:anywhere">
-            Примеры расписаний:<br>
-            МЛБЛ — <a href="https://moscow.ilovebasket.ru/schedule" target="_blank" rel="noopener">https://moscow.ilovebasket.ru/schedule</a><br>
-            ЛЧБ — <a href="https://basketball.businesschampions.ru/vesna-2026/komandy/142588/" target="_blank" rel="noopener">https://basketball.businesschampions.ru/vesna-2026/komandy/142588/</a>
-          </div>
-        </div>
-        <form method="post" action="/schedule/import">
-          <div class="row">
-            <div style="flex:0"><label>Команда</label><select name="team"><option value="RED">RED</option><option value="BLACK">BLACK</option></select></div>
-            <div><label>Страница с расписанием</label><input name="url" type="url" placeholder="https://…" required></div>
-            <div style="flex:0"><label>&nbsp;</label><button>Импортировать</button></div>
-          </div>
-        </form>
+      <div class="card row" style="align-items:center;justify-content:space-between">
+        <div><b>Периодическое обновление</b><div class="muted">Сохранённые страницы проверяются автоматически; новые матчи добавляются в БД и Google Calendar.</div></div>
+        <div>${autoStatus} · <a href="/cron">настроить крон</a></div>
       </div>
+      ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
+      ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
       <div class="card"><table class="schedule-table">
         <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Тренер</th><th>Google</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="9" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg }));
+  });
+
+  app.post('/schedule/sources', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    const source: ScheduleSource | null = b.source === 'LCHB' || b.source === 'MLBL' ? b.source : null;
+    const url = (b.url ?? '').trim();
+    if (!source || !url) return redirect(reply, '/schedule', 'Укажи турнир и URL страницы');
+    try {
+      const detected = scheduleSourceForUrl(url);
+      if (detected !== source) throw new Error(`Для ${source} указана страница ${detected}`);
+      await upsertScheduleSource({
+        source,
+        team: SCHEDULE_SOURCE_TEAMS[source],
+        url,
+        enabled: b.enabled === 'yes',
+      });
+      const result = await refreshScheduleSource(source);
+      const auto = b.enabled === 'yes' ? '' : ' · автопроверка источника выключена';
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}${auto}`;
+      return redirect(reply, '/schedule', result.ok ? summary : `${summary} · ошибки: ${result.errors.slice(0, 2).join('; ')}`);
+    } catch (err) {
+      return redirect(reply, '/schedule', `Источник не сохранён: ${(err as Error).message}`);
+    }
+  });
+
+  app.post('/schedule/sources/:source/refresh', async (req, reply) => {
+    const raw = (req.params as { source: string }).source;
+    const source: ScheduleSource | null = raw === 'LCHB' || raw === 'MLBL' ? raw : null;
+    if (!source) return redirect(reply, '/schedule', 'Неизвестный источник расписания');
+    try {
+      const result = await refreshScheduleSource(source);
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}`;
+      return redirect(reply, '/schedule', result.ok ? summary : `${summary} · ошибки: ${result.errors.slice(0, 2).join('; ')}`);
+    } catch (err) {
+      return redirect(reply, '/schedule', `Ошибка проверки ${source}: ${(err as Error).message}`);
+    }
   });
 
   app.post('/schedule/import', async (req, reply) => {

@@ -63,6 +63,11 @@ function assertSourceUrl(rawUrl: string): { url: URL; source: ScheduleSource } {
   throw new Error('Поддерживаются только страницы basketball.businesschampions.ru и *.ilovebasket.ru');
 }
 
+/** Проверить URL без сетевого запроса и определить турнир по разрешённому домену. */
+export function scheduleSourceForUrl(rawUrl: string): ScheduleSource {
+  return assertSourceUrl(rawUrl.trim()).source;
+}
+
 function assertMlblApiUrl(rawUrl: string): URL {
   const url = new URL(rawUrl);
   const host = url.hostname.toLowerCase();

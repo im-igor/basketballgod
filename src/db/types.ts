@@ -35,6 +35,8 @@ export interface CronConfig {
   fixation_time: string | null;
   budget_day: number | null;
   budget_time: string | null;
+  schedule_import_enabled: boolean;
+  schedule_import_interval_minutes: number;
 }
 
 export interface Tag {
@@ -131,6 +133,23 @@ export interface Game {
 }
 
 export type ScheduleSource = 'LCHB' | 'MLBL';
+
+/** Сохранённая страница турнира, которую cron периодически перепроверяет. */
+export interface ScheduleSourceConfig {
+  source: ScheduleSource;
+  team: Team;
+  url: string;
+  enabled: boolean;
+  last_checked_at: string | Date | null;
+  last_success_at: string | Date | null;
+  last_found: number | null;
+  last_new: number | null;
+  last_saved: number | null;
+  last_calendar_synced: number | null;
+  last_error: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+}
 
 /** Матч из расписания лиги; не смешивается с учётом сыгравших и взносов в `games`. */
 export interface ScheduledGame {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import type { Bot } from 'grammy';
+import cron from 'node-cron';
 import { pool } from '../db/pool.js';
 import { migrate } from '../db/migrator.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
@@ -13,6 +14,7 @@ import {
 } from '../db/repos/scheduleSources.repo.js';
 import { listScheduledGames, upsertScheduledGame } from '../db/repos/scheduledGames.repo.js';
 import { buildServer } from '../http/server.js';
+import { startScheduler } from '../scheduler/cron.js';
 import { refreshScheduleSource } from './scheduleRefresh.service.js';
 
 const db = new PGlite();
@@ -129,7 +131,14 @@ test('админка показывает источники и сохраняе
     source: 'MLBL', team: 'BLACK', url: 'https://moscow.ilovebasket.ru/schedule', enabled: true,
   });
   assert.equal((await listScheduleSources(true)).length, 1);
-  const app = await buildServer({ api: {} } as Bot);
+  const scheduled: string[] = [];
+  const scheduleMock = mock.method(cron, 'schedule', ((expression: string) => {
+    scheduled.push(expression);
+    return { stop() {} } as ReturnType<typeof cron.schedule>;
+  }) as typeof cron.schedule);
+  const bot = { api: {} } as Bot;
+  await startScheduler(bot.api);
+  const app = await buildServer(bot);
   try {
     const login = await app.inject({
       method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' },
@@ -144,15 +153,24 @@ test('админка показывает источники и сохраняе
       method: 'POST',
       url: '/cron',
       cookies,
-      payload: { schedule_import_enabled: 'yes', schedule_import_interval_minutes: '120' },
+      payload: {
+        poll_game_weekday: '5',
+        poll_game_time: '15:50',
+        schedule_import_enabled: 'yes',
+        schedule_import_interval_minutes: '120',
+      },
     });
     assert.equal(update.statusCode, 302);
     const config = await getCronConfig();
     assert.equal(config.schedule_import_enabled, true);
     assert.equal(config.schedule_import_interval_minutes, 120);
+    assert.equal(config.poll_game_weekday, 5);
+    assert.equal(config.poll_game_time, '15:50');
+    assert.ok(scheduled.includes('50 15 * * 5'), 'новое время должно примениться сразу после POST /cron');
     const cron = await app.inject({ method: 'GET', url: '/cron', cookies });
     assert.match(cron.body, /value="120" selected/);
   } finally {
     await app.close();
+    scheduleMock.mock.restore();
   }
 });

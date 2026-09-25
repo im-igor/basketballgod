@@ -67,7 +67,7 @@ function envSchedule(): Schedule {
 }
 
 /** «день недели + время» → cron-выражение, иначе фолбэк. */
-function weeklyCron(
+export function weeklyCron(
   time: string | null | undefined,
   weekday: number | null | undefined,
   fallback: string,
@@ -114,6 +114,7 @@ function scheduleKey(s: Schedule): string {
 // Активные задачи расписания (пересоздаются при смене конфига) и «ключ» текущего расписания.
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 let currentKey = '';
+let schedulerApi: Api | null = null;
 
 /** Остановить старые задачи и запланировать заново по данному расписанию. */
 function applySchedule(api: Api, sch: Schedule): void {
@@ -165,21 +166,26 @@ function applySchedule(api: Api, sch: Schedule): void {
 }
 
 export async function startScheduler(api: Api): Promise<void> {
+  schedulerApi = api;
   const { sch } = await loadSchedule();
   applySchedule(api, sch);
 
   // Горячая перечитка: периодически сверяем расписание с БД и переприменяем при изменении.
   // Так правки cron_config (через админку/синк) подхватываются без перезапуска бота.
   cron.schedule(RECONCILE_CRON, () => {
-    void loadSchedule()
-      .then(({ sch: next, fromDb }) => {
-        if (!fromDb) return; // не смогли прочитать — оставляем текущее
-        if (scheduleKey(next) === currentKey) return; // без изменений
-        log.info('[cron] расписание изменилось в таблице — переприменяю');
-        applySchedule(api, next);
-      })
+    void reloadScheduler()
       .catch((err) => log.warn('[cron] реконсиляция расписания не удалась', (err as Error).message));
   }, { timezone: env.TZ });
 
   log.info(`[cron] горячая перечитка расписания включена ("${RECONCILE_CRON}")`);
+}
+
+/** Немедленно применить изменённый cron_config. До запуска планировщика — безопасный no-op. */
+export async function reloadScheduler(): Promise<boolean> {
+  if (!schedulerApi) return false;
+  const { sch: next, fromDb } = await loadSchedule();
+  if (!fromDb || scheduleKey(next) === currentKey) return false;
+  log.info('[cron] расписание изменилось в БД — переприменяю');
+  applySchedule(schedulerApi, next);
+  return true;
 }

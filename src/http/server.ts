@@ -41,6 +41,7 @@ import {
 import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
 import { refreshScheduleSource } from '../services/scheduleRefresh.service.js';
 import { scheduleSourceForUrl } from '../schedule/parser.js';
+import { reloadScheduler } from '../scheduler/cron.js';
 import {
   sendBudgetToChat,
   refreshBudgetMessage,
@@ -489,7 +490,8 @@ export async function buildServer(bot: Bot) {
       schedule_import_enabled: b.schedule_import_enabled === 'yes',
       schedule_import_interval_minutes: scheduleImportInterval,
     });
-    return redirect(reply, '/cron', 'Расписание сохранено');
+    const applied = await reloadScheduler();
+    return redirect(reply, '/cron', applied ? 'Расписание сохранено и применено' : 'Расписание сохранено');
   });
 
   app.post('/cron/push', syncRoute('/cron', exportCronToSheet));

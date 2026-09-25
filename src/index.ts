@@ -35,7 +35,7 @@ async function main(): Promise<void> {
       .catch((e) => log.error('[bot] polling НЕ запущен:', (e as Error).message));
   }
 
-  // 4. Планировщик (расписание читается из вкладки `cron` Google-таблицы с фолбэком на env).
+  // 4. Планировщик (расписание читается из cron_config в БД с фолбэком на env).
   await startScheduler(bot.api);
 
   // 5. Корректное завершение.

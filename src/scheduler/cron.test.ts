@@ -1,7 +1,11 @@
 import '../test/env.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { scheduleImportCron } from './cron.js';
+import { scheduleImportCron, weeklyCron } from './cron.js';
+
+test('пятница 15:50 преобразуется в ожидаемое расписание', () => {
+  assert.equal(weeklyCron('15:50', 5, 'fallback'), '50 15 * * 5');
+});
 
 test('интервалы проверки расписаний преобразуются в cron', () => {
   assert.equal(scheduleImportCron(15), '*/15 * * * *');

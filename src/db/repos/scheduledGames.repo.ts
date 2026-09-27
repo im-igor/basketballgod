@@ -29,6 +29,7 @@ export async function upsertScheduledGame(g: ScheduledGameInput): Promise<Schedu
        game_time = excluded.game_time,
        location = excluded.location,
        details_url = excluded.details_url,
+       poll_pending = case when scheduled_games.poll_sent_at is null then true else scheduled_games.poll_pending end,
        updated_at = now()
      returning *`,
     [
@@ -78,6 +79,54 @@ export async function getScheduledGameByExternalId(
     [source, externalId],
   );
   return rows[0] ?? null;
+}
+
+/** Новые импортированные игры, для которых ещё нужно отправить голосовалку. */
+export async function listPendingScheduledGamePolls(source?: ScheduleSource): Promise<ScheduledGame[]> {
+  // Просроченные кандидаты больше не рассылаем и не держим в очереди.
+  await query(
+    `update scheduled_games set poll_pending = false, updated_at = now()
+     where poll_pending = true and game_date < current_date`,
+  );
+  const { rows } = await query<ScheduledGame>(
+    `select * from scheduled_games
+     where poll_pending = true
+       and calendar_event_id is not null
+       and game_date >= current_date
+       and ($1::text is null or source = $1)
+     order by game_date, game_time nulls last, id`,
+    [source ?? null],
+  );
+  return rows;
+}
+
+export async function recordScheduledGamePollResult(
+  id: string,
+  success: boolean,
+  error: string | null = null,
+): Promise<void> {
+  await query(
+    `update scheduled_games set
+       poll_pending = case when $2 then false else true end,
+       poll_sent_at = case when $2 then now() else poll_sent_at end,
+       poll_last_error = $3,
+       updated_at = now()
+     where id = $1`,
+    [id, success, error],
+  );
+}
+
+/** Связать опрос регулярной рассылки с импортированной игрой по Google event id. */
+export async function markScheduledGamePollSentForEvent(team: Team, eventUid: string): Promise<void> {
+  await query(
+    `update scheduled_games set
+       poll_pending = false,
+       poll_sent_at = coalesce(poll_sent_at, now()),
+       poll_last_error = null,
+       updated_at = now()
+     where team = $1 and calendar_event_id = $2`,
+    [team, eventUid],
+  );
 }
 
 export async function findScheduledGameForManualEntry(

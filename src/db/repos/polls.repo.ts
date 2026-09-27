@@ -45,6 +45,15 @@ export async function pollSessionExists(pollId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/** Уже отправляли голосовалку для этого календарного события в эту команду. */
+export async function pollSessionExistsForEvent(team: Team, eventUid: string): Promise<boolean> {
+  const { rows } = await query<{ ok: boolean }>(
+    'select true as ok from poll_sessions where team = $1 and event_uid = $2 limit 1',
+    [team, eventUid],
+  );
+  return rows.length > 0;
+}
+
 export async function upsertVote(v: {
   poll_id: string;
   tg_user_id: number;

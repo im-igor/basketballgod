@@ -1,7 +1,7 @@
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { listEvents, type CalendarEvent } from '../google/calendar.js';
-import { savePollSession } from '../db/repos/polls.repo.js';
+import { pollSessionExistsForEvent, savePollSession } from '../db/repos/polls.repo.js';
 import {
   createPollDraft,
   getPollDraft,
@@ -12,6 +12,7 @@ import { eventLabel } from '../domain/dates.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { log } from '../util/logger.js';
 import type { Team } from '../db/types.js';
+import { markScheduledGamePollSentForEvent } from '../db/repos/scheduledGames.repo.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 const other = (t: Team): Team => (t === 'RED' ? 'BLACK' : 'RED');
@@ -40,7 +41,9 @@ async function horizonFor(kind: PollKind): Promise<number> {
 
 const QUESTION_MAX = 300; // лимит вопроса опроса Telegram
 
-function questionFor(ev: CalendarEvent): string {
+type PollCalendarEvent = Pick<CalendarEvent, 'uid' | 'team' | 'summary' | 'location' | 'start' | 'startDateTime'>;
+
+function questionFor(ev: PollCalendarEvent): string {
   const when = eventLabel(ev.start, ev.startDateTime);
   const loc = ev.location ? ` [${ev.location}]` : '';
   return `${ev.summary} ${when}${loc}`.slice(0, QUESTION_MAX);
@@ -51,17 +54,28 @@ function questionFor(ev: CalendarEvent): string {
  * при forward — продублировать (forward) в чат другой команды. Общий код для
  * авторассылки (sendWeeklyPolls) и публикации черновика (publishPollDraft).
  */
-async function sendPollForEvent(
-  api: Api,
-  p: {
-    team: Team;
-    question: string;
-    options: string[];
-    eventUid: string | null;
-    eventStart: string | null;
-    forward: boolean;
-  },
-): Promise<{ messageId: number; pollId: string | null; forwarded: boolean }> {
+interface PollSendInput {
+  team: Team;
+  question: string;
+  options: string[];
+  eventUid: string | null;
+  eventStart: string | null;
+  forward: boolean;
+}
+
+interface PollSendResult {
+  sent: boolean;
+  messageId: number | null;
+  pollId: string | null;
+  forwarded: boolean;
+}
+
+const runningPollSends = new Map<string, Promise<PollSendResult>>();
+
+async function performPollSend(api: Api, p: PollSendInput): Promise<PollSendResult> {
+  if (p.eventUid && await pollSessionExistsForEvent(p.team, p.eventUid)) {
+    return { sent: false, messageId: null, pollId: null, forwarded: false };
+  }
   const chat = env.chats[p.team];
   const msg = await api.sendPoll(
     chat.chatId,
@@ -74,19 +88,19 @@ async function sendPollForEvent(
     },
   );
 
-  if (msg.poll) {
-    await savePollSession({
-      poll_id: msg.poll.id,
-      event_uid: p.eventUid,
-      team: p.team,
-      chat_id: chat.chatId,
-      message_id: msg.message_id,
-      thread_id: chat.threadId ?? null,
-      question: p.question,
-      options: p.options,
-      event_start: p.eventStart,
-    });
-  }
+  if (!msg.poll) throw new Error('Telegram не вернул poll.id для отправленной голосовалки');
+  await savePollSession({
+    poll_id: msg.poll.id,
+    event_uid: p.eventUid,
+    team: p.team,
+    chat_id: chat.chatId,
+    message_id: msg.message_id,
+    thread_id: chat.threadId ?? null,
+    question: p.question,
+    options: p.options,
+    event_start: p.eventStart,
+  });
+  if (p.eventUid) await markScheduledGamePollSentForEvent(p.team, p.eventUid);
 
   let forwarded = false;
   if (p.forward) {
@@ -98,7 +112,37 @@ async function sendPollForEvent(
     forwarded = true;
   }
 
-  return { messageId: msg.message_id, pollId: msg.poll?.id ?? null, forwarded };
+  return { sent: true, messageId: msg.message_id, pollId: msg.poll.id, forwarded };
+}
+
+async function sendPollForEvent(api: Api, p: PollSendInput): Promise<PollSendResult> {
+  if (!p.eventUid) return performPollSend(api, p);
+  const key = `${p.team}:${p.eventUid}`;
+  const running = runningPollSends.get(key);
+  if (running) {
+    const result = await running;
+    return { ...result, sent: false, forwarded: false };
+  }
+  const task = performPollSend(api, p);
+  runningPollSends.set(key, task);
+  try {
+    return await task;
+  } finally {
+    if (runningPollSends.get(key) === task) runningPollSends.delete(key);
+  }
+}
+
+/** Отправить голосовалку для конкретной игры, если её ещё не было. */
+export async function sendGamePollForEvent(api: Api, ev: PollCalendarEvent): Promise<{ sent: boolean }> {
+  const result = await sendPollForEvent(api, {
+    team: ev.team,
+    question: questionFor(ev),
+    options: env.POLL_OPTIONS,
+    eventUid: ev.uid,
+    eventStart: ev.start,
+    forward: false,
+  });
+  return { sent: result.sent };
 }
 
 /** События обеих команд на ближайшие horizonDays дней. */
@@ -143,7 +187,7 @@ export async function sendWeeklyPolls(
           eventStart: ev.start,
           forward,
         });
-        sent++;
+        if (res.sent) sent++;
         if (res.forwarded) forwarded++;
       } catch (err) {
         log.error(`[polls] ошибка отправки опроса (${team}: ${ev.summary})`, (err as Error).message);

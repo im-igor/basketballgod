@@ -126,6 +126,7 @@ export async function writeCronToSheet(c: {
   budget_time: string | null;
   schedule_import_enabled: boolean;
   schedule_import_interval_minutes: number;
+  schedule_import_send_polls: boolean;
 }): Promise<void> {
   const s = (v: string | number | null): string => (v === null ? '' : String(v));
   await writeKeyValueTab('cron', [
@@ -142,6 +143,7 @@ export async function writeCronToSheet(c: {
     ['budget_time', s(c.budget_time)],
     ['schedule_import_enabled', String(c.schedule_import_enabled)],
     ['schedule_import_interval_minutes', s(c.schedule_import_interval_minutes)],
+    ['schedule_import_send_polls', String(c.schedule_import_send_polls)],
   ]);
 }
 

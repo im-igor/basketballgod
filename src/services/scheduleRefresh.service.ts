@@ -4,12 +4,18 @@ import {
   recordScheduleSourceCheck,
 } from '../db/repos/scheduleSources.repo.js';
 import type { ScheduleSource, Team } from '../db/types.js';
+import type { Api } from 'grammy';
+import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { importSchedule, type ScheduleImportResult } from './scheduleImport.service.js';
+import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
 
 export interface ScheduleRefreshResult extends ScheduleImportResult {
   source: ScheduleSource;
   team: Team;
   ok: boolean;
+  pollsSent: number;
+  pollsAlreadySent: number;
+  pollErrors: string[];
 }
 
 const runningBySource = new Map<ScheduleSource, Promise<ScheduleRefreshResult>>();
@@ -48,7 +54,15 @@ async function runScheduleSourceRefresh(
       calendarSynced: result.calendarSynced,
       error,
     });
-    return { source, team: config.team, ok: error === null, ...result };
+    return {
+      source,
+      team: config.team,
+      ok: error === null,
+      pollsSent: 0,
+      pollsAlreadySent: 0,
+      pollErrors: [],
+      ...result,
+    };
   } catch (err) {
     const message = (err as Error).message.slice(0, 2000);
     await recordScheduleSourceCheck({
@@ -69,20 +83,43 @@ async function runScheduleSourceRefresh(
       saved: 0,
       calendarSynced: 0,
       errors: [message],
+      pollsSent: 0,
+      pollsAlreadySent: 0,
+      pollErrors: [],
     };
   }
+}
+
+/** Проверить источник и, если настройка включена, разослать ожидающие опросы новых игр. */
+export async function refreshScheduleSourceWithPolls(
+  api: Api,
+  source: ScheduleSource,
+  importer: typeof importSchedule = importSchedule,
+): Promise<ScheduleRefreshResult> {
+  const result = await refreshScheduleSource(source, importer);
+  const config = await getCronConfig();
+  if (!config.schedule_import_send_polls) return result;
+  const polls = await sendPendingScheduledGamePolls(api, source);
+  return {
+    ...result,
+    pollsSent: polls.sent,
+    pollsAlreadySent: polls.alreadySent,
+    pollErrors: polls.errors,
+  };
 }
 
 let refreshRunning = false;
 
 /** Последовательно проверить все включённые источники, не создавая параллельную нагрузку на лиги. */
-export async function refreshConfiguredSchedules(): Promise<ScheduleRefreshResult[]> {
+export async function refreshConfiguredSchedules(api?: Api): Promise<ScheduleRefreshResult[]> {
   if (refreshRunning) return [];
   refreshRunning = true;
   try {
     const results: ScheduleRefreshResult[] = [];
     for (const source of await listScheduleSources(true)) {
-      results.push(await refreshScheduleSource(source.source));
+      results.push(api
+        ? await refreshScheduleSourceWithPolls(api, source.source)
+        : await refreshScheduleSource(source.source));
     }
     return results;
   } finally {

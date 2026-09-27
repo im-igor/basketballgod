@@ -39,7 +39,7 @@ import {
   type GamePlan,
 } from '../services/gameFee.service.js';
 import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
-import { refreshScheduleSource } from '../services/scheduleRefresh.service.js';
+import { refreshScheduleSourceWithPolls } from '../services/scheduleRefresh.service.js';
 import { scheduleSourceForUrl } from '../schedule/parser.js';
 import { reloadScheduler } from '../scheduler/cron.js';
 import {
@@ -458,7 +458,11 @@ export async function buildServer(bot: Bot) {
           <div style="max-width:240px"><label>Интервал проверки</label>
             <select name="schedule_import_interval_minutes">${intervalOptions}</select></div>
         </div>
-        <div class="muted" style="margin-top:6px">Ссылки сохраняются в разделе «Расписание». Изменения настроек подхватываются не позднее чем через 5 минут.</div>
+        <label class="inline" style="display:flex;gap:7px;align-items:center;margin-top:12px">
+          <input type="checkbox" name="schedule_import_send_polls" value="yes" ${c.schedule_import_send_polls ? 'checked' : ''} style="width:auto">
+          отправлять голосовалку, если при проверке обнаружена новая игра
+        </label>
+        <div class="muted" style="margin-top:6px">Опрос отправляется только один раз. Если регулярная рассылка уже создала его, повторного сообщения не будет.</div>
         <button style="margin-top:12px">Сохранить</button>
       </form></div>`;
     return html(reply, layout('Крон', body, { flash: msg }));
@@ -489,6 +493,7 @@ export async function buildServer(bot: Bot) {
       budget_time: str(b.budget_time),
       schedule_import_enabled: b.schedule_import_enabled === 'yes',
       schedule_import_interval_minutes: scheduleImportInterval,
+      schedule_import_send_polls: b.schedule_import_send_polls === 'yes',
     });
     const applied = await reloadScheduler();
     return redirect(reply, '/cron', applied ? 'Расписание сохранено и применено' : 'Расписание сохранено');
@@ -1165,7 +1170,8 @@ export async function buildServer(bot: Bot) {
       </div>`;
     };
     const autoStatus = cronConfig.schedule_import_enabled
-      ? `<span class="badge yes">автопроверка включена · интервал ${esc(scheduleIntervalLabel(cronConfig.schedule_import_interval_minutes))}</span>`
+      ? `<span class="badge yes">автопроверка включена · интервал ${esc(scheduleIntervalLabel(cronConfig.schedule_import_interval_minutes))}` +
+        `${cronConfig.schedule_import_send_polls ? ' · голосовалки новых игр включены' : ''}</span>`
       : '<span class="badge black">автопроверка выключена</span>';
     const rows = games.map((g) => {
       const date = g.game_date instanceof Date
@@ -1192,6 +1198,13 @@ export async function buildServer(bot: Bot) {
       const coachControl = `${coachState}<form method="post" action="/schedule/${esc(g.id)}/coach" style="margin-top:6px;display:flex;gap:5px">
         <select name="coach" style="min-width:115px"><option value="auto" ${selected('auto')}>не задано</option><option value="yes" ${selected('yes')}>тренер будет</option><option value="no" ${selected('no')}>без тренера</option></select>
         <button class="ghost">OK</button></form>`;
+      const pollState = g.poll_sent_at
+        ? '<span class="badge yes">отправлен</span>'
+        : g.poll_last_error
+          ? `<span class="badge no" title="${esc(g.poll_last_error)}">ошибка</span>`
+          : g.poll_pending
+            ? '<span class="badge black">ожидает</span>'
+            : '<span class="muted">—</span>';
       return `<tr>
         <td>${esc(g.source)}</td>
         <td>${teamBadge(g.team)}</td>
@@ -1202,6 +1215,7 @@ export async function buildServer(bot: Bot) {
         <td>${esc(g.location ?? '—')}</td>
         <td>${coachControl}</td>
         <td>${g.calendar_event_id ? '<span class="badge yes">в календаре</span>' : '<span class="badge no">ошибка</span>'}</td>
+        <td>${pollState}</td>
       </tr>`;
     }).join('');
 
@@ -1214,8 +1228,8 @@ export async function buildServer(bot: Bot) {
       ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
       ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
       <div class="card"><table class="schedule-table">
-        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Тренер</th><th>Google</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
+        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Тренер</th><th>Google</th><th>Опрос</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="10" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg }));
   });
@@ -1234,10 +1248,11 @@ export async function buildServer(bot: Bot) {
         url,
         enabled: b.enabled === 'yes',
       });
-      const result = await refreshScheduleSource(source);
+      const result = await refreshScheduleSourceWithPolls(bot.api, source);
       const auto = b.enabled === 'yes' ? '' : ' · автопроверка источника выключена';
-      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}${auto}`;
-      return redirect(reply, '/schedule', result.ok ? summary : `${summary} · ошибки: ${result.errors.slice(0, 2).join('; ')}`);
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}${auto}`;
+      const errors = [...result.errors, ...result.pollErrors];
+      return redirect(reply, '/schedule', result.ok && errors.length === 0 ? summary : `${summary} · ошибки: ${errors.slice(0, 2).join('; ')}`);
     } catch (err) {
       return redirect(reply, '/schedule', `Источник не сохранён: ${(err as Error).message}`);
     }
@@ -1248,9 +1263,10 @@ export async function buildServer(bot: Bot) {
     const source: ScheduleSource | null = raw === 'LCHB' || raw === 'MLBL' ? raw : null;
     if (!source) return redirect(reply, '/schedule', 'Неизвестный источник расписания');
     try {
-      const result = await refreshScheduleSource(source);
-      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}`;
-      return redirect(reply, '/schedule', result.ok ? summary : `${summary} · ошибки: ${result.errors.slice(0, 2).join('; ')}`);
+      const result = await refreshScheduleSourceWithPolls(bot.api, source);
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}`;
+      const errors = [...result.errors, ...result.pollErrors];
+      return redirect(reply, '/schedule', result.ok && errors.length === 0 ? summary : `${summary} · ошибки: ${errors.slice(0, 2).join('; ')}`);
     } catch (err) {
       return redirect(reply, '/schedule', `Ошибка проверки ${source}: ${(err as Error).message}`);
     }

@@ -37,6 +37,7 @@ export interface CronConfig {
   budget_time: string | null;
   schedule_import_enabled: boolean;
   schedule_import_interval_minutes: number;
+  schedule_import_send_polls: boolean;
 }
 
 export interface Tag {
@@ -168,6 +169,9 @@ export interface ScheduledGame {
   coach_present: boolean | null;
   coach_override: boolean;
   coach_conflict: boolean;
+  poll_pending: boolean;
+  poll_sent_at: string | Date | null;
+  poll_last_error: string | null;
   created_at: string | Date;
   updated_at: string | Date;
 }

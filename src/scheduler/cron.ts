@@ -148,12 +148,13 @@ function applySchedule(api: Api, sch: Schedule): void {
   ];
   if (sch.scheduleImportCron) {
     tasks.push(cron.schedule(sch.scheduleImportCron, job('schedule-import', async () => {
-      const results = await refreshConfiguredSchedules();
+      const results = await refreshConfiguredSchedules(api);
       for (const result of results) {
         const summary = `${result.source}/${result.team}: найдено ${result.found}, новых ${result.newGames}, ` +
-          `Calendar ${result.calendarSynced}`;
-        if (result.ok) log.info(`[schedule-import] ${summary}`);
-        else log.warn(`[schedule-import] ${summary}; ${result.errors.join('; ')}`);
+          `Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}`;
+        const errors = [...result.errors, ...result.pollErrors];
+        if (result.ok && errors.length === 0) log.info(`[schedule-import] ${summary}`);
+        else log.warn(`[schedule-import] ${summary}; ${errors.join('; ')}`);
       }
     }), { timezone: sch.tz }));
   }

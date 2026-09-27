@@ -5,7 +5,8 @@ const COLUMNS = `timezone,
        poll_training_weekday, poll_training_time, poll_training_horizon_days,
        poll_game_weekday, poll_game_time, poll_game_horizon_days,
        fixation_day, fixation_time, budget_day, budget_time,
-       schedule_import_enabled, schedule_import_interval_minutes`;
+       schedule_import_enabled, schedule_import_interval_minutes,
+       schedule_import_send_polls`;
 
 /** Расписание планировщика — singleton-строка (id=1). */
 export async function getCronConfig(): Promise<CronConfig> {
@@ -33,6 +34,7 @@ export async function updateCronConfig(c: Partial<CronConfig>): Promise<CronConf
        budget_time                = coalesce($11, budget_time),
        schedule_import_enabled    = coalesce($12, schedule_import_enabled),
        schedule_import_interval_minutes = coalesce($13, schedule_import_interval_minutes),
+       schedule_import_send_polls      = coalesce($14, schedule_import_send_polls),
        updated_at = now()
      where id = 1
      returning ${COLUMNS}`,
@@ -50,6 +52,7 @@ export async function updateCronConfig(c: Partial<CronConfig>): Promise<CronConf
       c.budget_time ?? null,
       c.schedule_import_enabled ?? null,
       c.schedule_import_interval_minutes ?? null,
+      c.schedule_import_send_polls ?? null,
     ],
   );
   return rows[0]!;

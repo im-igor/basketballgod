@@ -2,20 +2,27 @@ import '../test/env.js';
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
-import type { Bot } from 'grammy';
+import type { Api, Bot } from 'grammy';
 import cron from 'node-cron';
 import { pool } from '../db/pool.js';
 import { migrate } from '../db/migrator.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
+import { savePollSession } from '../db/repos/polls.repo.js';
 import {
   getScheduleSource,
   listScheduleSources,
   upsertScheduleSource,
 } from '../db/repos/scheduleSources.repo.js';
-import { listScheduledGames, upsertScheduledGame } from '../db/repos/scheduledGames.repo.js';
+import {
+  getScheduledGameById,
+  listScheduledGames,
+  setScheduledGameCalendarEventId,
+  upsertScheduledGame,
+} from '../db/repos/scheduledGames.repo.js';
 import { buildServer } from '../http/server.js';
 import { startScheduler } from '../scheduler/cron.js';
 import { refreshScheduleSource } from './scheduleRefresh.service.js';
+import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
 
 const db = new PGlite();
 let queue = Promise.resolve();
@@ -47,10 +54,11 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await db.exec('truncate schedule_sources, scheduled_games restart identity cascade');
+  await db.exec('truncate poll_votes, poll_sessions, schedule_sources, scheduled_games restart identity cascade');
   await db.exec(`update cron_config set
     schedule_import_enabled = false,
-    schedule_import_interval_minutes = 60`);
+    schedule_import_interval_minutes = 60,
+    schedule_import_send_polls = false`);
 });
 
 after(async () => {
@@ -126,6 +134,100 @@ test('повторное сохранение матча обновляет за
   assert.equal((await listScheduledGames()).length, 1);
 });
 
+test('новая игра получает одну голосовалку, повторная проверка её не дублирует', async () => {
+  const game = await upsertScheduledGame({
+    source: 'MLBL',
+    source_url: 'https://moscow.ilovebasket.ru/schedule',
+    external_id: 'future-1',
+    team: 'BLACK',
+    team_a: 'Yandex Black',
+    team_b: 'Соперник',
+    game_date: '2099-10-04',
+    game_time: '15:00',
+    location: 'Зал 1',
+    details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'calendar-future-1');
+  let telegramCalls = 0;
+  const api = {
+    sendPoll: async () => {
+      telegramCalls++;
+      return { message_id: 101, poll: { id: 'telegram-poll-1' } };
+    },
+  } as unknown as Api;
+
+  const first = await sendPendingScheduledGamePolls(api, 'MLBL');
+  const second = await sendPendingScheduledGamePolls(api, 'MLBL');
+  assert.deepEqual(first, { sent: 1, alreadySent: 0, errors: [] });
+  assert.deepEqual(second, { sent: 0, alreadySent: 0, errors: [] });
+  assert.equal(telegramCalls, 1);
+  const saved = await getScheduledGameById(game.id);
+  assert.equal(saved!.poll_pending, false);
+  assert.ok(saved!.poll_sent_at);
+  assert.equal(saved!.poll_last_error, null);
+});
+
+test('голосовалка регулярного cron блокирует повторную рассылку после импорта', async () => {
+  const game = await upsertScheduledGame({
+    source: 'LCHB',
+    source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
+    external_id: 'future-2',
+    team: 'RED',
+    team_a: 'Yandex Red',
+    team_b: 'Соперник',
+    game_date: '2099-10-05',
+    game_time: '17:00',
+    location: null,
+    details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'calendar-future-2');
+  await savePollSession({
+    poll_id: 'weekly-poll',
+    event_uid: 'calendar-future-2',
+    team: 'RED',
+    chat_id: -2,
+    message_id: 202,
+    thread_id: null,
+    question: 'Игра',
+    options: ['Да', 'Нет'],
+    event_start: '2099-10-05T14:00:00.000Z',
+  });
+  const api = { sendPoll: async () => { throw new Error('не должен вызываться'); } } as unknown as Api;
+  const result = await sendPendingScheduledGamePolls(api, 'LCHB');
+  assert.deepEqual(result, { sent: 0, alreadySent: 1, errors: [] });
+  assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
+});
+
+test('ошибка Telegram оставляет голосовалку в очереди для следующей попытки', async () => {
+  const game = await upsertScheduledGame({
+    source: 'MLBL',
+    source_url: 'https://moscow.ilovebasket.ru/schedule',
+    external_id: 'future-3',
+    team: 'BLACK',
+    team_a: 'Yandex Black',
+    team_b: 'Ещё соперник',
+    game_date: '2099-10-06',
+    game_time: '19:00',
+    location: null,
+    details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'calendar-future-3');
+  const failed = await sendPendingScheduledGamePolls({
+    sendPoll: async () => { throw new Error('Telegram 503'); },
+  } as unknown as Api, 'MLBL');
+  assert.equal(failed.sent, 0);
+  assert.match(failed.errors[0]!, /Telegram 503/);
+  const pending = await getScheduledGameById(game.id);
+  assert.equal(pending!.poll_pending, true);
+  assert.equal(pending!.poll_last_error, 'Telegram 503');
+
+  const retried = await sendPendingScheduledGamePolls({
+    sendPoll: async () => ({ message_id: 303, poll: { id: 'retry-poll' } }),
+  } as unknown as Api, 'MLBL');
+  assert.equal(retried.sent, 1);
+  assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
+});
+
 test('админка показывает источники и сохраняет параметры периодического импорта', async () => {
   await upsertScheduleSource({
     source: 'MLBL', team: 'BLACK', url: 'https://moscow.ilovebasket.ru/schedule', enabled: true,
@@ -158,17 +260,20 @@ test('админка показывает источники и сохраняе
         poll_game_time: '15:50',
         schedule_import_enabled: 'yes',
         schedule_import_interval_minutes: '120',
+        schedule_import_send_polls: 'yes',
       },
     });
     assert.equal(update.statusCode, 302);
     const config = await getCronConfig();
     assert.equal(config.schedule_import_enabled, true);
     assert.equal(config.schedule_import_interval_minutes, 120);
+    assert.equal(config.schedule_import_send_polls, true);
     assert.equal(config.poll_game_weekday, 5);
     assert.equal(config.poll_game_time, '15:50');
     assert.ok(scheduled.includes('50 15 * * 5'), 'новое время должно примениться сразу после POST /cron');
     const cron = await app.inject({ method: 'GET', url: '/cron', cookies });
     assert.match(cron.body, /value="120" selected/);
+    assert.match(cron.body, /name="schedule_import_send_polls"[^>]*checked/);
   } finally {
     await app.close();
     scheduleMock.mock.restore();

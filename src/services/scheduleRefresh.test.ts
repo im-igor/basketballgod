@@ -23,6 +23,10 @@ import { buildServer } from '../http/server.js';
 import { startScheduler } from '../scheduler/cron.js';
 import { refreshScheduleSource } from './scheduleRefresh.service.js';
 import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
+import {
+  beginCronJobWindow,
+  completeCronJobWindow,
+} from '../db/repos/cronJobWindows.repo.js';
 
 const db = new PGlite();
 let queue = Promise.resolve();
@@ -54,12 +58,18 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await db.exec('truncate poll_votes, poll_sessions, schedule_sources, scheduled_games restart identity cascade');
+  await db.exec('truncate poll_votes, poll_sessions, schedule_sources, scheduled_games, cron_job_windows restart identity cascade');
   await db.exec(`update cron_config set
     schedule_import_enabled = false,
     schedule_import_interval_minutes = 60,
     schedule_import_send_polls = false`);
 });
+
+async function openGamePollWindow(until = new Date('2100-01-01T00:00:00+03:00')): Promise<void> {
+  const startedAt = new Date(Date.now() - 1000);
+  await beginCronJobWindow('game-polls', startedAt, until);
+  await completeCronJobWindow('game-polls', startedAt);
+}
 
 after(async () => {
   mock.restoreAll();
@@ -135,6 +145,7 @@ test('повторное сохранение матча обновляет за
 });
 
 test('новая игра получает одну голосовалку, повторная проверка её не дублирует', async () => {
+  await openGamePollWindow();
   const game = await upsertScheduledGame({
     source: 'MLBL',
     source_url: 'https://moscow.ilovebasket.ru/schedule',
@@ -158,8 +169,8 @@ test('новая игра получает одну голосовалку, по
 
   const first = await sendPendingScheduledGamePolls(api, 'MLBL');
   const second = await sendPendingScheduledGamePolls(api, 'MLBL');
-  assert.deepEqual(first, { sent: 1, alreadySent: 0, errors: [] });
-  assert.deepEqual(second, { sent: 0, alreadySent: 0, errors: [] });
+  assert.deepEqual(first, { sent: 1, alreadySent: 0, deferred: 0, errors: [] });
+  assert.deepEqual(second, { sent: 0, alreadySent: 0, deferred: 0, errors: [] });
   assert.equal(telegramCalls, 1);
   const saved = await getScheduledGameById(game.id);
   assert.equal(saved!.poll_pending, false);
@@ -168,6 +179,7 @@ test('новая игра получает одну голосовалку, по
 });
 
 test('голосовалка регулярного cron блокирует повторную рассылку после импорта', async () => {
+  await openGamePollWindow();
   const game = await upsertScheduledGame({
     source: 'LCHB',
     source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
@@ -194,11 +206,12 @@ test('голосовалка регулярного cron блокирует по
   });
   const api = { sendPoll: async () => { throw new Error('не должен вызываться'); } } as unknown as Api;
   const result = await sendPendingScheduledGamePolls(api, 'LCHB');
-  assert.deepEqual(result, { sent: 0, alreadySent: 1, errors: [] });
+  assert.deepEqual(result, { sent: 0, alreadySent: 1, deferred: 0, errors: [] });
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
 });
 
 test('ошибка Telegram оставляет голосовалку в очереди для следующей попытки', async () => {
+  await openGamePollWindow();
   const game = await upsertScheduledGame({
     source: 'MLBL',
     source_url: 'https://moscow.ilovebasket.ru/schedule',
@@ -226,6 +239,53 @@ test('ошибка Telegram оставляет голосовалку в оче�
   } as unknown as Api, 'MLBL');
   assert.equal(retried.sent, 1);
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
+});
+
+test('новая игра вне сохранённого горизонта ждёт следующего планового cron', async () => {
+  await openGamePollWindow(new Date('2099-10-05T00:00:00+03:00'));
+  const game = await upsertScheduledGame({
+    source: 'MLBL',
+    source_url: 'https://moscow.ilovebasket.ru/schedule',
+    external_id: 'outside-window',
+    team: 'BLACK',
+    team_a: 'Yandex Black',
+    team_b: 'Дальний соперник',
+    game_date: '2099-10-06',
+    game_time: '19:00',
+    location: null,
+    details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'calendar-outside-window');
+  const result = await sendPendingScheduledGamePolls({
+    sendPoll: async () => { throw new Error('не должен вызываться'); },
+  } as unknown as Api, 'MLBL');
+
+  assert.deepEqual(result, { sent: 0, alreadySent: 0, deferred: 1, errors: [] });
+  assert.equal((await getScheduledGameById(game.id))!.poll_pending, true);
+});
+
+test('игра, известная до планового cron, не получает внеочередную голосовалку', async () => {
+  const game = await upsertScheduledGame({
+    source: 'LCHB',
+    source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
+    external_id: 'known-before-cron',
+    team: 'RED',
+    team_a: 'Yandex Red',
+    team_b: 'Старый соперник',
+    game_date: '2099-10-04',
+    game_time: '17:00',
+    location: null,
+    details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'calendar-known-before-cron');
+  await db.query('update scheduled_games set created_at = $2 where id = $1', [game.id, new Date('2025-01-01')]);
+  await openGamePollWindow();
+
+  const result = await sendPendingScheduledGamePolls({
+    sendPoll: async () => { throw new Error('не должен вызываться'); },
+  } as unknown as Api, 'LCHB');
+  assert.deepEqual(result, { sent: 0, alreadySent: 0, deferred: 1, errors: [] });
+  assert.equal((await getScheduledGameById(game.id))!.poll_pending, true);
 });
 
 test('админка показывает источники и сохраняет параметры периодического импорта', async () => {

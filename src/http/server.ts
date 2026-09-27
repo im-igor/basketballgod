@@ -460,9 +460,9 @@ export async function buildServer(bot: Bot) {
         </div>
         <label class="inline" style="display:flex;gap:7px;align-items:center;margin-top:12px">
           <input type="checkbox" name="schedule_import_send_polls" value="yes" ${c.schedule_import_send_polls ? 'checked' : ''} style="width:auto">
-          отправлять голосовалку, если при проверке обнаружена новая игра
+          отправлять вне очереди голосовалку для новой игры в активном интервале
         </label>
-        <div class="muted" style="margin-top:6px">Опрос отправляется только один раз. Если регулярная рассылка уже создала его, повторного сообщения не будет.</div>
+        <div class="muted" style="margin-top:6px">Интервал фиксируется при последнем плановом запуске опросов на игры и действует до конца заданного горизонта. Новые игры вне него дождутся следующего планового запуска. Опрос отправляется только один раз.</div>
         <button style="margin-top:12px">Сохранить</button>
       </form></div>`;
     return html(reply, layout('Крон', body, { flash: msg }));
@@ -1250,7 +1250,7 @@ export async function buildServer(bot: Bot) {
       });
       const result = await refreshScheduleSourceWithPolls(bot.api, source);
       const auto = b.enabled === 'yes' ? '' : ' · автопроверка источника выключена';
-      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}${auto}`;
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}, ожидают окна ${result.pollsDeferred}${auto}`;
       const errors = [...result.errors, ...result.pollErrors];
       return redirect(reply, '/schedule', result.ok && errors.length === 0 ? summary : `${summary} · ошибки: ${errors.slice(0, 2).join('; ')}`);
     } catch (err) {
@@ -1264,7 +1264,7 @@ export async function buildServer(bot: Bot) {
     if (!source) return redirect(reply, '/schedule', 'Неизвестный источник расписания');
     try {
       const result = await refreshScheduleSourceWithPolls(bot.api, source);
-      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}`;
+      const summary = `${source}: найдено ${result.found}, новых ${result.newGames}, сохранено ${result.saved}, Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}, ожидают окна ${result.pollsDeferred}`;
       const errors = [...result.errors, ...result.pollErrors];
       return redirect(reply, '/schedule', result.ok && errors.length === 0 ? summary : `${summary} · ошибки: ${errors.slice(0, 2).join('; ')}`);
     } catch (err) {

@@ -5,10 +5,12 @@ import {
   recordScheduledGamePollResult,
 } from '../db/repos/scheduledGames.repo.js';
 import { sendGamePollForEvent } from './poll.service.js';
+import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
 
 export interface SchedulePollDispatchResult {
   sent: number;
   alreadySent: number;
+  deferred: number;
   errors: string[];
 }
 
@@ -25,13 +27,51 @@ function gameStart(game: ScheduledGame): { start: string; startDateTime: boolean
   return { start: new Date(`${date}T${time}:00+03:00`).toISOString(), startDateTime: true };
 }
 
-/** Отправить накопившиеся голосовалки новых игр; неуспешные останутся для повтора. */
+function asDate(value: string | Date): Date {
+  return value instanceof Date ? value : new Date(value);
+}
+
+function gameStartsAt(game: ScheduledGame): Date {
+  const date = gameDate(game);
+  const time = game.game_time ? String(game.game_time).slice(0, 5) : '00:00';
+  return new Date(`${date}T${time}:00+03:00`);
+}
+
+function isInCompletedActiveWindow(
+  game: ScheduledGame,
+  window: Awaited<ReturnType<typeof getCronJobWindow>>,
+  now: Date,
+): boolean {
+  if (!window?.completed_at) return false;
+  const startedAt = asDate(window.window_started_at);
+  const until = asDate(window.window_until);
+  const discoveredAt = asDate(game.created_at);
+  const startsAt = gameStartsAt(game);
+  return now < until
+    && discoveredAt >= startedAt
+    && startsAt >= startedAt
+    && startsAt < until;
+}
+
+/**
+ * Отправить голосовалки игр, обнаруженных после последнего планового cron и попавших
+ * в его активный интервал. Остальные остаются в очереди до следующего окна.
+ */
 export async function sendPendingScheduledGamePolls(
   api: Api,
   source?: ScheduleSource,
 ): Promise<SchedulePollDispatchResult> {
-  const result: SchedulePollDispatchResult = { sent: 0, alreadySent: 0, errors: [] };
-  for (const game of await listPendingScheduledGamePolls(source)) {
+  const result: SchedulePollDispatchResult = { sent: 0, alreadySent: 0, deferred: 0, errors: [] };
+  const [games, window] = await Promise.all([
+    listPendingScheduledGamePolls(source),
+    getCronJobWindow('game-polls'),
+  ]);
+  const now = new Date();
+  for (const game of games) {
+    if (!isInCompletedActiveWindow(game, window, now)) {
+      result.deferred++;
+      continue;
+    }
     try {
       const start = gameStart(game);
       const sent = await sendGamePollForEvent(api, {

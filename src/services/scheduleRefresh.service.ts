@@ -15,6 +15,7 @@ export interface ScheduleRefreshResult extends ScheduleImportResult {
   ok: boolean;
   pollsSent: number;
   pollsAlreadySent: number;
+  pollsDeferred: number;
   pollErrors: string[];
 }
 
@@ -60,6 +61,7 @@ async function runScheduleSourceRefresh(
       ok: error === null,
       pollsSent: 0,
       pollsAlreadySent: 0,
+      pollsDeferred: 0,
       pollErrors: [],
       ...result,
     };
@@ -85,6 +87,7 @@ async function runScheduleSourceRefresh(
       errors: [message],
       pollsSent: 0,
       pollsAlreadySent: 0,
+      pollsDeferred: 0,
       pollErrors: [],
     };
   }
@@ -104,6 +107,7 @@ export async function refreshScheduleSourceWithPolls(
     ...result,
     pollsSent: polls.sent,
     pollsAlreadySent: polls.alreadySent,
+    pollsDeferred: polls.deferred,
     pollErrors: polls.errors,
   };
 }

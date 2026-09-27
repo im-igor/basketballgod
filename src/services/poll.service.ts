@@ -13,6 +13,10 @@ import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { log } from '../util/logger.js';
 import type { Team } from '../db/types.js';
 import { markScheduledGamePollSentForEvent } from '../db/repos/scheduledGames.repo.js';
+import {
+  beginCronJobWindow,
+  completeCronJobWindow,
+} from '../db/repos/cronJobWindows.repo.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 const other = (t: Team): Team => (t === 'RED' ? 'BLACK' : 'RED');
@@ -145,14 +149,15 @@ export async function sendGamePollForEvent(api: Api, ev: PollCalendarEvent): Pro
   return { sent: result.sent };
 }
 
-/** События обеих команд на ближайшие horizonDays дней. */
-async function eventsInWindow(horizonDays: number): Promise<{ team: Team; events: CalendarEvent[] }[]> {
-  const now = new Date();
-  const timeMax = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
+/** События обеих команд в заданном интервале. */
+async function eventsInWindow(
+  timeMin: Date,
+  timeMax: Date,
+): Promise<{ team: Team; events: CalendarEvent[] }[]> {
   const out: { team: Team; events: CalendarEvent[] }[] = [];
   for (const team of TEAMS) {
     try {
-      out.push({ team, events: await listEvents(team, now, timeMax) });
+      out.push({ team, events: await listEvents(team, timeMin, timeMax) });
     } catch (err) {
       log.error(`[polls] не удалось прочитать календарь ${team}`, (err as Error).message);
     }
@@ -169,13 +174,20 @@ async function eventsInWindow(horizonDays: number): Promise<{ team: Team; events
 export async function sendWeeklyPolls(
   api: Api,
   kind: PollKind,
+  options: { trackWindow?: boolean } = {},
 ): Promise<{ sent: number; forwarded: number }> {
   let sent = 0;
   let forwarded = 0;
   const forward = kind === 'training';
   const horizon = await horizonFor(kind);
+  const windowStartedAt = new Date();
+  const windowUntil = new Date(windowStartedAt.getTime() + horizon * 24 * 60 * 60 * 1000);
 
-  for (const { team, events } of await eventsInWindow(horizon)) {
+  if (kind === 'game' && options.trackWindow) {
+    await beginCronJobWindow('game-polls', windowStartedAt, windowUntil);
+  }
+
+  for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
     for (const ev of events) {
       if (!matchesKind(ev, kind)) continue;
       try {
@@ -195,6 +207,10 @@ export async function sendWeeklyPolls(
     }
   }
 
+  if (kind === 'game' && options.trackWindow) {
+    await completeCronJobWindow('game-polls', windowStartedAt);
+  }
+
   log.info(`[polls:${kind}] отправлено ${sent}, переслано ${forwarded}`);
   return { sent, forwarded };
 }
@@ -210,7 +226,10 @@ export async function buildPollDrafts(): Promise<PollDraftRow[]> {
   // Виды не пересекаются (TRAINING vs GAME/FRIENDLY), поэтому события не дублируются.
   for (const kind of ['training', 'game'] as const) {
     const forward = kind === 'training';
-    for (const { team, events } of await eventsInWindow(await horizonFor(kind))) {
+    const horizon = await horizonFor(kind);
+    const windowStartedAt = new Date();
+    const windowUntil = new Date(windowStartedAt.getTime() + horizon * 24 * 60 * 60 * 1000);
+    for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
       for (const ev of events) {
         if (!matchesKind(ev, kind)) continue;
         const id = await createPollDraft({

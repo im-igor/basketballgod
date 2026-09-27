@@ -134,7 +134,7 @@ function applySchedule(api: Api, sch: Schedule): void {
 
     // Опросы на игры (TYPE=GAME|FRIENDLY, без форварда).
     cron.schedule(sch.pollGameCron, job('weekly-polls-game', async () => {
-      await sendWeeklyPolls(api, 'game');
+      await sendWeeklyPolls(api, 'game', { trackWindow: true });
     }), { timezone: sch.tz }),
 
     // Бюджет: собираем бюджеты обеих команд по составу и тарифам из БД,
@@ -151,7 +151,7 @@ function applySchedule(api: Api, sch: Schedule): void {
       const results = await refreshConfiguredSchedules(api);
       for (const result of results) {
         const summary = `${result.source}/${result.team}: найдено ${result.found}, новых ${result.newGames}, ` +
-          `Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}`;
+          `Calendar ${result.calendarSynced}, голосовалок ${result.pollsSent}, ожидают окна ${result.pollsDeferred}`;
         const errors = [...result.errors, ...result.pollErrors];
         if (result.ok && errors.length === 0) log.info(`[schedule-import] ${summary}`);
         else log.warn(`[schedule-import] ${summary}; ${errors.join('; ')}`);

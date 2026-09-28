@@ -462,7 +462,7 @@ export async function buildServer(bot: Bot) {
           <input type="checkbox" name="schedule_import_send_polls" value="yes" ${c.schedule_import_send_polls ? 'checked' : ''} style="width:auto">
           отправлять вне очереди голосовалку для новой игры в активном интервале
         </label>
-        <div class="muted" style="margin-top:6px">Интервал фиксируется при последнем плановом запуске опросов на игры и действует до конца заданного горизонта. Новые игры вне него дождутся следующего планового запуска. Опрос отправляется только один раз.</div>
+        <div class="muted" style="margin-top:6px">Интервал фиксируется при последнем плановом запуске опросов на игры и включает целиком последний календарный день заданного горизонта. Новые игры вне него дождутся следующего планового запуска. Опрос отправляется только один раз.</div>
         <button style="margin-top:12px">Сохранить</button>
       </form></div>`;
     return html(reply, layout('Крон', body, { flash: msg }));

@@ -93,6 +93,47 @@ export function eventLabel(iso: string, withTime: boolean): string {
   return `${base} ${p.hour}:${p.minute}`;
 }
 
+/**
+ * Исключающая верхняя граница горизонта в календарных днях целевой таймзоны.
+ * Например, запуск 27.09 в 21:00 с горизонтом 7 дней включает весь день 04.10,
+ * поэтому границей будет 05.10 00:00 по местному времени.
+ */
+export function calendarHorizonEnd(from: Date, horizonDays: number, tz: string = env.TZ): Date {
+  if (!Number.isInteger(horizonDays) || horizonDays < 0) {
+    throw new Error(`Некорректный горизонт в днях: ${horizonDays}`);
+  }
+  const local = partsInTZ(from, tz);
+  const nextDate = new Date(Date.UTC(
+    Number(local.year),
+    Number(local.month) - 1,
+    Number(local.day) + horizonDays + 1,
+  ));
+  const desiredAsUtc = Date.UTC(
+    nextDate.getUTCFullYear(),
+    nextDate.getUTCMonth(),
+    nextDate.getUTCDate(),
+  );
+
+  // Intl даёт локальные компоненты для любого IANA timezone. Несколькими
+  // итерациями переносим условную локальную полночь в реальный UTC-момент;
+  // это также учитывает переходы на летнее/зимнее время.
+  let candidate = desiredAsUtc;
+  for (let i = 0; i < 4; i++) {
+    const actual = partsInTZ(new Date(candidate), tz);
+    const actualAsUtc = Date.UTC(
+      Number(actual.year),
+      Number(actual.month) - 1,
+      Number(actual.day),
+      Number(actual.hour),
+      Number(actual.minute),
+    );
+    const correction = desiredAsUtc - actualAsUtc;
+    candidate += correction;
+    if (correction === 0) break;
+  }
+  return new Date(candidate);
+}
+
 /** Границы месяца [first, nextFirst). */
 export function monthRange(month: number, year: number): { from: Date; to: Date } {
   return { from: new Date(year, month - 1, 1), to: new Date(year, month, 1) };

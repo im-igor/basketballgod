@@ -8,7 +8,7 @@ import {
   setPollDraftSent,
   type PollDraftRow,
 } from '../db/repos/pollDrafts.repo.js';
-import { eventLabel } from '../domain/dates.js';
+import { calendarHorizonEnd, eventLabel } from '../domain/dates.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { log } from '../util/logger.js';
 import type { Team } from '../db/types.js';
@@ -31,15 +31,18 @@ function matchesKind(ev: CalendarEvent, kind: PollKind): boolean {
     : ev.tags.TYPE === 'GAME' || ev.tags.TYPE === 'FRIENDLY';
 }
 
-/** Горизонт (дней) для вида рассылки: cron_config → фолбэк на env. */
-async function horizonFor(kind: PollKind): Promise<number> {
+/** Горизонт и таймзона для вида рассылки: cron_config → фолбэк на env. */
+async function scheduleFor(kind: PollKind): Promise<{ horizonDays: number; timezone: string }> {
   const fallback = kind === 'training' ? env.POLL_TRAINING_HORIZON_DAYS : env.POLL_GAME_HORIZON_DAYS;
   try {
     const cfg = await getCronConfig();
     const days = kind === 'training' ? cfg.poll_training_horizon_days : cfg.poll_game_horizon_days;
-    return days && days > 0 ? days : fallback;
+    return {
+      horizonDays: days && days > 0 ? days : fallback,
+      timezone: cfg.timezone || env.TZ,
+    };
   } catch {
-    return fallback;
+    return { horizonDays: fallback, timezone: env.TZ };
   }
 }
 
@@ -179,9 +182,9 @@ export async function sendWeeklyPolls(
   let sent = 0;
   let forwarded = 0;
   const forward = kind === 'training';
-  const horizon = await horizonFor(kind);
+  const { horizonDays, timezone } = await scheduleFor(kind);
   const windowStartedAt = new Date();
-  const windowUntil = new Date(windowStartedAt.getTime() + horizon * 24 * 60 * 60 * 1000);
+  const windowUntil = calendarHorizonEnd(windowStartedAt, horizonDays, timezone);
 
   if (kind === 'game' && options.trackWindow) {
     await beginCronJobWindow('game-polls', windowStartedAt, windowUntil);
@@ -226,9 +229,9 @@ export async function buildPollDrafts(): Promise<PollDraftRow[]> {
   // Виды не пересекаются (TRAINING vs GAME/FRIENDLY), поэтому события не дублируются.
   for (const kind of ['training', 'game'] as const) {
     const forward = kind === 'training';
-    const horizon = await horizonFor(kind);
+    const { horizonDays, timezone } = await scheduleFor(kind);
     const windowStartedAt = new Date();
-    const windowUntil = new Date(windowStartedAt.getTime() + horizon * 24 * 60 * 60 * 1000);
+    const windowUntil = calendarHorizonEnd(windowStartedAt, horizonDays, timezone);
     for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
       for (const ev of events) {
         if (!matchesKind(ev, kind)) continue;

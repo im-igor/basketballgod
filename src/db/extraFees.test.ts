@@ -7,6 +7,7 @@ import { pool } from './pool.js';
 import { migrate } from './migrator.js';
 import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from './repos/budgets.repo.js';
 import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, setExtraFeeActive } from './repos/extraFees.repo.js';
+import { saveGame } from './repos/games.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import { renderBudgetFromDb } from '../services/notify.service.js';
 import { buildServer } from '../http/server.js';
@@ -189,6 +190,62 @@ test('полная сборка бюджета учитывает разовые
     for (const c of b.result.charges) assert.equal(c.amount, c.base_amount + c.game_amount + c.extra_amount);
   }
   assert.equal((await listExtraFeeAllocations()).length, 2);
+});
+
+test('текст бюджета RED и BLACK: игры участников за обе команды, чемпионат и месяц начисления', async () => {
+  const addGame = (ids: number[], patch: Partial<Parameters<typeof saveGame>[0]>) => saveGame({
+    event_uid: null, team: 'BLACK', opponent: 'Jumpball Строгино', played_on: '2026-09-20',
+    stat_url: 'https://moscow.ilovebasket.ru/games/1090210?lang=ru#protocol',
+    fee_per_player: 556, month: 10, year: 2026, ...patch,
+    participants: ids.map((id) => ({ name: `Игрок ${id}`, matched_player_id: id })),
+  });
+  await addGame([1, 4], {}); // Игрок RED выступил за BLACK.
+  await addGame([2, 4], {
+    team: 'RED', opponent: 'РТК-ЦОД', played_on: '2026-09-27', fee_per_player: 455,
+    stat_url: 'https://basketball.businesschampions.ru/osen-2026/matches/123/',
+  }); // Игрок BLACK выступил за RED.
+  await addGame([3], { opponent: 'Только BLACK', played_on: '2026-09-25', fee_per_player: 200 });
+  await addGame([4], {
+    team: 'MIXED', opponent: 'Товарищеская <игра>', played_on: '2026-09-28',
+    stat_url: null, fee_per_player: 100,
+  });
+  await addGame([4], {
+    team: 'RED', opponent: 'Старый протокол', played_on: '2026-09-29',
+    stat_url: 'invalid', fee_per_player: 0,
+  });
+  await addGame([], { team: 'RED', opponent: 'Без участников бюджета' });
+  await addGame([1, 4], { opponent: 'Другой месяц начисления', month: 9 });
+  await addGame([1, 4], { opponent: 'Другой год начисления', year: 2025 });
+
+  const expected: Record<Team, string[]> = {
+    RED: [
+      '20.09.2026 Jumpball Строгино (МЛБЛ) +556',
+      '27.09.2026 РТК-ЦОД (ЛЧБ) +455',
+      '28.09.2026 Товарищеская &lt;игра&gt; +100',
+      '29.09.2026 Старый протокол +0',
+    ],
+    BLACK: [
+      '20.09.2026 Jumpball Строгино (МЛБЛ) +556',
+      '25.09.2026 Только BLACK (МЛБЛ) +200',
+      '27.09.2026 РТК-ЦОД (ЛЧБ) +455',
+    ],
+  };
+  const gameLines = (text: string) => text.split('\n').filter((line) => /^\d{2}\.\d{2}\.\d{4} /.test(line));
+  const amounts = new Map([[1, 556], [2, 455], [3, 200], [4, 1111]]);
+  const built = await buildAndSaveBudgets(10, 2026);
+  // Повторный рендер опирается на сохранённый бюджет, даже если ростер уже изменился.
+  await sql("update players set active = false, team = 'BLACK' where id = 4");
+  for (const b of built) {
+    assert.equal(b.gamesCount, expected[b.team].length);
+    assert.deepEqual(gameLines(b.message), expected[b.team]);
+    assert.deepEqual(gameLines((await renderBudgetFromDb(b.budgetId))!.text), expected[b.team]);
+    assert.deepEqual(gameLines((await recalcBudget(b.budgetId))!.message), expected[b.team]);
+    assert.deepEqual(gameLines((await renderBudgetFromDb(b.budgetId))!.text), expected[b.team]);
+    for (const c of await getCharges(b.budgetId)) {
+      assert.equal(c.game_amount, amounts.get(c.player_id!));
+      assert.equal(c.amount, c.base_amount + c.game_amount);
+    }
+  }
 });
 
 test('админка: авторизация, валидация, создание, пересчёт, детализация и остановка сбора', async () => {

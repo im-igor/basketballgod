@@ -8,8 +8,9 @@ import {
   setBudgetMessage,
 } from '../db/repos/budgets.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
-import { listGamesForMonth } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
+import { gamesForPlayers } from '../domain/gamefee.js';
 import { loginsToFlag } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
@@ -51,7 +52,7 @@ export async function renderBudgetFromDb(
   const [charges, tariffs, games] = await Promise.all([
     getCharges(budgetId),
     getTariffs(),
-    listGamesForMonth(budget.team, budget.month, budget.year),
+    listAllGamesForMonth(budget.month, budget.year),
   ]);
   const flag = opts.api
     ? await loginsToFlag(opts.api, budget.team, charges.map((c) => c.tg_login))
@@ -72,11 +73,7 @@ export async function renderBudgetFromDb(
     details: budget.details as BudgetDetails,
     tariffs,
     charges: views,
-    games: games.map((g) => ({
-      played_on: g.played_on,
-      opponent: g.opponent,
-      fee_per_player: g.fee_per_player,
-    })),
+    games: gamesForPlayers(games, charges.map((c) => c.player_id)),
     payment,
   });
   return { team: budget.team, chatId: budget.chat_id, messageId: budget.message_id, text };

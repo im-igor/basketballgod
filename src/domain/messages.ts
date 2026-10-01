@@ -1,4 +1,5 @@
 import type { BudgetDetails, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
+import { gameStatsRef } from '../gamefee/parser.js';
 import { monthLabel } from './dates.js';
 
 export function escapeHtml(s: string): string {
@@ -60,6 +61,7 @@ export interface GameView {
   played_on: string | Date | null; // ISO-строка или Date из БД (колонка date)
   opponent: string | null;
   fee_per_player: number | null;
+  stat_url: string | null;
 }
 
 export interface BudgetMessageInput {
@@ -83,6 +85,17 @@ function isoToRu(v: string | Date | null): string {
   }
   const m = v.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+}
+
+/** Чемпионат определяем по протоколу, а не по команде игрока или игры. */
+function gameLeagueLabel(statUrl: string | null): string {
+  if (!statUrl) return '';
+  try {
+    return gameStatsRef(statUrl).source === 'MLBL' ? ' (МЛБЛ)' : ' (ЛЧБ)';
+  } catch {
+    // Для ручных игр и старых неизвестных ссылок чемпионат не приписываем.
+    return '';
+  }
 }
 
 /**
@@ -128,7 +141,7 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
           .map((g) => {
             const date = isoToRu(g.played_on);
             const opp = escapeHtml(g.opponent ?? 'игра');
-            return `${date ? `${date} ` : ''}${opp} +${g.fee_per_player ?? 0}`;
+            return `${date ? `${date} ` : ''}${opp}${gameLeagueLabel(g.stat_url)} +${g.fee_per_player ?? 0}`;
           })
           .join('\n') +
         `\n`

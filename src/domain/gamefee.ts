@@ -25,6 +25,17 @@ export function computeGameFee(
   return feePerPlayer(total, playedCount);
 }
 
+/** Игры участников бюджета, независимо от команды, за которую они сыграли. */
+export function gamesForPlayers<T extends { participants: GameParticipant[] }>(
+  games: T[],
+  playerIds: (number | null)[],
+): T[] {
+  const ids = new Set(playerIds.filter((id): id is number => id !== null));
+  return games.filter((g) => g.participants.some(
+    (p) => p.matched_player_id != null && ids.has(p.matched_player_id),
+  ));
+}
+
 /** Сумма взносов за игры конкретного игрока (по совпадению matched_player_id). */
 export function gameFeeForPlayer(
   playerId: number,

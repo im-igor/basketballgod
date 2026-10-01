@@ -12,10 +12,10 @@ import {
 } from '../db/repos/budgets.repo.js';
 import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
 import { reconcileActivityDates } from '../domain/activity.js';
-import { gameFeeForPlayer } from '../domain/gamefee.js';
+import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
-import type { BudgetDetails, Game, Player, Team } from '../db/types.js';
+import type { BudgetDetails, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 
@@ -76,19 +76,6 @@ export async function buildAndSaveBudgets(
     participants: g.participants,
   }));
 
-  // Для сообщения-черновика показываем игры, где сыграл ≥1 активный игрок команды,
-  // чтобы в сборе RED не светились чисто-BLACK игры и наоборот.
-  const activeIds: Record<Team, Set<number>> = {
-    RED: new Set(active.RED.map((p) => p.id)),
-    BLACK: new Set(active.BLACK.map((p) => p.id)),
-  };
-  const gamesForTeam = (t: Team): Game[] =>
-    allGames.filter((g) =>
-      (g.participants ?? []).some(
-        (pt) => pt.matched_player_id != null && activeIds[t].has(pt.matched_player_id),
-      ),
-    );
-
   const computed = computeBudgets({ month, year, tariffs, events, active, games });
 
   const out: BuiltBudget[] = [];
@@ -128,6 +115,7 @@ export async function buildAndSaveBudgets(
     }));
     const saved = await saveBudget({ team, month, year, total_per_player: base, details, charges });
     const savedCharges = await getCharges(saved.id);
+    const teamGames = gamesForPlayers(allGames, savedCharges.map((c) => c.player_id));
     for (const c of result.charges) {
       const stored = savedCharges.find((s) => s.player_id === c.player.id)!;
       c.base_amount = stored.base_amount;
@@ -142,14 +130,10 @@ export async function buildAndSaveBudgets(
       details,
       tariffs,
       charges: savedCharges,
-      games: gamesForTeam(team).map((g) => ({
-        played_on: g.played_on,
-        opponent: g.opponent,
-        fee_per_player: g.fee_per_player,
-      })),
+      games: teamGames,
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
-    out.push({ team, budgetId: saved.id, result, message, gamesCount: gamesForTeam(team).length });
+    out.push({ team, budgetId: saved.id, result, message, gamesCount: teamGames.length });
   }
   return out;
 }
@@ -196,14 +180,7 @@ export async function recalcBudget(
   }));
 
   // Для сообщения показываем только игры, где сыграл кто-то из игроков этого бюджета.
-  const chargeIds = new Set(
-    charges.map((c) => c.player_id).filter((x): x is number => x != null),
-  );
-  const teamGames = allGames.filter((g) =>
-    (g.participants ?? []).some(
-      (pt) => pt.matched_player_id != null && chargeIds.has(pt.matched_player_id),
-    ),
-  );
+  const teamGames = gamesForPlayers(allGames, charges.map((c) => c.player_id));
 
   const updatedCharges = charges.map((c) => {
     const game = c.player_id ? gameFeeForPlayer(c.player_id, gamesForBudget) : c.game_amount;
@@ -229,11 +206,7 @@ export async function recalcBudget(
     details: newDetails,
     tariffs,
     charges: await getCharges(budgetId),
-    games: teamGames.map((g) => ({
-      played_on: g.played_on,
-      opponent: g.opponent,
-      fee_per_player: g.fee_per_player,
-    })),
+    games: teamGames,
     payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
   });
 

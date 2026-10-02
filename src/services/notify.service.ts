@@ -14,8 +14,9 @@ import { gamesForPlayers } from '../domain/gamefee.js';
 import { loginsToFlag } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
-import type { BudgetDetails, Team } from '../db/types.js';
+import type { BudgetDetails, MonthlyPayout, Team } from '../db/types.js';
 import type { BuiltBudget } from './budget.service.js';
+import { buildMonthlyPayoutMessage } from '../domain/payouts.js';
 
 const payment = { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL };
 
@@ -124,6 +125,28 @@ export async function sendBudgetDraftToAdmins(
         );
     }
   }
+}
+
+/** Отправить зафиксированные в конце месяца суммы администраторам в личку. */
+export async function sendMonthlyPayoutToAdmins(
+  api: Api,
+  payout: MonthlyPayout,
+): Promise<number> {
+  const text = buildMonthlyPayoutMessage(payout);
+  let sent = 0;
+  for (const adminId of env.ADMIN_TG_IDS) {
+    try {
+      await api.sendMessage(adminId, text, { parse_mode: 'HTML' });
+      sent++;
+    } catch (err) {
+      log.warn(
+        `[notify] не удалось отправить месячный расчёт админу ${adminId} (нажал ли он Start у бота?)`,
+        (err as Error).message,
+      );
+    }
+  }
+  if (sent === 0) throw new Error('Месячный расчёт не удалось отправить ни одному администратору');
+  return sent;
 }
 
 /**

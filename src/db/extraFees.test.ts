@@ -8,6 +8,7 @@ import { migrate } from './migrator.js';
 import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from './repos/budgets.repo.js';
 import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, setExtraFeeActive } from './repos/extraFees.repo.js';
 import { saveGame } from './repos/games.repo.js';
+import { saveMonthlyPayout } from './repos/monthlyPayouts.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import { renderBudgetFromDb } from '../services/notify.service.js';
 import { buildServer } from '../http/server.js';
@@ -67,7 +68,7 @@ before(async () => {
   await migrate(); // повторный старт не ломает схему
 });
 beforeEach(async () => {
-  await db.exec('truncate extra_fee_allocations, extra_fees, charges, budgets, games, players restart identity cascade');
+  await db.exec('truncate monthly_payouts, extra_fee_allocations, extra_fees, charges, budgets, games, players restart identity cascade');
   await db.exec(`insert into players (id, name, tg_login, team, active, is_employee) values
     (1, 'Игрок 1', '@p1', 'BLACK', true, true), (2, 'Игрок 2', '@p2', 'BLACK', true, true),
     (3, 'Игрок 3', '@p3', 'BLACK', true, true), (4, 'Игрок 4', '@p4', 'RED', true, true)`);
@@ -264,6 +265,14 @@ test('админка: авторизация, валидация, создани
     assert.equal(create.statusCode, 302);
     await game(10, [1]);
     await save();
+    await saveMonthlyPayout({
+      month: 10, year: 2026, coach_amount: 5000, gym_amount: 3000,
+      coach_training_sessions: 0, coach_games: 1, paid_gym_sessions: 0,
+      coach_per_session: 5000, coach_per_game: 5000,
+      gym_paid_price: 25500, locker_rent_price: 3000,
+      coach_items: [{ kind: 'GAME', date: '2026-10-10', label: 'Игра с Тестом', amount: 5000, team: 'BLACK' }],
+      gym_items: [{ kind: 'LOCKER', date: null, label: 'Аренда шкафчика', amount: 3000 }],
+    });
     const recalc = await app.inject({ method: 'POST', url: '/extra-fees/recalculate', cookies, payload: { period: '2026-10' } });
     assert.match(recalc.headers.location!, /budgets\?month=10/);
     const page = await app.inject({ method: 'GET', url: '/extra-fees', cookies });
@@ -274,11 +283,19 @@ test('админка: авторизация, валидация, создани
     assert.match(budgetsPage.body, /Разовые сборы за Октябрь 2026/);
     assert.match(budgetsPage.body, /активно: 1/);
     assert.match(budgetsPage.body, /Меддопуск &lt;МЛБЛ&gt; — 380 ₽\/чел\., сыгравшим, BLACK/);
+    assert.match(budgetsPage.body, /<th>Тренеру<\/th><th>Зал<\/th>/);
+    assert.match(budgetsPage.body, /<b>5000₽<\/b>/);
+    assert.match(budgetsPage.body, /<b>3000₽<\/b>/);
+    assert.match(budgetsPage.body, /0 трен\. · 1 игр\./);
+    assert.match(budgetsPage.body, /0 аренд\./);
     const previousMonth = await app.inject({ method: 'GET', url: '/budgets?month=9&year=2026', cookies });
     assert.match(previousMonth.body, /Для выбранного месяца активных разовых сборов нет/);
     assert.match(page.body, /href="\/budgets\/10-2026"/);
     const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
     assert.equal(budgetPage.statusCode, 200);
+    assert.match(budgetPage.body, /Закрытие месяца/);
+    assert.match(budgetPage.body, /Игра с Тестом/);
+    assert.match(budgetPage.body, /Аренда шкафчика/);
     assert.match(budgetPage.body, /Разовые/);
     assert.match(budgetPage.body, /Меддопуск &lt;МЛБЛ&gt;: \+380₽/);
     const stop = await app.inject({ method: 'POST', url: '/extra-fees/1/status', cookies, payload: { active: 'no' } });

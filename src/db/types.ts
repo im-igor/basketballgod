@@ -73,6 +73,33 @@ export interface BudgetDetails {
   coach_note?: string | null; // комментарий к строке тренера
 }
 
+/** Зафиксированные в конце месяца суммы к переводу. */
+export interface MonthlyPayoutItem {
+  kind: 'TRAINING' | 'GAME' | 'ADJUSTMENT' | 'GYM' | 'LOCKER';
+  date: string | null;
+  label: string;
+  amount: number;
+  team?: Team;
+}
+
+export interface MonthlyPayout {
+  month: number;
+  year: number;
+  coach_amount: number;
+  gym_amount: number;
+  coach_training_sessions: number;
+  coach_games: number;
+  paid_gym_sessions: number;
+  coach_per_session: number;
+  coach_per_game: number;
+  gym_paid_price: number;
+  locker_rent_price: number;
+  coach_items: MonthlyPayoutItem[];
+  gym_items: MonthlyPayoutItem[];
+  calculated_at: string | Date;
+  notified_at: string | Date | null;
+}
+
 export interface Charge {
   id: number;
   budget_id: number;

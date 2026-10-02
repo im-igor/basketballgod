@@ -3,12 +3,14 @@ import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetDraftToAdmins } from '../services/notify.service.js';
+import { sendBudgetDraftToAdmins, sendMonthlyPayoutToAdmins } from '../services/notify.service.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { CronConfig } from '../db/types.js';
 import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import { refreshConfiguredSchedules } from '../services/scheduleRefresh.service.js';
+import { calculateAndSaveMonthlyPayout } from '../services/monthlyPayout.service.js';
+import { markMonthlyPayoutNotified } from '../db/repos/monthlyPayouts.repo.js';
 
 /** Обёртка задачи: ошибки не должны ронять процесс. */
 function job(name: string, fn: () => Promise<void>): () => void {
@@ -45,6 +47,46 @@ function toCronDow(wd: number | null | undefined): number | null {
 }
 
 const RECONCILE_CRON = '*/5 * * * *'; // правки cron_config подхватываются не позднее чем через 5 минут
+const MONTH_END_PAYOUT_CRON = '55 23 28-31 * *';
+const MONTH_END_PAYOUT_RETRY_CRON = '5 0 1 * *';
+
+/** Проверка последнего календарного дня в таймзоне планировщика. */
+export function isLastDayOfMonthInTimeZone(now: Date, timeZone: string): boolean {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value);
+  const year = value('year');
+  const month = value('month');
+  const day = value('day');
+  return day === new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function monthInTimeZone(now: Date, timeZone: string): { month: number; year: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+  }).formatToParts(now);
+  const read = (type: 'year' | 'month') => Number(parts.find((p) => p.type === type)?.value);
+  return { month: read('month'), year: read('year') };
+}
+
+function previousMonth(period: { month: number; year: number }): { month: number; year: number } {
+  return period.month === 1
+    ? { month: 12, year: period.year - 1 }
+    : { month: period.month - 1, year: period.year };
+}
+
+async function finalizeMonthlyPayout(api: Api, month: number, year: number): Promise<void> {
+  const payout = await calculateAndSaveMonthlyPayout(month, year);
+  if (payout.notified_at) return;
+  await sendMonthlyPayoutToAdmins(api, payout);
+  await markMonthlyPayoutNotified(month, year);
+}
 
 /** Поддерживаемые человеком интервалы → стабильное cron-выражение. */
 export function scheduleImportCron(intervalMinutes: number): string {
@@ -118,7 +160,14 @@ let schedulerApi: Api | null = null;
 
 /** Остановить старые задачи и запланировать заново по данному расписанию. */
 function applySchedule(api: Api, sch: Schedule): void {
-  for (const expr of [sch.pollTrainingCron, sch.pollGameCron, sch.budgetCron, sch.scheduleImportCron].filter((x): x is string => x !== null)) {
+  for (const expr of [
+    sch.pollTrainingCron,
+    sch.pollGameCron,
+    sch.budgetCron,
+    sch.scheduleImportCron,
+    MONTH_END_PAYOUT_CRON,
+    MONTH_END_PAYOUT_RETRY_CRON,
+  ].filter((x): x is string => x !== null)) {
     if (!cron.validate(expr)) {
       log.error(`[cron] некорректное выражение "${expr}" — расписание не изменено`);
       return;
@@ -145,6 +194,22 @@ function applySchedule(api: Api, sch: Schedule): void {
       const built = await buildAndSaveBudgets(month, year);
       await sendBudgetDraftToAdmins(api, built);
     }), { timezone: sch.tz }),
+
+    // В 23:55 последнего календарного дня фиксируем реальные тренировки, игры и
+    // аренды месяца. Снимок сохраняется в БД и один раз уходит администраторам.
+    cron.schedule(MONTH_END_PAYOUT_CRON, job('monthly-payout', async () => {
+      const now = new Date();
+      if (!isLastDayOfMonthInTimeZone(now, sch.tz)) return;
+      const { month, year } = monthInTimeZone(now, sch.tz);
+      await finalizeMonthlyPayout(api, month, year);
+    }), { timezone: sch.tz }),
+
+    // Страховка на случай недоступности приложения или Telegram в 23:55.
+    // Сохранённый и уже отправленный снимок повторно не рассылается.
+    cron.schedule(MONTH_END_PAYOUT_RETRY_CRON, job('monthly-payout-retry', async () => {
+      const period = previousMonth(monthInTimeZone(new Date(), sch.tz));
+      await finalizeMonthlyPayout(api, period.month, period.year);
+    }), { timezone: sch.tz }),
   ];
   if (sch.scheduleImportCron) {
     tasks.push(cron.schedule(sch.scheduleImportCron, job('schedule-import', async () => {
@@ -162,6 +227,7 @@ function applySchedule(api: Api, sch: Schedule): void {
   log.info(
     `[cron] расписание активно (TZ=${sch.tz}) — опросы: тренировки "${sch.pollTrainingCron}", ` +
       `игры "${sch.pollGameCron}"; бюджет "${sch.budgetCron}"; ` +
+      `расчёты в конце месяца "${MONTH_END_PAYOUT_CRON}" (проверка "${MONTH_END_PAYOUT_RETRY_CRON}"); ` +
       `импорт расписаний ${sch.scheduleImportCron ? `"${sch.scheduleImportCron}"` : 'выключен'}`,
   );
 }

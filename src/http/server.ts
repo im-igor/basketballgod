@@ -28,6 +28,7 @@ import {
 } from '../db/repos/budgets.repo.js';
 import { listAllGamesForMonth, deleteGameById } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
+import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
 import { listScheduledGames } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
@@ -59,7 +60,7 @@ import {
 } from '../services/sheetSync.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
-import type { Team, Player, Charge, ScheduleSource } from '../db/types.js';
+import type { Team, Player, Charge, MonthlyPayoutItem, ScheduleSource } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
@@ -613,7 +614,14 @@ export async function buildServer(bot: Bot) {
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
 
     // Список — один общий бюджет на месяц (обе команды в одной строке).
-    const [budgets, extraFees] = await Promise.all([listBudgets(), listExtraFees()]);
+    const [budgets, extraFees, monthlyPayouts] = await Promise.all([
+      listBudgets(),
+      listExtraFees(),
+      listMonthlyPayouts(),
+    ]);
+    const payoutsByMonth = new Map(
+      monthlyPayouts.map((item) => [`${item.year}-${String(item.month).padStart(2, '0')}`, item]),
+    );
     const selectedPeriod = year * 100 + month;
     const relevantExtraFees = extraFees.filter((fee) =>
       fee.active && selectedPeriod >= fee.start_period &&
@@ -630,8 +638,10 @@ export async function buildServer(bot: Bot) {
       .sort((a, b) => b[0].localeCompare(a[0])) // новые сверху
       .map(([, group]) => {
         const first = group[0]!;
+        const key = `${first.year}-${String(first.month).padStart(2, '0')}`;
         const red = group.find((g) => g.team === 'RED');
         const black = group.find((g) => g.team === 'BLACK');
+        const payouts = payoutsByMonth.get(key);
         const baseInfo = [
           red ? `${teamBadge('RED')} ${red.total_per_player ?? '—'}₽` : '',
           black ? `${teamBadge('BLACK')} ${black.total_per_player ?? '—'}₽` : '',
@@ -648,6 +658,12 @@ export async function buildServer(bot: Bot) {
         return `<tr>
           <td><a href="/budgets/${periodOf(first.month, first.year)}">${esc(monthLabel(first.month, first.year))}</a></td>
           <td>${baseInfo}</td>
+          <td>${payouts
+            ? `<a href="/budgets/${periodOf(first.month, first.year)}#payouts"><b>${esc(payouts.coach_amount)}₽</b></a><div class="muted">${payouts.coach_training_sessions} трен. · ${payouts.coach_games} игр.</div>`
+            : '<span class="muted">ещё не рассчитано</span>'}</td>
+          <td>${payouts
+            ? `<a href="/budgets/${periodOf(first.month, first.year)}#payouts"><b>${esc(payouts.gym_amount)}₽</b></a><div class="muted">${payouts.paid_gym_sessions} аренд.</div>`
+            : '<span class="muted">ещё не рассчитано</span>'}</td>
           <td>${status}</td>
         </tr>`;
       })
@@ -711,9 +727,9 @@ export async function buildServer(bot: Bot) {
           <div style="flex:0"><label>&nbsp;</label><button>Собрать</button></div>
         </form></div>
       ${draftsCard}
-      <div class="card"><table>
-        <thead><tr><th>Месяц</th><th>Базовый взнос</th><th>Статус</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="3" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
+      <div class="card"><table class="budgets-table">
+        <thead><tr><th>Месяц</th><th>Базовый взнос</th><th>Тренеру</th><th>Зал</th><th>Статус</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Бюджеты', body, { flash: msg }));
   });
@@ -794,7 +810,10 @@ export async function buildServer(bot: Bot) {
     const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
-    const monthBudgets = await monthBudgetsOf(period.month, period.year);
+    const [monthBudgets, payout] = await Promise.all([
+      monthBudgetsOf(period.month, period.year),
+      getMonthlyPayout(period.month, period.year),
+    ]);
     if (monthBudgets.length === 0) return redirect(reply, '/budgets', 'Бюджет не найден');
     const combined: (Charge & { team: Team })[] = [];
     for (const b of monthBudgets) {
@@ -814,6 +833,28 @@ export async function buildServer(bot: Bot) {
       .filter((c) => c.paid && c.paid_at)
       .reduce((m, c) => Math.max(m, new Date(c.paid_at as string | Date).getTime()), 0);
     const lastCheck = lastPaidMs ? fmtDateTime(new Date(lastPaidMs)) : '';
+
+    const payoutRows = (items: MonthlyPayoutItem[]) => items.map((item) => `<tr>
+      <td>${item.date ? esc(isoToRu(item.date)) : '—'}</td>
+      <td>${item.team ? `${teamBadge(item.team)} ` : ''}${esc(item.label)}</td>
+      <td class="right"><b>${esc(item.amount)}₽</b></td>
+    </tr>`).join('');
+    const payoutCard = payout ? `<div class="card" id="payouts">
+      <div class="row" style="align-items:baseline;justify-content:space-between">
+        <h2 style="margin:0">Закрытие месяца</h2>
+        <span class="muted">Рассчитано ${esc(fmtDateTime(payout.calculated_at))}</span>
+      </div>
+      <div class="row" style="align-items:flex-start;margin-top:12px">
+        <div style="min-width:300px"><h2>Тренеру — ${esc(payout.coach_amount)}₽</h2>
+          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
+          <tbody>${payoutRows(payout.coach_items)}</tbody></table>
+        </div>
+        <div style="min-width:300px"><h2>Зал — ${esc(payout.gym_amount)}₽</h2>
+          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
+          <tbody>${payoutRows(payout.gym_items)}</tbody></table>
+        </div>
+      </div>
+    </div>` : '';
 
     const rows = combined
       .map(
@@ -839,6 +880,7 @@ export async function buildServer(bot: Bot) {
         <form class="inline" method="post" action="/budgets/${seg}/debtors"><button class="ghost">Напомнить должникам</button></form>
         <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
       </div>
+      ${payoutCard}
       <div class="card">${progressBar(paidSum, total)}</div>
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>

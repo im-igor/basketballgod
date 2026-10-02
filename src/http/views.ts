@@ -121,8 +121,11 @@ button.danger:hover { filter:brightness(.92); }
   .card { padding:15px; border-radius:12px; overflow-x:auto; }
   button { min-height:38px; }
   /* Обычные таблицы (игроки и т.п.): прячем второстепенные колонки 4+. */
-  table:not(.pay-table):not(.schedule-table) th:nth-child(n+4),
-  table:not(.pay-table):not(.schedule-table) td:nth-child(n+4){ display:none; }
+  table:not(.pay-table):not(.schedule-table):not(.budgets-table) th:nth-child(n+4),
+  table:not(.pay-table):not(.schedule-table):not(.budgets-table) td:nth-child(n+4){ display:none; }
+  /* Список бюджетов: на мобильном в приоритете месяц и суммы к переводу. */
+  .budgets-table th:nth-child(2), .budgets-table td:nth-child(2),
+  .budgets-table th:nth-child(5), .budgets-table td:nth-child(5){ display:none; }
   /* Таблица оплат: на узком экране оставляем ФИО(1), Итого(7) и кнопку(9),
      иначе кнопка «Перевёл» уезжает за край и недоступна в портретной ориентации. */
   .pay-table th:nth-child(2), .pay-table td:nth-child(2),

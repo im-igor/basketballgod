@@ -15,7 +15,10 @@ import {
 } from '../db/repos/scheduleSources.repo.js';
 import {
   getScheduledGameById,
+  listScheduleDuplicateGroups,
   listScheduledGames,
+  markScheduleSourcePresence,
+  recomputeScheduleConflicts,
   setScheduledGameCalendarEventId,
   upsertScheduledGame,
 } from '../db/repos/scheduledGames.repo.js';
@@ -23,6 +26,10 @@ import { buildServer } from '../http/server.js';
 import { startScheduler } from '../scheduler/cron.js';
 import { refreshScheduleSource } from './scheduleRefresh.service.js';
 import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
+import {
+  deleteScheduledGameWithArtifacts,
+  notifyScheduleDuplicatesToAdmins,
+} from './scheduleDuplicate.service.js';
 import {
   beginCronJobWindow,
   completeCronJobWindow,
@@ -142,6 +149,145 @@ test('повторное сохранение матча обновляет за
   assert.equal(second.game_time, '16:30:00');
   assert.equal(second.location, 'Зал 2');
   assert.equal((await listScheduledGames()).length, 1);
+});
+
+test('разные внешние ID одного матча образуют дубль, а исчезнувший ID помечается устаревшим', async () => {
+  const common = {
+    source: 'LCHB' as const,
+    source_url: 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/',
+    team: 'RED' as const,
+    team_a: 'Yandex Red',
+    team_b: 'Транснефть',
+    game_date: '2026-10-04',
+    game_time: '21:10',
+    location: 'Территория мяча',
+    details_url: null,
+  };
+  const oldGame = await upsertScheduledGame({ ...common, external_id: 'old-id' });
+  const currentGame = await upsertScheduledGame({
+    ...common,
+    external_id: '1477340',
+    team_a: ' транснефть ',
+    team_b: 'YANDEX  RED',
+  });
+  await markScheduleSourcePresence('LCHB', 'RED', ['1477340']);
+
+  const groups = await listScheduleDuplicateGroups('LCHB', 'RED');
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0]!.games.map((game) => game.id), [oldGame.id, currentGame.id]);
+  const games = await listScheduledGames();
+  assert.equal(games.find((game) => game.id === oldGame.id)!.present_in_source, false);
+  assert.equal(games.find((game) => game.id === currentGame.id)!.present_in_source, true);
+});
+
+test('бот уведомляет администраторов о дубле только один раз', async () => {
+  const common = {
+    source: 'MLBL' as const,
+    source_url: 'https://moscow.ilovebasket.ru/schedule',
+    team: 'BLACK' as const,
+    team_a: 'Yandex Black',
+    team_b: 'Соперник',
+    game_date: '2099-10-04',
+    game_time: '15:00',
+    location: null,
+    details_url: null,
+  };
+  await upsertScheduledGame({ ...common, external_id: 'old' });
+  await upsertScheduledGame({ ...common, external_id: 'new' });
+  const sent: string[] = [];
+  const api = {
+    sendMessage: async (_chatId: number, text: string) => {
+      sent.push(text);
+      return { message_id: sent.length };
+    },
+  } as unknown as Api;
+
+  const first = await notifyScheduleDuplicatesToAdmins(api, await listScheduleDuplicateGroups());
+  const second = await notifyScheduleDuplicatesToAdmins(api, await listScheduleDuplicateGroups());
+  assert.equal(first.groupsNotified, 1);
+  assert.equal(first.messagesSent, 1);
+  assert.equal(second.groupsNotified, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /возможный дубль/i);
+  assert.match(sent[0]!, /ID <code>old<\/code>/);
+  assert.match(sent[0]!, /ID <code>new<\/code>/);
+});
+
+test('админка показывает дубль, актуальность строк и кнопку удаления', async () => {
+  const common = {
+    source: 'LCHB' as const,
+    source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
+    team: 'RED' as const,
+    team_a: 'Yandex Red',
+    team_b: 'Транснефть',
+    game_date: '2099-10-04',
+    game_time: '21:10',
+    location: null,
+    details_url: null,
+  };
+  await upsertScheduledGame({ ...common, external_id: 'old' });
+  await upsertScheduledGame({ ...common, external_id: 'new' });
+  await markScheduleSourcePresence('LCHB', 'RED', ['new']);
+  const app = await buildServer({ api: {} } as Bot);
+  try {
+    const login = await app.inject({
+      method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' },
+    });
+    const cookies = { bbg_auth: login.cookies[0]!.value };
+    const schedule = await app.inject({ method: 'GET', url: '/schedule', cookies });
+    assert.equal(schedule.statusCode, 200);
+    assert.match(schedule.body, /возможный дубль/);
+    assert.match(schedule.body, /есть в источнике/);
+    assert.match(schedule.body, /нет в источнике/);
+    assert.equal((schedule.body.match(/Удалить лишнюю/g) ?? []).length, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test('ручное удаление убирает только выбранный дубль и снимает ложный конфликт тренера', async () => {
+  const common = {
+    source: 'LCHB' as const,
+    source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
+    team: 'RED' as const,
+    team_a: 'Yandex Red',
+    team_b: 'Транснефть',
+    game_date: '2099-10-04',
+    game_time: '21:10',
+    location: null,
+    details_url: null,
+  };
+  const oldGame = await upsertScheduledGame({ ...common, external_id: 'old' });
+  const currentGame = await upsertScheduledGame({ ...common, external_id: 'new' });
+  await setScheduledGameCalendarEventId(oldGame.id, 'calendar-old');
+  await savePollSession({
+    poll_id: 'poll-old',
+    event_uid: 'calendar-old',
+    team: 'RED',
+    chat_id: -2,
+    message_id: 404,
+    thread_id: null,
+    question: 'Игра',
+    options: ['Да', 'Нет'],
+    event_start: '2099-10-04T18:10:00.000Z',
+  });
+  await recomputeScheduleConflicts();
+  assert.equal((await getScheduledGameById(currentGame.id))!.coach_conflict, true);
+  let syncedId: string | null = null;
+  let deletedCalendar: string | null = null;
+
+  const result = await deleteScheduledGameWithArtifacts(oldGame.id, {
+    deleteCalendar: async (_team, eventId) => { deletedCalendar = eventId; },
+    syncGame: async (game) => { syncedId = game.id; },
+  });
+  assert.equal(result.deleted.id, oldGame.id);
+  assert.equal(deletedCalendar, 'calendar-old');
+  assert.equal(await getScheduledGameById(oldGame.id), null);
+  assert.equal((await getScheduledGameById(currentGame.id))!.coach_conflict, false);
+  assert.equal(syncedId, currentGame.id);
+  assert.equal((await listScheduledGames()).length, 1);
+  const polls = await db.query<{ count: string }>('select count(*)::text as count from poll_sessions where poll_id = $1', ['poll-old']);
+  assert.equal(polls.rows[0]!.count, '1', 'Telegram-опрос остаётся для ручного удаления');
 });
 
 test('новая игра получает одну голосовалку, повторная проверка её не дублирует', async () => {

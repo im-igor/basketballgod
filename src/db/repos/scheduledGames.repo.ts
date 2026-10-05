@@ -1,5 +1,6 @@
 import { query } from '../pool.js';
 import type { ScheduledGame, ScheduleSource, Team } from '../types.js';
+import { groupScheduleDuplicates, type ScheduleDuplicateGroup } from '../../domain/schedule.js';
 
 export interface ScheduledGameInput {
   source: ScheduleSource;
@@ -29,6 +30,16 @@ export async function upsertScheduledGame(g: ScheduledGameInput): Promise<Schedu
        game_time = excluded.game_time,
        location = excluded.location,
        details_url = excluded.details_url,
+       present_in_source = true,
+       duplicate_notified_at = case
+         when scheduled_games.team = excluded.team
+          and scheduled_games.team_a = excluded.team_a
+          and scheduled_games.team_b = excluded.team_b
+          and scheduled_games.game_date = excluded.game_date
+          and scheduled_games.game_time is not distinct from excluded.game_time
+         then scheduled_games.duplicate_notified_at
+         else null
+       end,
        poll_pending = case when scheduled_games.poll_sent_at is null then true else scheduled_games.poll_pending end,
        updated_at = now()
      returning *`,
@@ -65,8 +76,53 @@ export async function listScheduledGames(limit = 250): Promise<ScheduledGame[]> 
   return rows;
 }
 
+/** Отметить, какие внешние ID присутствовали в последнем успешном ответе лиги. */
+export async function markScheduleSourcePresence(
+  source: ScheduleSource,
+  team: Team,
+  externalIds: string[],
+): Promise<void> {
+  await query(
+    `update scheduled_games
+     set present_in_source = external_id = any($3::text[]),
+         updated_at = now()
+     where source = $1 and team = $2`,
+    [source, team, externalIds],
+  );
+}
+
+export async function listScheduleDuplicateGroups(
+  source?: ScheduleSource,
+  team?: Team,
+): Promise<ScheduleDuplicateGroup[]> {
+  const { rows } = await query<ScheduledGame>(
+    `select * from scheduled_games
+     where ($1::text is null or source = $1)
+       and ($2::text is null or team = $2)
+     order by game_date, game_time nulls last, id`,
+    [source ?? null, team ?? null],
+  );
+  return groupScheduleDuplicates(rows);
+}
+
+/** Пометить группу уже отправленной администраторам. */
+export async function markScheduleDuplicateNotified(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await query(
+    `update scheduled_games
+     set duplicate_notified_at = coalesce(duplicate_notified_at, now())
+     where id = any($1::bigint[])`,
+    [ids],
+  );
+}
+
 export async function getScheduledGameById(id: string): Promise<ScheduledGame | null> {
   const { rows } = await query<ScheduledGame>('select * from scheduled_games where id = $1', [id]);
+  return rows[0] ?? null;
+}
+
+export async function deleteScheduledGameById(id: string): Promise<ScheduledGame | null> {
+  const { rows } = await query<ScheduledGame>('delete from scheduled_games where id = $1 returning *', [id]);
   return rows[0] ?? null;
 }
 
@@ -186,6 +242,8 @@ export async function recomputeScheduleConflicts(): Promise<ScheduledGame[]> {
          exists (
            select 1 from scheduled_games other
            where other.id <> target.id
+             and target.present_in_source = true
+             and other.present_in_source = true
              and target.game_time is not null and other.game_time is not null
              and (target.game_date + target.game_time) <
                  (other.game_date + other.game_time + case other.source when 'LCHB' then interval '80 minutes' else interval '90 minutes' end)

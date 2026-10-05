@@ -1,7 +1,9 @@
 import {
   getScheduledGameById,
   getScheduledGameByExternalId,
+  listScheduleDuplicateGroups,
   listOverlappingScheduledGames,
+  markScheduleSourcePresence,
   recomputeScheduleConflicts,
   setScheduledGameCoachPresent,
   setScheduledGameCalendarEventId,
@@ -10,6 +12,7 @@ import {
 import { upsertScheduledCalendarEvent } from '../google/calendar.js';
 import { fetchSchedulePage } from '../schedule/parser.js';
 import type { ScheduledGame, Team } from '../db/types.js';
+import type { ScheduleDuplicateGroup } from '../domain/schedule.js';
 
 export interface ScheduleImportResult {
   found: number;
@@ -17,9 +20,10 @@ export interface ScheduleImportResult {
   saved: number;
   calendarSynced: number;
   errors: string[];
+  duplicates?: ScheduleDuplicateGroup[];
 }
 
-async function syncRow(row: ScheduledGame): Promise<void> {
+export async function syncScheduledGame(row: ScheduledGame): Promise<void> {
   const eventId = await upsertScheduledCalendarEvent({
     source: row.source,
     externalId: row.external_id,
@@ -60,6 +64,11 @@ export async function importSchedule(team: Team, pageUrl: string): Promise<Sched
       result.errors.push(`${input.team_a} — ${input.team_b}: БД: ${(err as Error).message}`);
     }
   }
+  const source = parsed[0]!.source;
+  await markScheduleSourcePresence(source, team, parsed.map((game) => game.external_id));
+  const duplicates = await listScheduleDuplicateGroups(source, team);
+  result.duplicates = duplicates;
+  const duplicateIds = new Set(duplicates.flatMap((group) => group.games.map((game) => game.id)));
   // Новый матч может сделать конфликтным уже существующий матч другой команды —
   // обновляем в календаре обе стороны пересечения.
   for (const changed of await recomputeScheduleConflicts()) rowsToSync.set(changed.id, changed);
@@ -69,8 +78,10 @@ export async function importSchedule(team: Team, pageUrl: string): Promise<Sched
     if (fresh) rowsToSync.set(id, fresh);
   }
   for (const row of rowsToSync.values()) {
+    // Пока администратор не выбрал лишнюю строку, не создаём второй Calendar event и опрос.
+    if (duplicateIds.has(row.id)) continue;
     try {
-      await syncRow(row);
+      await syncScheduledGame(row);
       result.calendarSynced++;
     } catch (err) {
       result.errors.push(`${row.team_a} — ${row.team_b}: Google Calendar: ${(err as Error).message}`);
@@ -100,6 +111,6 @@ export async function setScheduleCoachDecision(
       if (updated) changed.set(updated.id, updated);
     }
   }
-  for (const row of changed.values()) await syncRow(row);
+  for (const row of changed.values()) await syncScheduledGame(row);
   return { updated: changed.size };
 }

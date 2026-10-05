@@ -196,6 +196,8 @@ export interface ScheduledGame {
   coach_present: boolean | null;
   coach_override: boolean;
   coach_conflict: boolean;
+  present_in_source: boolean;
+  duplicate_notified_at: string | Date | null;
   poll_pending: boolean;
   poll_sent_at: string | Date | null;
   poll_last_error: string | null;

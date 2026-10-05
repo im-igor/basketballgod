@@ -8,6 +8,7 @@ import type { Api } from 'grammy';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { importSchedule, type ScheduleImportResult } from './scheduleImport.service.js';
 import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
+import { notifyScheduleDuplicatesToAdmins } from './scheduleDuplicate.service.js';
 
 export interface ScheduleRefreshResult extends ScheduleImportResult {
   source: ScheduleSource;
@@ -100,6 +101,10 @@ export async function refreshScheduleSourceWithPolls(
   importer: typeof importSchedule = importSchedule,
 ): Promise<ScheduleRefreshResult> {
   const result = await refreshScheduleSource(source, importer);
+  const duplicateNotification = await notifyScheduleDuplicatesToAdmins(api, result.duplicates ?? []);
+  if (duplicateNotification.errors.length > 0) {
+    result.errors.push(`Уведомление о дубле: ${duplicateNotification.errors.join('; ')}`);
+  }
   const config = await getCronConfig();
   if (!config.schedule_import_send_polls) return result;
   const polls = await sendPendingScheduledGamePolls(api, source);

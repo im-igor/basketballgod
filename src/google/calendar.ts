@@ -168,3 +168,15 @@ export async function upsertScheduledCalendarEvent(event: ScheduledCalendarEvent
   }
   return eventId;
 }
+
+/** Удалить импортированное событие. Повторное удаление уже отсутствующего события безопасно. */
+export async function deleteCalendarEvent(team: Team, eventId: string): Promise<void> {
+  const calendar = calendarClient();
+  try {
+    await calendar.events.delete({ calendarId: env.calendars[team], eventId });
+  } catch (err) {
+    const status = (err as { code?: number; response?: { status?: number } }).code ??
+      (err as { response?: { status?: number } }).response?.status;
+    if (status !== 404 && status !== 410) throw err;
+  }
+}

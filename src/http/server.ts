@@ -29,7 +29,7 @@ import {
 import { listAllGamesForMonth, deleteGameById } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
-import { listScheduledGames } from '../db/repos/scheduledGames.repo.js';
+import { listScheduledGames, listScheduleDuplicateGroups } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import {
@@ -41,6 +41,10 @@ import {
 } from '../services/gameFee.service.js';
 import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
 import { refreshScheduleSourceWithPolls } from '../services/scheduleRefresh.service.js';
+import {
+  deleteScheduledGameWithArtifacts,
+  notifyScheduleDuplicatesToAdmins,
+} from '../services/scheduleDuplicate.service.js';
 import { scheduleSourceForUrl } from '../schedule/parser.js';
 import { reloadScheduler } from '../scheduler/cron.js';
 import {
@@ -1169,11 +1173,13 @@ export async function buildServer(bot: Bot) {
   // ── Импорт расписания лиг → БД + Google Calendar ─────────
   app.get('/schedule', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
-    const [games, sources, cronConfig] = await Promise.all([
+    const [games, sources, cronConfig, duplicateGroups] = await Promise.all([
       listScheduledGames(),
       listScheduleSources(),
       getCronConfig(),
+      listScheduleDuplicateGroups(),
     ]);
+    const duplicateIds = new Set(duplicateGroups.flatMap((group) => group.games.map((game) => game.id)));
     const googleCalendarUrl = (team: Team) =>
       `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(env.calendars[team])}`;
     const calendarLinks = `<div class="card row" style="align-items:center">
@@ -1216,6 +1222,7 @@ export async function buildServer(bot: Bot) {
         `${cronConfig.schedule_import_send_polls ? ' · голосовалки новых игр включены' : ''}</span>`
       : '<span class="badge black">автопроверка выключена</span>';
     const rows = games.map((g) => {
+      const isDuplicate = duplicateIds.has(g.id);
       const date = g.game_date instanceof Date
         ? isoToRu(g.game_date)
         : isoToRu(String(g.game_date));
@@ -1247,6 +1254,18 @@ export async function buildServer(bot: Bot) {
           : g.poll_pending
             ? '<span class="badge black">ожидает</span>'
             : '<span class="muted">—</span>';
+      const sourceState = g.present_in_source
+        ? '<span class="badge yes">есть в источнике</span>'
+        : '<span class="badge no">нет в источнике</span>';
+      const duplicateState = isDuplicate
+        ? '<span class="badge no">возможный дубль</span>'
+        : '<span class="muted">—</span>';
+      const deleteConfirmation = JSON.stringify(
+        `Удалить матч «${g.team_a} — ${g.team_b}» ${date} в ${time}? Его событие Google Calendar будет удалено. Telegram-опрос нужно удалить вручную.`,
+      );
+      const actions = isDuplicate
+        ? `<form method="post" action="/schedule/${esc(g.id)}/delete" onsubmit="return confirm(${esc(deleteConfirmation)})"><button class="danger">Удалить лишнюю</button></form>`
+        : '<span class="muted">—</span>';
       return `<tr>
         <td>${esc(g.source)}</td>
         <td>${teamBadge(g.team)}</td>
@@ -1255,9 +1274,11 @@ export async function buildServer(bot: Bot) {
         <td>${esc(date)}</td>
         <td>${esc(time)}</td>
         <td>${esc(g.location ?? '—')}</td>
+        <td>${sourceState}<div style="margin-top:5px">${duplicateState}</div></td>
         <td>${coachControl}</td>
         <td>${g.calendar_event_id ? '<span class="badge yes">в календаре</span>' : '<span class="badge no">ошибка</span>'}</td>
         <td>${pollState}</td>
+        <td>${actions}</td>
       </tr>`;
     }).join('');
 
@@ -1270,8 +1291,8 @@ export async function buildServer(bot: Bot) {
       ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
       ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
       <div class="card"><table class="schedule-table">
-        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Тренер</th><th>Google</th><th>Опрос</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="10" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
+        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Проверка</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="12" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg }));
   });
@@ -1321,9 +1342,14 @@ export async function buildServer(bot: Bot) {
     if (!team || !url) return redirect(reply, '/schedule', 'Укажи команду и URL страницы');
     try {
       const result = await importSchedule(team, url);
+      const notification = await notifyScheduleDuplicatesToAdmins(bot.api, result.duplicates ?? []);
       const summary = `Найдено ${result.found}, сохранено ${result.saved}, синхронизировано с Google Calendar ${result.calendarSynced}`;
-      const errors = result.errors.length > 0
-        ? ` · ошибок ${result.errors.length}: ${result.errors.slice(0, 2).join('; ')}`
+      const allErrors = [
+        ...result.errors,
+        ...notification.errors.map((error) => `уведомление о дубле: ${error}`),
+      ];
+      const errors = allErrors.length > 0
+        ? ` · ошибок ${allErrors.length}: ${allErrors.slice(0, 2).join('; ')}`
         : '';
       return redirect(reply, '/schedule', summary + errors);
     } catch (err) {
@@ -1343,6 +1369,19 @@ export async function buildServer(bot: Bot) {
       return redirect(reply, '/schedule', `План тренера обновлён${suffix}`);
     } catch (err) {
       return redirect(reply, '/schedule', `Ошибка: ${(err as Error).message}`);
+    }
+  });
+
+  app.post('/schedule/:id/delete', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    try {
+      const result = await deleteScheduledGameWithArtifacts(id);
+      const warning = result.syncWarnings.length > 0
+        ? `; матч удалён, но синхронизация оставшейся записи не удалась: ${result.syncWarnings.slice(0, 2).join('; ')}`
+        : '';
+      return redirect(reply, '/schedule', `Лишняя игра и её событие календаря удалены. Telegram-опрос удали вручную${warning}`);
+    } catch (err) {
+      return redirect(reply, '/schedule', `Игра не удалена: ${(err as Error).message}`);
     }
   });
 

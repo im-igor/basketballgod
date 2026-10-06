@@ -1290,11 +1290,11 @@ export async function buildServer(bot: Bot) {
       </div>
       ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
       ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
-      <div class="card"><table class="schedule-table">
+      <div class="card table-scroll"><table class="schedule-table">
         <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Проверка</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="12" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
-    return html(reply, layout('Расписание', body, { flash: msg }));
+    return html(reply, layout('Расписание', body, { flash: msg, wide: true }));
   });
 
   app.post('/schedule/sources', async (req, reply) => {

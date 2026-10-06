@@ -240,6 +240,8 @@ test('админка показывает дубль, актуальность �
     assert.match(schedule.body, /есть в источнике/);
     assert.match(schedule.body, /нет в источнике/);
     assert.equal((schedule.body.match(/Удалить лишнюю/g) ?? []).length, 2);
+    assert.match(schedule.body, /<main class="wide">/);
+    assert.match(schedule.body, /class="card table-scroll"/);
   } finally {
     await app.close();
   }

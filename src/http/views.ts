@@ -58,9 +58,11 @@ header { background:var(--header); border-bottom:1px solid var(--line); padding:
 .nav-menu-panel form { margin:4px 0 0; padding-top:4px; border-top:1px solid var(--line); }
 .header-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
 main { max-width:1120px; margin:0 auto; padding:32px 24px 56px; }
+main.wide { max-width:1600px; }
 h1 { margin:0 0 20px; font-size:26px; line-height:1.2; letter-spacing:-.025em; }
 h2 { margin:0 0 14px; font-size:16px; line-height:1.35; letter-spacing:-.01em; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; margin:14px 0; box-shadow:var(--shadow); }
+.table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 details.card > summary { list-style:none; }
 details.card > summary::-webkit-details-marker { display:none; }
 details.card > summary:after { content:'+'; float:right; color:var(--muted); font-size:20px; line-height:1; }
@@ -156,7 +158,11 @@ button.danger:hover { filter:brightness(.92); }
 }
 `;
 
-export function layout(title: string, body: string, opts: { nav?: boolean; flash?: string } = {}): string {
+export function layout(
+  title: string,
+  body: string,
+  opts: { nav?: boolean; flash?: string; wide?: boolean } = {},
+): string {
   const primarySections = [
     ['1', 'Расписание', '/schedule'],
     ['2', 'Игры', '/games'],
@@ -199,7 +205,7 @@ export function layout(title: string, body: string, opts: { nav?: boolean; flash
 <title>${esc(title)} — basketballgod</title>
 <script>(function(){try{var saved=localStorage.getItem('bbg_theme');var theme=saved||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch(e){}})()</script>
 <style>${STYLE}</style></head>
-<body>${nav}<main>${flash}${body}</main>
+<body>${nav}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
 <script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})()
 (function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})()</script>
 </body></html>`;

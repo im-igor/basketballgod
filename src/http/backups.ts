@@ -6,6 +6,18 @@ import { layout, esc } from './views.js';
 import { env } from '../config/env.js';
 
 const days = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+const sizeUnits = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+const sizeNumber = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+export function formatFileSize(bytes: number): string {
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < sizeUnits.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return `${sizeNumber.format(size)} ${sizeUnits[unit]}`;
+}
 
 function redirect(reply: FastifyReply, message: string): FastifyReply {
   return reply.redirect(`/backups?msg=${encodeURIComponent(message)}`);
@@ -53,7 +65,7 @@ export function registerBackupRoutes(app: FastifyInstance): void {
     const dayOptions = days.map((day, index) =>
       `<option value="${index + 1}"${config.weekday === index + 1 ? ' selected' : ''}>${day}</option>`).join('');
     const rows = archives.map((archive) => `<tr>
-      <td><code>${esc(archive.name)}</code></td><td>${(archive.size / 1024 / 1024).toFixed(1)} МБ</td>
+      <td><code>${esc(archive.name)}</code></td><td>${formatFileSize(archive.size)}</td>
       <td>${esc(new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: env.TZ }).format(archive.modified))}</td>
       <td><a href="/backups/download/${encodeURIComponent(archive.name)}" download>Скачать</a></td></tr>`).join('');
     const status = config.last_success_at

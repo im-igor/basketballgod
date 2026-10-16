@@ -4,6 +4,7 @@ import { closePool } from './db/pool.js';
 import { bot, setupBotCommandsMenu } from './bot/bot.js';
 import { buildServer } from './http/server.js';
 import { startScheduler } from './scheduler/cron.js';
+import { startBackupScheduler } from './scheduler/backup.js';
 import { log } from './util/logger.js';
 
 async function main(): Promise<void> {
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
 
   // 4. Планировщик (расписание читается из cron_config в БД с фолбэком на env).
   await startScheduler(bot.api);
+  await startBackupScheduler();
 
   // 5. Корректное завершение.
   const shutdown = async (sig: string) => {

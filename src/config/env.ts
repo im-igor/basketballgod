@@ -79,6 +79,11 @@ const schema = z.object({
   ADMIN_USERNAME: z.string().min(1).default('admin'),
   ADMIN_PASSWORD: z.string().min(4, 'ADMIN_PASSWORD слишком короткий'),
   SESSION_SECRET: z.string().min(8, 'SESSION_SECRET слишком короткий'),
+  // Хостовый каталог, смонтированный в /backups внутри контейнера.
+  BACKUP_HOST_ROOT: z.string().optional(),
+  BACKUP_MOUNT_ROOT: z.string().optional(),
+  BACKUP_ENV_FILE: z.string().optional(),
+  BACKUP_SECRETS_DIR: z.string().optional(),
 
   COACH_PER_GAME: z.coerce.number().positive().default(5000),
 

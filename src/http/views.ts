@@ -106,6 +106,8 @@ button.danger:hover { filter:brightness(.92); }
 .workflow-check-text { min-width:0; }
 .workflow-check-text strong { display:block; margin-bottom:2px; }
 .workflow-check a { flex:none; font-weight:650; }
+.restore-guide li { margin:0 0 12px; }
+.restore-guide pre { overflow-x:auto; padding:12px; background:var(--field); border:1px solid var(--line); border-radius:9px; font-size:12px; line-height:1.55; }
 .login-wrap { max-width:390px; margin:12vh auto; padding:28px; }
 @media (max-width:600px){
   header { padding:10px 14px; min-height:auto; gap:10px; flex-wrap:wrap; }
@@ -174,6 +176,7 @@ export function layout(
     ['Тарифы', '/tariffs'],
     ['Теги', '/tags'],
     ['Крон', '/cron'],
+    ['Резервные копии', '/backups'],
   ] as const;
   const isCurrent = (label: string) => title === label || title.startsWith(label.slice(0, -1));
   const primaryLinks = primarySections

@@ -21,11 +21,17 @@ services:
     environment:
       # Внутри compose БД доступна по хосту db
       DATABASE_URL: postgres://basketballgod:basketballgod@db:5432/basketballgod
+      BACKUP_HOST_ROOT: ${BACKUP_HOST_ROOT:-${HOME}/basketballgod-backups}
+      BACKUP_MOUNT_ROOT: /backups
+      BACKUP_ENV_FILE: /app/backup-source/.env
+      BACKUP_SECRETS_DIR: /app/secrets
     ports:
       - '${HTTP_PORT:-3000}:3000'
     volumes:
       # Ключ сервис-аккаунта Google (если используешь файл, а не base64)
       - ./secrets:/app/secrets:ro
+      - ./.env:/app/backup-source/.env:ro
+      - ${BACKUP_HOST_ROOT:-${HOME}/basketballgod-backups}:/backups
     depends_on:
       db:
         condition: service_healthy

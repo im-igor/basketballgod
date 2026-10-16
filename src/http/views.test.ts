@@ -13,9 +13,10 @@ test('верхнее меню ведёт по основному процесс�
   const tariffs = html.indexOf('href="/tariffs"');
   const tags = html.indexOf('href="/tags"');
   const cron = html.indexOf('href="/cron"');
+  const backups = html.indexOf('href="/backups"');
 
   assert.ok(schedule < games && games < budgets && budgets < management);
-  assert.ok(management < players && players < extraFees && extraFees < tariffs && tariffs < tags && tags < cron);
+  assert.ok(management < players && players < extraFees && extraFees < tariffs && tariffs < tags && tags < cron && cron < backups);
   assert.match(html, /<span class="step-number">1<\/span>Расписание/);
   assert.match(html, /<span class="step-number">2<\/span>Игры/);
   assert.match(html, /<span class="step-number">3<\/span>Бюджеты/);

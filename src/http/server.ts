@@ -6,6 +6,7 @@ import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
 import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
 import { registerExtraFeeRoutes } from './extraFees.js';
+import { registerBackupRoutes } from './backups.js';
 import { normalizeLogin, parseBudgetArgs } from '../util/args.js';
 import { computeActivityDates, reconcileActivityDates } from '../domain/activity.js';
 import {
@@ -126,6 +127,7 @@ export async function buildServer(bot: Bot) {
 
   // ── Login ────────────────────────────────────────────────
   registerExtraFeeRoutes(app);
+  registerBackupRoutes(app);
 
   app.get('/login', async (req, reply) => {
     const err = (req.query as Record<string, string>).err ? '<p class="badge no">Неверный логин или пароль</p>' : '';

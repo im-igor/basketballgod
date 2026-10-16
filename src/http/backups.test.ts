@@ -41,6 +41,9 @@ test('архивы видны и скачиваются только после 
     assert.match(page.body, /Резервные копии/);
     assert.match(page.body, /Полное восстановление на новой ВМ/);
     assert.match(page.body, /basketballgod_2026-10-16_041200123.tar.gz/);
+    await db.query('update backup_config set last_error=$1 where id=1', ['pg_dump: connection refused <db>']);
+    const failedPage = await app.inject({ method: 'GET', url: '/backups', headers: { cookie } });
+    assert.match(failedPage.body, /pg_dump: connection refused &lt;db&gt;/);
     const settings = await app.inject({ method: 'POST', url: '/backups/settings',
       headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       payload: new URLSearchParams({ frequency: 'daily', weekday: '1', month_day: '1',

@@ -12,6 +12,40 @@ const execFile = promisify(execFileCallback);
 const ARCHIVE_NAME = /^basketballgod_\d{4}-\d{2}-\d{2}_(?:\d{4}|\d{6}|\d{9})\.tar\.gz$/;
 const LOCK_ID = 20261016;
 
+export function pgDumpConnectionEnv(connectionUrl: string): NodeJS.ProcessEnv {
+  const url = new URL(connectionUrl);
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.pathname.slice(1)) {
+    throw new Error('Некорректный DATABASE_URL для резервного копирования');
+  }
+  return {
+    ...process.env,
+    PGHOST: url.hostname,
+    PGPORT: url.port || '5432',
+    PGUSER: decodeURIComponent(url.username),
+    PGPASSWORD: decodeURIComponent(url.password),
+    PGDATABASE: decodeURIComponent(url.pathname.slice(1)),
+    ...(url.searchParams.has('sslmode') ? { PGSSLMODE: url.searchParams.get('sslmode')! } : {}),
+  };
+}
+
+/** Сообщение для админки и БД: диагностические детали без строки подключения и пароля. */
+export function backupErrorMessage(error: unknown): string {
+  const e = error as Error & { stderr?: string };
+  let message = (e.stderr || e.message || String(error)).trim();
+  const connectionUrl = env.DATABASE_URL;
+  message = message.replaceAll(connectionUrl, '[строка подключения скрыта]');
+  try {
+    const password = decodeURIComponent(new URL(connectionUrl).password);
+    if (password) message = message.replaceAll(password, '[пароль скрыт]');
+  } catch { /* Для некорректного URL всё равно маскируем типовые формы ниже. */ }
+  return message
+    .replace(/postgres(?:ql)?:\/\/\S+/gi, '[строка подключения скрыта]')
+    .replace(/(password=)\S+/gi, '$1[скрыт]')
+    .replace(/(?:Bearer\s+|Api-Key\s+|AQAD-|y[01]_|t[01]_)[^\s]+/gi, '[секрет скрыт]')
+    .replace(/[\x00-\x1f\x7f]+/g, ' ')
+    .slice(0, 800) || 'Неизвестная ошибка резервного копирования';
+}
+
 export interface BackupArchive { name: string; size: number; modified: Date }
 
 export function backupHostRoot(): string {
@@ -91,12 +125,12 @@ export async function openBackupArchive(hostPath: string | null, name: string) {
 async function createBackupFiles(work: string): Promise<void> {
   try {
     await execFile('pg_dump', ['--format=custom', `--file=${join(work, 'db.dump')}`], {
-      env: { ...process.env, PGDATABASE: env.DATABASE_URL },
+      env: pgDumpConnectionEnv(env.DATABASE_URL),
       timeout: 30 * 60_000,
       maxBuffer: 4096,
     });
-  } catch {
-    throw new Error('Не удалось снять дамп PostgreSQL; проверь логи приложения и доступность БД');
+  } catch (err) {
+    throw new Error(`Не удалось снять дамп PostgreSQL: ${backupErrorMessage(err)}`);
   }
   const envFile = env.BACKUP_ENV_FILE || join(process.cwd(), '.env');
   if (!(await stat(envFile).catch(() => null))?.isFile()) {
@@ -149,9 +183,9 @@ export async function runBackup(): Promise<string> {
     await recordBackupResult(null);
     return name;
   } catch (err) {
-    const message = (err as Error).message;
+    const message = backupErrorMessage(err);
     await recordBackupResult(message).catch(() => undefined);
-    throw err;
+    throw new Error(message);
   } finally {
     if (partial) await rm(partial, { force: true }).catch(() => undefined);
     if (work) await rm(work, { recursive: true, force: true }).catch(() => undefined);

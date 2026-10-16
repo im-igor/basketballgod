@@ -32,3 +32,19 @@ test('путь резервных копий ограничен смонтиро
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+test('pg_dump получает адрес БД и учётные данные отдельными переменными, а ошибка маскирует секреты', async () => {
+  const { pgDumpConnectionEnv, backupErrorMessage } = await import('./backup.service.js');
+  const connection = 'postgresql://backup:p%40ssword@db:5433/basketballgod?sslmode=require';
+  const pgEnv = pgDumpConnectionEnv(connection);
+  assert.equal(pgEnv.PGHOST, 'db');
+  assert.equal(pgEnv.PGPORT, '5433');
+  assert.equal(pgEnv.PGUSER, 'backup');
+  assert.equal(pgEnv.PGPASSWORD, 'p@ssword');
+  assert.equal(pgEnv.PGDATABASE, 'basketballgod');
+  assert.equal(pgEnv.PGSSLMODE, 'require');
+  const message = backupErrorMessage({ stderr: `pg_dump: ${process.env.DATABASE_URL}; password=topsecret` });
+  assert.match(message, /pg_dump:/);
+  assert.doesNotMatch(message, /unused|topsecret|postgresql:\/\//);
+  assert.throws(() => pgDumpConnectionEnv('not-a-url'));
+});

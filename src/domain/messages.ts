@@ -53,8 +53,8 @@ export interface ChargeView {
   extra_items?: ExtraFeeItem[];
   amount: number;
   paid: boolean;
-  /** Только для черновика в личку: игрока нет в чате команды (или проверить нечем) → пометить. */
-  chatFlag?: boolean;
+  /** Только для черновика: результат проверки членства в чате команды. */
+  chatStatus?: 'member' | 'left' | 'missing_id' | 'check_error';
 }
 
 export interface GameView {
@@ -157,11 +157,13 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
     : '';
   const quote = `<blockquote>${calcInner}${gamesInner}${extraInner}</blockquote>\n`;
 
-  // Перед именем: 🟡 если игрока надо проверить в чате (только черновик в личку),
-  // иначе ❗️ у должника / ✅ у оплатившего.
+  // В черновике показываем точный результат проверки чата; без проверки — статус оплаты.
   const usersList = input.charges
     .map((c) => {
-      const flag = c.chatFlag ? '🟡' : c.paid ? '✅' : '❗️';
+      const flag = c.chatStatus === 'left' ? '🚫'
+        : c.chatStatus === 'missing_id' ? '🟡'
+          : c.chatStatus === 'check_error' ? '⚠️'
+            : c.paid ? '✅' : '❗️';
       const items = c.extra_items ?? [];
       const extra = items.length
         ? ` (в т.ч. разовые: ${items.map((item) => `${escapeHtml(item.title)} +${item.amount}`).join('; ')})`
@@ -169,9 +171,12 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
       return `${flag}${escapeHtml(formatFullName(c.name))} ${c.tg_login} ${c.amount}${extra}`;
     })
     .join('\n');
+  const chatLegend = input.charges.some((c) => c.chatStatus && c.chatStatus !== 'member')
+    ? '\n\nПроверка чата: 🚫 нет в чате · 🟡 нет Telegram ID · ⚠️ ошибка проверки.'
+    : '';
 
   const pay = paymentBlock(input.payment.sberUrl, input.payment.tbankUrl);
-  return `${header}${quote}\n${pay}\n\n${usersList}`;
+  return `${header}${quote}\n${pay}\n\n${usersList}${chatLegend}`;
 }
 
 /** Сообщение-напоминание должникам за месяц. */

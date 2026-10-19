@@ -151,7 +151,7 @@ button.danger:hover { filter:brightness(.92); }
   .games-table th:nth-child(4), .games-table td:nth-child(4),
   .games-table th:nth-child(5), .games-table td:nth-child(5){ display:none; }
   /* Расписание: на мобильном оставляем пары команд, дату, время, площадку,
-     проверку источника и действие с дублем. */
+     признак дубля и действие с ним. */
   .schedule-table th:nth-child(1), .schedule-table td:nth-child(1),
   .schedule-table th:nth-child(2), .schedule-table td:nth-child(2),
   .schedule-table th:nth-child(9), .schedule-table td:nth-child(9),

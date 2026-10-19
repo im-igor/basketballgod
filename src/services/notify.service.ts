@@ -11,7 +11,7 @@ import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
 import { gamesForPlayers } from '../domain/gamefee.js';
-import { loginsToFlag } from './chatCheck.service.js';
+import { chatStatusesByLogin } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, MonthlyPayout, Team } from '../db/types.js';
@@ -21,22 +21,22 @@ import { buildMonthlyPayoutMessage } from '../domain/payouts.js';
 const payment = { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL };
 
 /** Клавиатура под черновиком: правки тренера/товарищеского + публикация. */
-export function draftKeyboard(budgetId: number, team: Team): InlineKeyboard {
-  return new InlineKeyboard()
+export function draftKeyboard(budgetId: number, team: Team, published = false): InlineKeyboard {
+  const keyboard = new InlineKeyboard()
     .text('Тренер −', `budcoach:${budgetId}:-1`)
     .text('Тренер +', `budcoach:${budgetId}:1`)
     .text('✏️ коммент', `budnote:${budgetId}`)
     .row()
     .text('🤝 + Товарищеский', `budfriendly:${budgetId}`)
     .text('🗑 убрать посл.', `budfrdel:${budgetId}`)
-    .row()
-    .text(`✅ Опубликовать в чат ${team}`, `budpub:${budgetId}`);
+    .row();
+  return published ? keyboard : keyboard.text(`✅ Опубликовать в чат ${team}`, `budpub:${budgetId}`);
 }
 
 /**
  * Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат).
- * Если передан `api` — это черновик в личку: дополнительно проверяем присутствие
- * начисляемых игроков в чате команды и помечаем «🟡 проверить в чате» отсутствующих.
+ * Если передан `api` — это черновик для админа (в личке или админке): проверяем
+ * участие игроков в чате команды и отличаем отсутствие от невозможности проверки.
  * Для публикации в чат команды `api` не передаём — сообщение остаётся чистым.
  */
 export async function renderBudgetFromDb(
@@ -55,9 +55,9 @@ export async function renderBudgetFromDb(
     getTariffs(),
     listAllGamesForMonth(budget.month, budget.year),
   ]);
-  const flag = opts.api
-    ? await loginsToFlag(opts.api, budget.team, charges.map((c) => c.tg_login))
-    : new Set<string>();
+  const chatStatuses = opts.api
+    ? await chatStatusesByLogin(opts.api, budget.team, charges.map((c) => c.tg_login))
+    : new Map();
   const views: ChargeView[] = charges.map((c) => ({
     name: c.name,
     tg_login: c.tg_login,
@@ -65,7 +65,7 @@ export async function renderBudgetFromDb(
     extra_items: c.extra_items,
     amount: c.amount,
     paid: c.paid,
-    chatFlag: flag.has(c.tg_login.toLowerCase()),
+    chatStatus: chatStatuses.get(c.tg_login.toLowerCase()),
   }));
   const text = buildBudgetMessage({
     team: budget.team,
@@ -84,6 +84,7 @@ export async function renderBudgetFromDb(
 export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void> {
   const rendered = await renderBudgetFromDb(budgetId);
   if (!rendered) throw new Error(`Бюджет #${budgetId} не найден`);
+  if (rendered.messageId != null) throw new Error('Сбор уже опубликован в чате команды');
   const chat = env.chats[rendered.team];
   const msg = await api.sendMessage(chat.chatId, rendered.text, {
     parse_mode: 'HTML',
@@ -105,10 +106,10 @@ export async function sendBudgetDraftToAdmins(
 ): Promise<void> {
   for (const b of built) {
     const team = b.team;
-    // Черновик с проверкой чата: у кого нет присутствия в чате команды — пометим «🟡».
+    // Черновик с проверкой чата: отсутствие и невозможность проверки показываем отдельно.
     const rendered = await renderBudgetFromDb(b.budgetId, { api });
     const draftText = rendered?.text ?? b.message;
-    const keyboard = draftKeyboard(b.budgetId, team);
+    const keyboard = draftKeyboard(b.budgetId, team, rendered?.messageId != null);
     for (const adminId of env.ADMIN_TG_IDS) {
       // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.
       await api
@@ -162,10 +163,10 @@ export async function sendBudgetDraftsByMonth(
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
-    // Черновик в личку → передаём api: помечаем «🟡» отсутствующих в чате.
+    // Черновик в личку → передаём api для проверки членства в чате.
     const rendered = await renderBudgetFromDb(budget.id, { api });
     if (!rendered) continue;
-    const keyboard = draftKeyboard(budget.id, team);
+    const keyboard = draftKeyboard(budget.id, team, budget.message_id != null);
 
     for (const adminId of env.ADMIN_TG_IDS) {
       // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.

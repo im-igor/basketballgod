@@ -22,6 +22,25 @@ interface Pending {
 
 // Ожидание текстового ответа от админа (по user_id). В памяти: теряется при рестарте — не страшно.
 const pending = new Map<number, Pending>();
+const lateConfirmations = new Map<string, number>();
+
+/** Для опубликованного сбора первое нажатие показывает предупреждение; повторное подтверждает правку. */
+async function confirmedLateEdit(userId: number, budgetId: number, action: string, bothTeams = false): Promise<boolean> {
+  const budget = await getBudgetById(budgetId);
+  if (!budget) return true;
+  const other = bothTeams
+    ? await getBudget(budget.team === 'RED' ? 'BLACK' : 'RED', budget.month, budget.year)
+    : null;
+  if (budget.message_id == null && other?.message_id == null) return true;
+  const key = `${userId}:${budgetId}:${action}`;
+  const expiresAt = lateConfirmations.get(key) ?? 0;
+  if (expiresAt > Date.now()) {
+    lateConfirmations.delete(key);
+    return true;
+  }
+  lateConfirmations.set(key, Date.now() + 60_000);
+  return false;
+}
 
 async function redrawDraft(api: Api, p: Pending, r: RecalcResult): Promise<void> {
   // Перерисовываем черновик через рендер с проверкой чата (метка «🟡 проверить» сохраняется).
@@ -30,9 +49,10 @@ async function redrawDraft(api: Api, p: Pending, r: RecalcResult): Promise<void>
     .editMessageText(p.chatId, p.msgId, rendered?.text ?? r.message, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_markup: draftKeyboard(r.budgetId, r.team),
+      reply_markup: draftKeyboard(r.budgetId, r.team, rendered?.messageId != null),
     })
     .catch((err) => log.warn('[budget-adjust] не удалось перерисовать драфт', (err as Error).message));
+  if (rendered?.messageId != null) await refreshBudgetMessage(api, r.budgetId);
 }
 
 export function registerBudgetAdjust(bot: Bot): void {
@@ -45,6 +65,10 @@ export function registerBudgetAdjust(bot: Bot): void {
     const [, idRaw, changeRaw] = ctx.callbackQuery.data.split(':');
     const id = Number(idRaw);
     try {
+      if (!(await confirmedLateEdit(ctx.from!.id, id, `coach:${changeRaw}`))) {
+        await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Суммы в чате изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.', show_alert: true });
+        return;
+      }
       const r = await recalcBudget(id, { coachDeltaChange: Number(changeRaw) });
       if (!r) {
         await ctx.answerCallbackQuery({ text: 'Бюджет не найден', show_alert: true });
@@ -55,10 +79,13 @@ export function registerBudgetAdjust(bot: Bot): void {
         .editMessageText(rendered?.text ?? r.message, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
-          reply_markup: draftKeyboard(r.budgetId, r.team),
+          reply_markup: draftKeyboard(r.budgetId, r.team, rendered?.messageId != null),
         })
         .catch(() => undefined);
-      await ctx.answerCallbackQuery({ text: `Оплат тренера к сбору: ${r.effCoach}` });
+      const refreshed = rendered?.messageId != null ? await refreshBudgetMessage(ctx.api, r.budgetId) : true;
+      await ctx.answerCallbackQuery({ text: refreshed
+        ? `Оплат тренера к сбору: ${r.effCoach}`
+        : 'Поправка сохранена, но сбор в чате не обновился', show_alert: !refreshed });
     } catch (err) {
       await ctx.answerCallbackQuery({ text: `Ошибка: ${(err as Error).message}`, show_alert: true });
     }
@@ -71,6 +98,10 @@ export function registerBudgetAdjust(bot: Bot): void {
       return;
     }
     const id = Number(ctx.callbackQuery.data.split(':')[1]);
+    if (!(await confirmedLateEdit(ctx.from!.id, id, 'note'))) {
+      await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Проверь полученные переводы и нажми кнопку ещё раз для поздней правки.', show_alert: true });
+      return;
+    }
     const msg = ctx.callbackQuery.message;
     if (!msg) {
       await ctx.answerCallbackQuery({ text: 'Сообщение недоступно', show_alert: true });
@@ -91,6 +122,10 @@ export function registerBudgetAdjust(bot: Bot): void {
       return;
     }
     const id = Number(ctx.callbackQuery.data.split(':')[1]);
+    if (!(await confirmedLateEdit(ctx.from!.id, id, 'friendly', true))) {
+      await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Суммы в чатах изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.', show_alert: true });
+      return;
+    }
     const msg = ctx.callbackQuery.message;
     if (!msg) {
       await ctx.answerCallbackQuery({ text: 'Сообщение недоступно', show_alert: true });
@@ -118,6 +153,10 @@ export function registerBudgetAdjust(bot: Bot): void {
         await ctx.answerCallbackQuery({ text: 'Бюджет не найден', show_alert: true });
         return;
       }
+      if (!(await confirmedLateEdit(ctx.from!.id, id, 'friendly-delete', true))) {
+        await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Суммы в чатах изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.', show_alert: true });
+        return;
+      }
       const removed = await deleteLastManualFriendly(budget.month, budget.year);
       const r = await recalcBudget(id);
       if (r) {
@@ -126,9 +165,10 @@ export function registerBudgetAdjust(bot: Bot): void {
           .editMessageText(rendered?.text ?? r.message, {
             parse_mode: 'HTML',
             link_preview_options: { is_disabled: true },
-            reply_markup: draftKeyboard(r.budgetId, r.team),
+            reply_markup: draftKeyboard(r.budgetId, r.team, rendered?.messageId != null),
           })
           .catch(() => undefined);
+        if (rendered?.messageId != null) await refreshBudgetMessage(ctx.api, r.budgetId);
         // Товарищеский MIXED влияет и на другую команду — обновим её данные/сообщение.
         await refreshOtherTeam(ctx.api, budget.team, budget.month, budget.year);
       }
@@ -164,6 +204,7 @@ export function registerBudgetAdjust(bot: Bot): void {
         await ctx.reply('✅ Комментарий к строке тренера обновлён.');
         return;
       }
+
 
       // friendly: всё до первого «|» — соперник; после — взносы и @login.
       const pipe = text.indexOf('|');

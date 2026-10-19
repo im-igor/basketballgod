@@ -213,7 +213,7 @@ test('бот уведомляет администраторов о дубле �
   assert.match(sent[0]!, /ID <code>new<\/code>/);
 });
 
-test('админка показывает дубль, актуальность строк и кнопку удаления', async () => {
+test('админка показывает дубль без технического статуса источника и кнопку удаления', async () => {
   const common = {
     source: 'LCHB' as const,
     source_url: 'https://basketball.businesschampions.ru/vesna-2099/komandy/142588/',
@@ -237,8 +237,9 @@ test('админка показывает дубль, актуальность �
     const schedule = await app.inject({ method: 'GET', url: '/schedule', cookies });
     assert.equal(schedule.statusCode, 200);
     assert.match(schedule.body, /возможный дубль/);
-    assert.match(schedule.body, /есть в источнике/);
-    assert.match(schedule.body, /нет в источнике/);
+    assert.match(schedule.body, /<th>Дубли<\/th>/);
+    assert.doesNotMatch(schedule.body, /есть в источнике/);
+    assert.doesNotMatch(schedule.body, /нет в источнике/);
     assert.equal((schedule.body.match(/Удалить лишнюю/g) ?? []).length, 2);
     assert.match(schedule.body, /<main class="wide">/);
     assert.match(schedule.body, /class="card table-scroll"/);

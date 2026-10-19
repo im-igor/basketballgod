@@ -3,7 +3,7 @@ import { adminOnly } from '../middlewares/auth.js';
 import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
 import { monthLabel, isoToRu } from '../../domain/dates.js';
-import { listPlayers, getByLogin, setActive } from '../../db/repos/players.repo.js';
+import { listPlayers, getByLogin, setActive, linkTelegramUser } from '../../db/repos/players.repo.js';
 import { syncAllToSheet } from '../../services/sheetSync.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
 import { getTariffs } from '../../db/repos/tariffs.repo.js';
@@ -54,9 +54,22 @@ function safe(handler: (ctx: Context) => Promise<void>) {
 }
 
 export function registerCommands(bot: Bot): void {
-  bot.command(['help', 'start'], async (ctx) => {
+  bot.command('help', async (ctx) => {
     await ctx.reply(HELP, { parse_mode: 'HTML' });
   });
+
+  bot.command('start', safe(async (ctx) => {
+    const username = ctx.from?.username;
+    const linked = username && ctx.from?.id
+      ? await linkTelegramUser(`@${username}`, ctx.from.id)
+      : false;
+    const status = ctx.chat?.type === 'private'
+      ? linked
+        ? '\n\n✅ Ваш Telegram ID привязан к составу. Теперь бот может проверять ваше участие в чате команды.'
+        : '\n\nДля проверки участия в чате нужен @username, совпадающий с записью в составе команды.'
+      : '';
+    await ctx.reply(`${HELP}${status}`, { parse_mode: 'HTML' });
+  }));
 
   // /active @login yes|no — меняет активность в БД (источник правды).
   bot.command('active', adminOnly(safe(async (ctx) => {

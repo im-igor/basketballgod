@@ -88,11 +88,12 @@ export async function setActive(
 export async function linkTelegramUser(
   tgLogin: string,
   tgUserId: number,
-): Promise<void> {
-  await query('update players set tg_user_id = $2, updated_at = now() where lower(tg_login) = lower($1)', [
+): Promise<boolean> {
+  const { rows } = await query<{ id: number }>('update players set tg_user_id = $2, updated_at = now() where lower(tg_login) = lower($1) returning id', [
     tgLogin,
     tgUserId,
   ]);
+  return rows.length > 0;
 }
 
 export async function deletePlayer(id: number): Promise<void> {

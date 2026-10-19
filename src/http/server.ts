@@ -27,13 +27,14 @@ import {
   setChargePaid,
   deleteBudget,
 } from '../db/repos/budgets.repo.js';
-import { listAllGamesForMonth, deleteGameById } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
 import { listScheduledGames, listScheduleDuplicateGroups } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
 import {
+  registerFriendly,
   registerManualGame,
   recomputeGameFee,
   registerValidatedGames,
@@ -685,7 +686,7 @@ export async function buildServer(bot: Bot) {
     if (built.length > 0) {
       const previews: string[] = [];
       for (const b of built) {
-        const rendered = await renderBudgetFromDb(b.id);
+        const rendered = await renderBudgetFromDb(b.id, { api });
         if (!rendered) continue;
         previews.push(
           `<div style="margin-top:12px">
@@ -700,10 +701,13 @@ export async function buildServer(bot: Bot) {
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
-            <form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Опубликовать сборы в чаты обеих команд?')">${hidden}<button>Отправить в чаты команд</button></form>
+            ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
+        <p class="muted">Порядок работы: внеси правки тренера и игр, сверь суммы и отметки игроков в черновике здесь или в личке бота, затем опубликуй сбор. После публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
+        <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
+        ${built.some((b) => b.message_id != null) ? `<form class="inline" method="post" action="/budgets/build" onsubmit="return confirm('Это поздняя пересборка опубликованного сбора: суммы в чатах изменятся. Сверь уже полученные переводы. Продолжить?')">${hidden}<input type="hidden" name="force" value="yes"><button class="ghost">Пересобрать опубликованный сбор</button></form>` : ''}
       </div>`;
     }
 
@@ -752,12 +756,27 @@ export async function buildServer(bot: Bot) {
   app.post('/budgets/build', async (req, reply) => {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
-    await buildAndSaveBudgets(p.month, p.year);
-    return redirect(
-      reply,
-      `/budgets?month=${p.month}&year=${p.year}`,
-      `Черновики за ${monthLabel(p.month, p.year)} собраны для обеих команд`,
-    );
+    const back = `/budgets?month=${p.month}&year=${p.year}`;
+    try {
+      const existing = await Promise.all((['RED', 'BLACK'] as Team[]).map((team) => getBudget(team, p.month, p.year)));
+      const published = existing.some((budget) => budget?.message_id != null);
+      if (published && (req.body as { force?: string }).force !== 'yes') {
+        return redirect(reply, back, 'Сбор уже опубликован. Для поздней пересборки используй отдельную кнопку под черновиками.');
+      }
+      await buildAndSaveBudgets(p.month, p.year);
+      const failed: Team[] = [];
+      if (published) {
+        for (const budget of existing) {
+          if (budget?.message_id != null && !(await refreshBudgetMessage(api, budget.id))) failed.push(budget.team);
+        }
+      }
+      return redirect(reply, back, failed.length
+        ? `Бюджеты пересчитаны, но сообщения не обновились: ${failed.join(', ')}`
+        : published ? 'Опубликованные бюджеты пересчитаны; сверь полученные оплаты'
+          : `Черновики за ${monthLabel(p.month, p.year)} собраны для обеих команд`);
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
   });
 
   // Отправить черновики бюджета обеих команд админам в личку (с кнопкой публикации).
@@ -786,7 +805,7 @@ export async function buildServer(bot: Bot) {
       let sent = 0;
       for (const team of ['RED', 'BLACK'] as Team[]) {
         const budget = await getBudget(team, p.month, p.year);
-        if (budget) {
+        if (budget && budget.message_id == null) {
           await sendBudgetToChat(api, budget.id);
           sent++;
         }
@@ -794,7 +813,7 @@ export async function buildServer(bot: Bot) {
       return redirect(
         reply,
         back,
-        sent ? `Сборы отправлены в чаты (команд: ${sent})` : 'Нет собранных бюджетов за период',
+        sent ? `Сборы отправлены в чаты (команд: ${sent})` : 'Нет неопубликованных бюджетов за период',
       );
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
@@ -816,9 +835,10 @@ export async function buildServer(bot: Bot) {
     const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
-    const [monthBudgets, payout] = await Promise.all([
+    const [monthBudgets, payout, monthGames] = await Promise.all([
       monthBudgetsOf(period.month, period.year),
       getMonthlyPayout(period.month, period.year),
+      listAllGamesForMonth(period.month, period.year),
     ]);
     if (monthBudgets.length === 0) return redirect(reply, '/budgets', 'Бюджет не найден');
     const combined: (Charge & { team: Team })[] = [];
@@ -831,8 +851,56 @@ export async function buildServer(bot: Bot) {
     const total = combined.reduce((s, c) => s + Number(c.amount), 0);
     const paidSum = combined.filter((c) => c.paid).reduce((s, c) => s + Number(c.amount), 0);
     const paidCount = combined.filter((c) => c.paid).length;
-    const anySent = monthBudgets.some((b) => b.message_id);
+    const anySent = monthBudgets.some((b) => b.message_id != null);
+    const editableBudgets = monthBudgets.filter((b) => b.message_id == null);
     const confirmation = monthLabel(period.month, period.year);
+    const coachControls = monthBudgets.map((b) => {
+      const details = b.details;
+      if (!details) return '';
+      const delta = details.coach_delta ?? 0;
+      const effective = Math.max(0, details.coach_sessions + delta);
+      const action = `/budgets/${seg}/coach`;
+      const teamInput = `<input type="hidden" name="team" value="${b.team}">`;
+      const lateConfirm = b.message_id != null
+        ? 'onsubmit="return confirm(\'Сбор уже опубликован. Сумма в чате изменится; сверь уже полученные переводы. Продолжить?\')"'
+        : '';
+      return `<div class="card">
+        <h2>${teamBadge(b.team)} · тренер</h2>
+        <p class="muted">Календарь: ${esc(details.coach_sessions)} трен. · поправка: ${delta > 0 ? '+' : ''}${esc(delta)} · к оплате: ${esc(effective)} трен.</p>
+        ${b.message_id != null ? '<p class="muted">Сбор опубликован. Поздние правки меняют сумму в чате — проверь уже поступившие оплаты.</p>' : ''}
+        <div class="row">
+          <form class="inline" method="post" action="${action}" ${lateConfirm}>${teamInput}<input type="hidden" name="change" value="-1"><button class="ghost" ${effective === 0 ? 'disabled' : ''}>Тренер −</button></form>
+          <form class="inline" method="post" action="${action}" ${lateConfirm}>${teamInput}<input type="hidden" name="change" value="1"><button class="ghost">Тренер +</button></form>
+        </div>
+        <form method="post" action="/budgets/${seg}/coach-note" class="row" style="margin-top:10px" ${lateConfirm}>
+          ${teamInput}<div><label>Комментарий к поправке</label><input name="note" value="${esc(details.coach_note ?? '')}" placeholder="Например: зачёт отменённой тренировки"></div>
+          <div style="flex:0"><label>&nbsp;</label><button class="ghost">Сохранить комментарий</button></div>
+        </form>
+      </div>`;
+    }).join('');
+    const lastFriendly = [...monthGames].reverse().find((g) => g.team === 'MIXED' && g.stat_url === null);
+    const friendlyLateConfirm = anySent
+      ? 'onsubmit="return confirm(\'Сбор уже опубликован. Суммы в чатах изменятся; сверь уже полученные переводы. Продолжить?\')"'
+      : '';
+    const friendlyControls = `<div class="card">
+      <h2>Товарищеский матч</h2>
+      ${anySent ? '<p class="muted">Поздняя правка опубликованного сбора меняет суммы в чатах. Проверь уже поступившие оплаты.</p>' : ''}
+      <form method="post" action="/budgets/${seg}/friendly" ${friendlyLateConfirm}>
+        <div class="row">
+          <div><label>Соперник</label><input name="opponent" placeholder="Название соперника"></div>
+          <div><label>Сыгравшие через пробел или запятую</label><input name="logins" placeholder="@ivan @petr" required></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label><input type="checkbox" name="coach" value="yes" style="width:auto"> Тренер</label>
+          <label><input type="checkbox" name="judge" value="yes" style="width:auto"> Судья</label>
+          <button>🤝 + Товарищеский</button>
+        </div>
+      </form>
+      <div class="row" style="margin-top:12px;align-items:center">
+        <span class="muted">${lastFriendly ? `Последний: ${esc(lastFriendly.opponent ?? 'товарищеский')} · ${esc(lastFriendly.participants?.length ?? 0)} игроков` : 'Ручных товарищеских за месяц нет'}</span>
+        <form class="inline" method="post" action="/budgets/${seg}/friendly/delete-last" onsubmit="return confirm('${anySent ? 'Сбор опубликован: суммы в чатах изменятся. Сверь полученные переводы. ' : ''}Удалить последний ручной товарищеский матч?')"><button class="ghost" ${lastFriendly ? '' : 'disabled'}>🗑 убрать посл.</button></form>
+      </div>
+    </div>`;
 
     // Последняя отметка «Перевёл» = максимальный paid_at среди оплативших.
     const lastPaidMs = combined
@@ -882,29 +950,119 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Бюджет ${esc(monthLabel(period.month, period.year))}</h1>
       <div class="card row" style="align-items:center">
-        <form class="inline" method="post" action="/budgets/${seg}/send"><button>${anySent ? 'Переотправить сбор' : 'Отправить сбор в чат'}</button></form>
+        ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
         <form class="inline" method="post" action="/budgets/${seg}/debtors"><button class="ghost">Напомнить должникам</button></form>
         <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
       </div>
       ${payoutCard}
+      ${coachControls}
+      ${friendlyControls}
       <div class="card">${progressBar(paidSum, total)}</div>
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
-      <details class="card">
+      ${editableBudgets.length ? `<details class="card">
         <summary style="cursor:pointer;font-weight:650;color:var(--danger)">Удалить бюджет из базы</summary>
         <div class="muted" style="margin:10px 0 12px">
           Удалится бюджет выбранной команды и все его начисления, включая историю разовых взносов за этот месяц — они смогут начислиться заново.
-          Игры в базе и уже отправленное сообщение в Telegram останутся.
           Для подтверждения введи точную строку <b>${esc(confirmation)}</b>.
         </div>
         <form method="post" action="/budgets/${seg}/delete" class="row" onsubmit="return confirm('Удалить выбранный бюджет и начисления без возможности отмены?')">
-          <div style="flex:0"><label>Команда</label><select name="team">${monthBudgets.map((b) => `<option value="${esc(b.team)}">${esc(b.team)}</option>`).join('')}</select></div>
+          <div style="flex:0"><label>Команда</label><select name="team">${editableBudgets.map((b) => `<option value="${esc(b.team)}">${esc(b.team)}</option>`).join('')}</select></div>
           <div><label>Подтверждение</label><input name="confirmation" autocomplete="off" placeholder="${esc(confirmation)}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button class="danger">Удалить</button></div>
         </form>
-      </details>`;
+      </details>` : ''}`;
     return html(reply, layout(`Бюджет ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
+  });
+
+  const budgetForForm = async (period: { month: number; year: number }, body: unknown) => {
+    const team = (body as { team?: string })?.team;
+    if (team !== 'RED' && team !== 'BLACK') return null;
+    return getBudget(team, period.month, period.year);
+  };
+
+  app.post('/budgets/:period/coach', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const change = (req.body as { change?: string })?.change;
+    if (change !== '-1' && change !== '1') return redirect(reply, back, 'Неверная поправка тренера');
+    const budget = await budgetForForm(period, req.body);
+    if (!budget?.details) return redirect(reply, back, 'Бюджет команды не найден');
+    const effective = Math.max(0, budget.details.coach_sessions + (budget.details.coach_delta ?? 0));
+    if (change === '-1' && effective === 0) return redirect(reply, back, 'Оплат тренера уже ноль');
+    try {
+      await recalcBudget(budget.id, { coachDeltaChange: Number(change) });
+      const updated = budget.message_id != null ? await refreshBudgetMessage(api, budget.id) : true;
+      return redirect(reply, back, updated
+        ? `Поправка тренера ${budget.team} сохранена`
+        : `Поправка сохранена, но опубликованное сообщение не обновилось`);
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
+  });
+
+  app.post('/budgets/:period/coach-note', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const budget = await budgetForForm(period, req.body);
+    if (!budget?.details) return redirect(reply, back, 'Бюджет команды не найден');
+    const note = (req.body as { note?: string })?.note?.trim() ?? '';
+    if (note.length > 300) return redirect(reply, back, 'Комментарий слишком длинный');
+    try {
+      await recalcBudget(budget.id, { coachNote: note });
+      const updated = budget.message_id != null ? await refreshBudgetMessage(api, budget.id) : true;
+      return redirect(reply, back, updated
+        ? `Комментарий тренера ${budget.team} сохранён`
+        : `Комментарий сохранён, но опубликованное сообщение не обновилось`);
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
+  });
+
+  app.post('/budgets/:period/friendly', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const b = req.body as Record<string, string>;
+    const coach = b.coach === 'yes';
+    const judge = b.judge === 'yes';
+    if (!coach && !judge) return redirect(reply, back, 'Выбери тренера, судью или обоих');
+    const logins = (b.logins ?? '').split(/[\s,]+/).filter(Boolean);
+    if (logins.length === 0 || logins.some((login) => !/^@?[A-Za-z0-9_]{3,}$/.test(login))) {
+      return redirect(reply, back, 'Укажи корректные @login сыгравших');
+    }
+    const opponent = (b.opponent ?? '').trim();
+    if (opponent.length > 150) return redirect(reply, back, 'Название соперника слишком длинное');
+    const label = opponent ? `Товарищеская игра с «${opponent}»` : 'Товарищеская игра';
+    try {
+      const result = await registerFriendly(logins, { coach, judge, label }, period.month, period.year);
+      if (result.matched === 0) return redirect(reply, back, `Игроки не найдены: ${result.unmatched.join(', ')}`);
+      const failed = await recalcMonthBudgets(period.month, period.year);
+      const unmatched = result.unmatched.length ? `; не найдены: ${result.unmatched.join(', ')}` : '';
+      const warning = failed.length ? `; сообщения не обновились: ${failed.join(', ')}` : '';
+      return redirect(reply, back, `Товарищеский добавлен: ${result.matched} игроков, ${result.fee} ₽/чел.${unmatched}${warning}`);
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
+  });
+
+  app.post('/budgets/:period/friendly/delete-last', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    try {
+      const removed = await deleteLastManualFriendly(period.month, period.year);
+      if (!removed) return redirect(reply, back, 'Ручных товарищеских за месяц нет');
+      const failed = await recalcMonthBudgets(period.month, period.year);
+      return redirect(reply, back, failed.length
+        ? `Последний товарищеский удалён, но сообщения не обновились: ${failed.join(', ')}`
+        : 'Последний товарищеский удалён; бюджеты пересчитаны');
+    } catch (err) {
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+    }
   });
 
   app.post('/budgets/:period/delete', async (req, reply) => {
@@ -921,7 +1079,12 @@ export async function buildServer(bot: Bot) {
       return redirect(reply, `/budgets/${seg}`, `Подтверждение не совпало. Введи: ${expected}`);
     }
 
-    const deleted = await deleteBudget(team, period.month, period.year);
+    let deleted;
+    try {
+      deleted = await deleteBudget(team, period.month, period.year);
+    } catch (err) {
+      return redirect(reply, `/budgets/${seg}`, `Ошибка: ${(err as Error).message}`);
+    }
     if (!deleted) return redirect(reply, `/budgets/${seg}`, `Бюджет ${team} уже отсутствует`);
     const left = await monthBudgetsOf(period.month, period.year);
     const message = `Бюджет ${team} за ${expected} удалён вместе с начислениями`;
@@ -936,6 +1099,7 @@ export async function buildServer(bot: Bot) {
     try {
       let sent = 0;
       for (const b of await monthBudgetsOf(period.month, period.year)) {
+        if (b.message_id != null) continue;
         await sendBudgetToChat(api, b.id);
         sent++;
       }
@@ -973,13 +1137,14 @@ export async function buildServer(bot: Bot) {
   });
 
   // ── Игры (учёт взносов; кросс-командно по участникам) ─────
-  // Пересобрать бюджеты обеих команд за месяц по обновлённому пулу игр,
-  // сохранив статус оплат, и обновить отправленное в чат сообщение (если было).
-  const recalcMonthBudgets = async (month: number, year: number): Promise<void> => {
+  // Пересобрать бюджеты обеих команд и обновить опубликованные сообщения, если они есть.
+  const recalcMonthBudgets = async (month: number, year: number): Promise<Team[]> => {
+    const failed: Team[] = [];
     for (const b of await monthBudgetsOf(month, year)) {
       await recalcBudget(b.id);
-      await refreshBudgetMessage(api, b.id).catch(() => undefined);
+      if (b.message_id != null && !(await refreshBudgetMessage(api, b.id))) failed.push(b.team);
     }
+    return failed;
   };
 
   const gamesQuery = (month: number, year: number) => `/games?month=${month}&year=${year}`;
@@ -991,13 +1156,16 @@ export async function buildServer(bot: Bot) {
     const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
 
-    const games = await listAllGamesForMonth(month, year);
+    const [games, redBudget, blackBudget] = await Promise.all([
+      listAllGamesForMonth(month, year), getBudget('RED', month, year), getBudget('BLACK', month, year),
+    ]);
+    const published = redBudget?.message_id != null || blackBudget?.message_id != null;
     const flagBtn = (g: (typeof games)[number], flag: 'coach' | 'judge') => {
       const on = flag === 'coach' ? g.coach_present : g.judge;
       const nextCoach = flag === 'coach' ? !g.coach_present : g.coach_present;
       const nextJudge = flag === 'judge' ? !g.judge : g.judge;
       const label = flag === 'coach' ? (on ? 'тренер был' : 'без тренера') : on ? 'судья был' : 'без судьи';
-      return `<form class="inline" method="post" action="/games/${g.id}/flags">
+      return `<form class="inline" method="post" action="/games/${g.id}/flags" ${published ? 'onsubmit="return confirm(\'Сбор опубликован. Пересчёт игры изменит суммы в чатах. Продолжить?\')"' : ''}>
         <input type="hidden" name="coach_present" value="${nextCoach ? 'yes' : 'no'}">
         <input type="hidden" name="judge" value="${nextJudge ? 'yes' : 'no'}">
         <button class="${on ? 'ok' : 'ghost'}">${label}</button></form>`;
@@ -1015,7 +1183,7 @@ export async function buildServer(bot: Bot) {
           <td>${g.fee_per_player ? '+' + esc(g.fee_per_player) + '₽' : '—'}</td>
           <td>${flagBtn(g, 'coach')}</td>
           <td>${flagBtn(g, 'judge')}</td>
-          <td class="right"><form class="inline" method="post" action="/games/${g.id}/delete" onsubmit="return confirm('Удалить игру и пересчитать бюджеты?')">
+          <td class="right"><form class="inline" method="post" action="/games/${g.id}/delete" onsubmit="return confirm('${published ? 'Сбор опубликован: суммы в чатах изменятся. Сверь полученные переводы. ' : ''}Удалить игру и пересчитать бюджеты?')">
             <button class="ghost">Удалить</button></form></td></tr>`;
       })
       .join('');
@@ -1030,7 +1198,7 @@ export async function buildServer(bot: Bot) {
         МЛБЛ — <a href="https://moscow.ilovebasket.ru/games/1090210?apiUrl=https%3A%2F%2Freg.infobasket.su#protocol" target="_blank" rel="noopener">https://moscow.ilovebasket.ru/games/1090210?apiUrl=https://reg.infobasket.su#protocol</a><br>
         ЛЧБ — <a href="https://basketball.businesschampions.ru/vesna-2026/matches/1469962/" target="_blank" rel="noopener">https://basketball.businesschampions.ru/vesna-2026/matches/1469962/</a>
       </div>
-      <form method="post" action="/games/import">
+      <form method="post" action="/games/import" ${published ? 'onsubmit="return confirm(\'Сбор опубликован. Добавление игр изменит суммы в чатах. Продолжить?\')"' : ''}>
         <div class="row">
           <div style="flex:0"><label>Команда</label><select name="team"><option value="BLACK">BLACK</option><option value="RED">RED</option></select></div>
           <div style="flex:0"><label>Месяц бюджета</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
@@ -1044,7 +1212,7 @@ export async function buildServer(bot: Bot) {
     const addForm = `<div class="card"><h2>Добавить игру вручную</h2>
       <div class="muted" style="margin-bottom:8px">Ручной ввод для товарищеских игр и исключений.
         Состав — список tg-логинов сыгравших (через пробел или запятую), кросс-командно; взнос падает каждому в бюджет его команды.</div>
-      <form method="post" action="/games/add">
+      <form method="post" action="/games/add" ${published ? 'onsubmit="return confirm(\'Сбор опубликован. Добавление игры изменит суммы в чатах. Продолжить?\')"' : ''}>
         <div class="row">
           <div style="flex:0"><label>Команда (метка)</label>
             <select name="team"><option value="BLACK">BLACK</option><option value="RED">RED</option><option value="MIXED">MIXED</option></select></div>
@@ -1066,6 +1234,7 @@ export async function buildServer(bot: Bot) {
           <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button class="ghost">Показать</button></div>
         </form></div>
+      ${published ? '<div class="card muted">Сбор за этот месяц опубликован. Изменение игр может поменять суммы в чатах; сверяй уже поступившие оплаты.</div>' : ''}
       ${importForm}
       ${addForm}
       <div class="card"><table class="games-table">
@@ -1106,8 +1275,7 @@ export async function buildServer(bot: Bot) {
 
       await registerValidatedGames(plans, parsed.value.month, parsed.value.year);
 
-      // Если бюджета ещё нет — создаём его; существующие бюджеты пересчитываем мягко,
-      // сохраняя отметки об оплате и обновляя опубликованные сообщения.
+      // Если бюджета ещё нет — создаём его; существующие черновики пересчитываем.
       const existing = await getBudget(team, parsed.value.month, parsed.value.year);
       if (!existing) {
         await buildAndSaveBudgets(parsed.value.month, parsed.value.year, [team]);
@@ -1158,18 +1326,26 @@ export async function buildServer(bot: Bot) {
   app.post('/games/:id/flags', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const b = req.body as Record<string, string>;
-    const res = await recomputeGameFee(id, { coach_present: b.coach_present === 'yes', judge: b.judge === 'yes' });
-    if (!res || res.month == null || res.year == null) return redirect(reply, '/games', 'Игра не найдена');
-    await recalcMonthBudgets(res.month, res.year);
-    return redirect(reply, gamesQuery(res.month, res.year), 'Взнос пересчитан, бюджеты обновлены');
+    try {
+      const res = await recomputeGameFee(id, { coach_present: b.coach_present === 'yes', judge: b.judge === 'yes' });
+      if (!res || res.month == null || res.year == null) return redirect(reply, '/games', 'Игра не найдена');
+      await recalcMonthBudgets(res.month, res.year);
+      return redirect(reply, gamesQuery(res.month, res.year), 'Взнос пересчитан, бюджеты обновлены');
+    } catch (err) {
+      return redirect(reply, '/games', `Игра не изменена: ${(err as Error).message}`);
+    }
   });
 
   app.post('/games/:id/delete', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const game = await deleteGameById(id);
-    if (!game || game.month == null || game.year == null) return redirect(reply, '/games', 'Игра удалена');
-    await recalcMonthBudgets(game.month, game.year);
-    return redirect(reply, gamesQuery(game.month, game.year), 'Игра удалена, бюджеты обновлены');
+    try {
+      const game = await deleteGameById(id);
+      if (!game || game.month == null || game.year == null) return redirect(reply, '/games', 'Игра удалена');
+      await recalcMonthBudgets(game.month, game.year);
+      return redirect(reply, gamesQuery(game.month, game.year), 'Игра удалена, бюджеты обновлены');
+    } catch (err) {
+      return redirect(reply, '/games', `Игра не удалена: ${(err as Error).message}`);
+    }
   });
 
   // ── Импорт расписания лиг → БД + Google Calendar ─────────
@@ -1256,9 +1432,6 @@ export async function buildServer(bot: Bot) {
           : g.poll_pending
             ? '<span class="badge black">ожидает</span>'
             : '<span class="muted">—</span>';
-      const sourceState = g.present_in_source
-        ? '<span class="badge yes">есть в источнике</span>'
-        : '<span class="badge no">нет в источнике</span>';
       const duplicateState = isDuplicate
         ? '<span class="badge no">возможный дубль</span>'
         : '<span class="muted">—</span>';
@@ -1276,7 +1449,7 @@ export async function buildServer(bot: Bot) {
         <td>${esc(date)}</td>
         <td>${esc(time)}</td>
         <td>${esc(g.location ?? '—')}</td>
-        <td>${sourceState}<div style="margin-top:5px">${duplicateState}</div></td>
+        <td>${duplicateState}</td>
         <td>${coachControl}</td>
         <td>${g.calendar_event_id ? '<span class="badge yes">в календаре</span>' : '<span class="badge no">ошибка</span>'}</td>
         <td>${pollState}</td>
@@ -1293,7 +1466,7 @@ export async function buildServer(bot: Bot) {
       ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
       ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
       <div class="card table-scroll"><table class="schedule-table">
-        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Проверка</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
+        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Дубли</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="12" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg, wide: true }));

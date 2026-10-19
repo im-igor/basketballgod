@@ -118,8 +118,9 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const coachNote = d.coach_note ? ` ${escapeHtml(d.coach_note)}` : '';
   const sharedSessions = d.coach_shared_sessions;
   const sharedNotes = d.coach_shared_notes;
-  const coachLine = usesSharedCoach(input.month, input.year) && sharedSessions
-    ? `Тренер Red: ${sharedSessions.RED} трен. + Black: ${sharedSessions.BLACK} трен. = ${sharedSessions.RED + sharedSessions.BLACK} трен.\n` +
+  const sharedBudget = usesSharedCoach(input.month, input.year) && !!sharedSessions;
+  const coachLine = sharedBudget
+    ? `Тренер ${sharedSessions.RED + sharedSessions.BLACK} трен.\n` +
       `${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session} / ${d.total_players} = ${d.coach_per_person} руб.\n` +
       (sharedNotes?.RED ? `Комментарий Red: ${escapeHtml(sharedNotes.RED)}\n` : '') +
       (sharedNotes?.BLACK ? `Комментарий Black: ${escapeHtml(sharedNotes.BLACK)}\n` : '')
@@ -136,9 +137,9 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
 
   const calcInner =
     `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
-    `Зал Black по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
+    `Зал ${sharedBudget ? '' : 'Black '}по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
     `${gymFormula} = ${d.gym_per_person} руб.\n` +
-    `Зал Red по вторникам - оплачивается Яндексом полностью.\n` +
+    `Зал ${sharedBudget ? '' : 'Red '}по вторникам - оплачивается Яндексом${sharedBudget ? '' : ' полностью'}.\n` +
     `${coachLine}\n` +
     `ИТОГО: ${d.base_per_person} руб.\n`;
 

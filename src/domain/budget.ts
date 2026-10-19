@@ -1,4 +1,4 @@
-import type { Player, Tariffs, Team, GameParticipant, ExtraFeeItem } from '../db/types.js';
+import type { Budget, Player, Tariffs, Team, GameParticipant, ExtraFeeItem } from '../db/types.js';
 import { gameFeeForPlayer } from './gamefee.js';
 
 /** Минимально нужная инфа о событии (чтобы не тащить тип google в домен). */
@@ -54,13 +54,29 @@ const isPaidGym = (e: BudgetEvent) => e.tags.GYM === 'PAID';
 const isTrainingCoach = (e: BudgetEvent) =>
   e.tags.TYPE === 'TRAINING' && e.tags.COACH === 'PAID';
 
+/** Начиная с первого сбора после опубликованного октября-2026 тренер общий для обеих команд. */
+export const usesSharedCoach = (month: number, year: number): boolean => year * 100 + month >= 202611;
+
+/** Перед публикацией обе команды должны иметь один и тот же общий расчёт. */
+export function sharedCoachBudgetsReady(red: Budget | null, black: Budget | null): boolean {
+  const a = red?.details;
+  const b = black?.details;
+  if (!red || !black || !a?.coach_shared_sessions || !b?.coach_shared_sessions) return false;
+  return a.total_players === b.total_players &&
+    a.gym_per_person === b.gym_per_person &&
+    a.coach_per_person === b.coach_per_person &&
+    a.coach_shared_sessions.RED === b.coach_shared_sessions.RED &&
+    a.coach_shared_sessions.BLACK === b.coach_shared_sessions.BLACK &&
+    Number(red.total_per_player) === Number(black.total_per_player);
+}
+
 /**
  * Расчёт месячного бюджета для обеих команд.
  *
  * Зал (платный, по четвергам) делится на ВСЕХ активных игроков обеих команд:
  *   gym = ceil((кол-во_платных_залов * gym_price + locker) / всего_активных)
- * Тренер за тренировки — отдельно по командам:
- *   coach[team] = ceil(трен_команды * coach_per_session / активные_команды)
+ * До ноября 2026 тренер делится внутри команды. Начиная с ноября стоимость
+ * тренировок обеих команд делится между всеми активными игроками.
  * Взносы за игры начисляются персонально тем, кто играл — по всему пулу игр месяца,
  * независимо от команды-метки игры. Так игрок RED, сыгравший за BLACK, получает взнос
  * в свой (RED) бюджет: строка начисления есть только в его домашней команде.
@@ -78,16 +94,23 @@ export function computeBudgets(input: BudgetInput): Record<Team, TeamBudget> {
 
   const gymTotalCost = paidGymSessions * tariffs.gym_paid_price + tariffs.locker_rent_price;
   const gymPerPerson = totalActive > 0 ? Math.ceil(gymTotalCost / totalActive) : 0;
+  const coachSessions = {
+    RED: input.events.filter((e) => e.team === 'RED' && isTrainingCoach(e)).length,
+    BLACK: input.events.filter((e) => e.team === 'BLACK' && isTrainingCoach(e)).length,
+  };
+  const sharedCoach = usesSharedCoach(input.month, input.year);
+  const sharedCoachPerPerson = totalActive > 0
+    ? Math.ceil((coachSessions.RED + coachSessions.BLACK) * tariffs.coach_per_session / totalActive)
+    : 0;
 
   const build = (team: Team): TeamBudget => {
     const teamActive = input.active[team];
     const otherCount = team === 'RED' ? activeBlack : activeRed;
 
-    const coachSessions = input.events.filter(
-      (e) => e.team === team && isTrainingCoach(e),
-    ).length;
-    const coachTotal = coachSessions * tariffs.coach_per_session;
-    const coachPerPerson = teamActive.length > 0 ? Math.ceil(coachTotal / teamActive.length) : 0;
+    const coachTotal = coachSessions[team] * tariffs.coach_per_session;
+    const coachPerPerson = sharedCoach
+      ? sharedCoachPerPerson
+      : teamActive.length > 0 ? Math.ceil(coachTotal / teamActive.length) : 0;
 
     const basePerPerson = gymPerPerson + coachPerPerson;
 
@@ -112,7 +135,7 @@ export function computeBudgets(input: BudgetInput): Record<Team, TeamBudget> {
         players_team: teamActive.length,
         players_other: otherCount,
         paid_gym_sessions: paidGymSessions,
-        coach_sessions: coachSessions,
+        coach_sessions: coachSessions[team],
         gym_per_person: gymPerPerson,
         coach_per_person: coachPerPerson,
         base_per_person: basePerPerson,

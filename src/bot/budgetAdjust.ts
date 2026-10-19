@@ -6,6 +6,7 @@ import { draftKeyboard, refreshBudgetMessage, renderBudgetFromDb } from '../serv
 import { getBudget, getBudgetById } from '../db/repos/budgets.repo.js';
 import { deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { log } from '../util/logger.js';
+import { usesSharedCoach } from '../domain/budget.js';
 
 /**
  * Корректировки черновика бюджета кнопками в личке: ± оплат тренера, комментарий,
@@ -65,8 +66,10 @@ export function registerBudgetAdjust(bot: Bot): void {
     const [, idRaw, changeRaw] = ctx.callbackQuery.data.split(':');
     const id = Number(idRaw);
     try {
-      if (!(await confirmedLateEdit(ctx.from!.id, id, `coach:${changeRaw}`))) {
-        await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Суммы в чате изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.', show_alert: true });
+      const budget = await getBudgetById(id);
+      const shared = budget ? usesSharedCoach(budget.month, budget.year) : false;
+      if (!(await confirmedLateEdit(ctx.from!.id, id, `coach:${changeRaw}`, shared))) {
+        await ctx.answerCallbackQuery({ text: `Сбор уже опубликован. Суммы ${shared ? 'в обоих чатах' : 'в чате'} изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.`, show_alert: true });
         return;
       }
       const r = await recalcBudget(id, { coachDeltaChange: Number(changeRaw) });
@@ -74,6 +77,8 @@ export function registerBudgetAdjust(bot: Bot): void {
         await ctx.answerCallbackQuery({ text: 'Бюджет не найден', show_alert: true });
         return;
       }
+      const otherRefreshed = budget && usesSharedCoach(budget.month, budget.year)
+        ? await refreshOtherTeam(ctx.api, budget.team, budget.month, budget.year) : true;
       const rendered = await renderBudgetFromDb(r.budgetId, { api: ctx.api });
       await ctx
         .editMessageText(rendered?.text ?? r.message, {
@@ -83,9 +88,9 @@ export function registerBudgetAdjust(bot: Bot): void {
         })
         .catch(() => undefined);
       const refreshed = rendered?.messageId != null ? await refreshBudgetMessage(ctx.api, r.budgetId) : true;
-      await ctx.answerCallbackQuery({ text: refreshed
-        ? `Оплат тренера к сбору: ${r.effCoach}`
-        : 'Поправка сохранена, но сбор в чате не обновился', show_alert: !refreshed });
+      await ctx.answerCallbackQuery({ text: refreshed && otherRefreshed
+        ? `Оплат тренера ${r.team}: ${r.effCoach}; суммы пересчитаны`
+        : 'Поправка сохранена, но не все сборы в чатах обновились', show_alert: !refreshed || !otherRefreshed });
     } catch (err) {
       await ctx.answerCallbackQuery({ text: `Ошибка: ${(err as Error).message}`, show_alert: true });
     }
@@ -98,7 +103,9 @@ export function registerBudgetAdjust(bot: Bot): void {
       return;
     }
     const id = Number(ctx.callbackQuery.data.split(':')[1]);
-    if (!(await confirmedLateEdit(ctx.from!.id, id, 'note'))) {
+    const budget = await getBudgetById(id);
+    if (!(await confirmedLateEdit(ctx.from!.id, id, 'note',
+      budget ? usesSharedCoach(budget.month, budget.year) : false))) {
       await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Проверь полученные переводы и нажми кнопку ещё раз для поздней правки.', show_alert: true });
       return;
     }
@@ -200,8 +207,12 @@ export function registerBudgetAdjust(bot: Bot): void {
     try {
       if (entry.kind === 'note') {
         const r = await recalcBudget(entry.budgetId, { coachNote: text });
+        const otherRefreshed = usesSharedCoach(budget.month, budget.year)
+          ? await refreshOtherTeam(ctx.api, budget.team, budget.month, budget.year) : true;
         if (r) await redrawDraft(ctx.api, entry, r);
-        await ctx.reply('✅ Комментарий к строке тренера обновлён.');
+        await ctx.reply(otherRefreshed
+          ? '✅ Комментарий к строке тренера обновлён.'
+          : '⚠️ Комментарий сохранён, но сообщение другой команды в чате не обновилось.');
         return;
       }
 
@@ -253,10 +264,10 @@ async function refreshOtherTeam(
   team: 'RED' | 'BLACK',
   month: number,
   year: number,
-): Promise<void> {
+): Promise<boolean> {
   const other = team === 'RED' ? 'BLACK' : 'RED';
   const otherBudget = await getBudget(other, month, year);
-  if (!otherBudget) return;
+  if (!otherBudget) return true;
   await recalcBudget(otherBudget.id);
-  await refreshBudgetMessage(api, otherBudget.id).catch(() => undefined);
+  return otherBudget.message_id == null || await refreshBudgetMessage(api, otherBudget.id).catch(() => false);
 }

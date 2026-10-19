@@ -10,7 +10,7 @@ import {
   getCharges,
   type ChargeInput,
 } from '../db/repos/budgets.repo.js';
-import { computeBudgets, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
+import { computeBudgets, usesSharedCoach, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
 import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
@@ -77,20 +77,33 @@ export async function buildAndSaveBudgets(
   }));
 
   const computed = computeBudgets({ month, year, tariffs, events, active, games });
+  const previous = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
+  const previousByTeam = { RED: previous[0], BLACK: previous[1] };
+  const effectiveCoach = Object.fromEntries(TEAMS.map((team) => [team, Math.max(
+    0, computed[team].details.coach_sessions + (previousByTeam[team]?.details?.coach_delta ?? 0),
+  )])) as Record<Team, number>;
+  const sharedNotes = Object.fromEntries(TEAMS.map((team) => [
+    team, previousByTeam[team]?.details?.coach_note ?? null,
+  ])) as Record<Team, string | null>;
+  const shared = usesSharedCoach(month, year);
+  const totalPlayers = computed.RED.details.total_players;
+  const sharedCoachPer = totalPlayers > 0
+    ? Math.ceil((effectiveCoach.RED + effectiveCoach.BLACK) * tariffs.coach_per_session / totalPlayers)
+    : 0;
 
   const out: BuiltBudget[] = [];
-  for (const team of teamsToProcess) {
+  // При общем тренере изменение расписания одной команды влияет на оба бюджета.
+  for (const team of shared ? TEAMS : teamsToProcess) {
     const result = computed[team];
 
     // Переносим ранее внесённые ручные правки тренера (если бюджет уже существует).
-    const prev = await getBudget(team, month, year);
+    const prev = previousByTeam[team];
     const prevDetails = prev?.details as BudgetDetails | null;
     const coachDelta = prevDetails?.coach_delta ?? 0;
     const coachNote = prevDetails?.coach_note ?? null;
-    const effCoach = Math.max(0, result.details.coach_sessions + coachDelta);
     const coachPer =
-      result.details.players_team > 0
-        ? Math.ceil((effCoach * tariffs.coach_per_session) / result.details.players_team)
+      shared ? sharedCoachPer : result.details.players_team > 0
+        ? Math.ceil((effectiveCoach[team] * tariffs.coach_per_session) / result.details.players_team)
         : 0;
     const base = result.details.gym_per_person + coachPer;
 
@@ -98,6 +111,7 @@ export async function buildAndSaveBudgets(
       ...result.details,
       coach_per_person: coachPer,
       base_per_person: base,
+      ...(shared ? { coach_shared_sessions: effectiveCoach, coach_shared_notes: sharedNotes } : {}),
       coach_delta: coachDelta,
       coach_note: coachNote,
     };
@@ -133,7 +147,7 @@ export async function buildAndSaveBudgets(
       games: teamGames,
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
-    out.push({ team, budgetId: saved.id, result, message, gamesCount: teamGames.length });
+    if (teamsToProcess.includes(team)) out.push({ team, budgetId: saved.id, result, message, gamesCount: teamGames.length });
   }
   return out;
 }
@@ -169,7 +183,24 @@ export async function recalcBudget(
   const coachNote =
     opts.coachNote !== undefined ? opts.coachNote || null : d.coach_note ?? null;
   const effCoach = Math.max(0, d.coach_sessions + coachDelta);
-  const coachPer = d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session) / d.players_team) : 0;
+  const shared = usesSharedCoach(budget.month, budget.year);
+  const otherTeam = budget.team === 'RED' ? 'BLACK' : 'RED';
+  const other = shared ? await getBudget(otherTeam, budget.month, budget.year) : null;
+  const otherDetails = other?.details as BudgetDetails | null | undefined;
+  const otherEffCoach = otherDetails
+    ? Math.max(0, otherDetails.coach_sessions + (otherDetails.coach_delta ?? 0))
+    : d.coach_shared_sessions?.[otherTeam] ?? 0;
+  const sharedSessions: Record<Team, number> = budget.team === 'RED'
+    ? { RED: effCoach, BLACK: otherEffCoach }
+    : { RED: otherEffCoach, BLACK: effCoach };
+  const sharedNotes: Record<Team, string | null> = budget.team === 'RED'
+    ? { RED: coachNote, BLACK: otherDetails?.coach_note ?? d.coach_shared_notes?.BLACK ?? null }
+    : { RED: otherDetails?.coach_note ?? d.coach_shared_notes?.RED ?? null, BLACK: coachNote };
+  const coachPer = shared
+    ? d.total_players > 0
+      ? Math.ceil((sharedSessions.RED + sharedSessions.BLACK) * tariffs.coach_per_session / d.total_players)
+      : 0
+    : d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session) / d.players_team) : 0;
   const base = d.gym_per_person + coachPer;
 
   // Взносы за игры — по всему пулу месяца (кросс-команда учитывается по участнику).
@@ -193,6 +224,7 @@ export async function recalcBudget(
     coach_note: coachNote,
     coach_per_person: coachPer,
     base_per_person: base,
+    ...(shared ? { coach_shared_sessions: sharedSessions, coach_shared_notes: sharedNotes } : {}),
   };
   await saveBudget({
     team: budget.team, month: budget.month, year: budget.year,

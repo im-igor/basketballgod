@@ -68,6 +68,8 @@ export interface BudgetDetails {
   gym_per_person: number;
   coach_per_person: number; // итог с учётом coach_delta
   base_per_person: number;
+  coach_shared_sessions?: Record<Team, number>; // эффективные оплаты обеих команд с ноября-2026
+  coach_shared_notes?: Record<Team, string | null>;
   // Ручные корректировки черновика (кнопками в личке):
   coach_delta?: number; // ± оплат тренера к календарному coach_sessions
   coach_note?: string | null; // комментарий к строке тренера

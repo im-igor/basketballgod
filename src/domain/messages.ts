@@ -1,6 +1,7 @@
 import type { BudgetDetails, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { monthLabel } from './dates.js';
+import { usesSharedCoach } from './budget.js';
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -115,6 +116,14 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   // Эффективное число оплат тренера = календарное + ручная дельта; комментарий — после «N трен.».
   const effCoach = Math.max(0, d.coach_sessions + (d.coach_delta ?? 0));
   const coachNote = d.coach_note ? ` ${escapeHtml(d.coach_note)}` : '';
+  const sharedSessions = d.coach_shared_sessions;
+  const sharedNotes = d.coach_shared_notes;
+  const coachLine = usesSharedCoach(input.month, input.year) && sharedSessions
+    ? `Тренер Red: ${sharedSessions.RED} трен. + Black: ${sharedSessions.BLACK} трен. = ${sharedSessions.RED + sharedSessions.BLACK} трен.\n` +
+      `${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session} / ${d.total_players} = ${d.coach_per_person} руб.\n` +
+      (sharedNotes?.RED ? `Комментарий Red: ${escapeHtml(sharedNotes.RED)}\n` : '') +
+      (sharedNotes?.BLACK ? `Комментарий Black: ${escapeHtml(sharedNotes.BLACK)}\n` : '')
+    : `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${effCoach} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n`;
 
   // Шкафчик: при нулевой аренде упоминание и слагаемое из формулы убираем.
   const hasLocker = tariffs.locker_rent_price > 0;
@@ -130,7 +139,7 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
     `Зал Black по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
     `${gymFormula} = ${d.gym_per_person} руб.\n` +
     `Зал Red по вторникам - оплачивается Яндексом полностью.\n` +
-    `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${effCoach} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n\n` +
+    `${coachLine}\n` +
     `ИТОГО: ${d.base_per_person} руб.\n`;
 
   // Блок прошедших игр входит в ту же цитату, что и расчёт.

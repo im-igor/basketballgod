@@ -66,7 +66,8 @@ import {
 } from '../services/sheetSync.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
-import type { Team, Player, Charge, MonthlyPayoutItem, ScheduleSource } from '../db/types.js';
+import { sharedCoachBudgetsReady, usesSharedCoach } from '../domain/budget.js';
+import type { Team, Player, Charge, Budget, MonthlyPayoutItem, ScheduleSource } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
@@ -649,12 +650,16 @@ export async function buildServer(bot: Bot) {
         const red = group.find((g) => g.team === 'RED');
         const black = group.find((g) => g.team === 'BLACK');
         const payouts = payoutsByMonth.get(key);
-        const baseInfo = [
+        const teamBaseInfo = [
           red ? `${teamBadge('RED')} ${red.total_per_player ?? '—'}₽` : '',
           black ? `${teamBadge('BLACK')} ${black.total_per_player ?? '—'}₽` : '',
         ]
           .filter(Boolean)
           .join(' · ');
+        const baseInfo = usesSharedCoach(first.month, first.year) &&
+          sharedCoachBudgetsReady(red ?? null, black ?? null)
+          ? `Общий для Red и Black: ${red!.total_per_player}₽`
+          : teamBaseInfo;
         const sentCount = group.filter((g) => g.message_id).length;
         const status =
           sentCount === 0
@@ -682,6 +687,7 @@ export async function buildServer(bot: Bot) {
       getBudget('BLACK', month, year),
     ]);
     const built = [redBudget, blackBudget].filter((b): b is NonNullable<typeof b> => !!b);
+    const commonDraftReady = !usesSharedCoach(month, year) || sharedCoachBudgetsReady(redBudget, blackBudget);
     let draftsCard = '';
     if (built.length > 0) {
       const previews: string[] = [];
@@ -701,10 +707,11 @@ export async function buildServer(bot: Bot) {
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
-            ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button>Опубликовать готовые сборы</button></form>` : ''}
+            ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
         <p class="muted">Порядок работы: внеси правки тренера и игр, сверь суммы и отметки игроков в черновике здесь или в личке бота, затем опубликуй сбор. После публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
+        ${commonDraftReady ? '' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
         <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
         ${built.some((b) => b.message_id != null) ? `<form class="inline" method="post" action="/budgets/build" onsubmit="return confirm('Это поздняя пересборка опубликованного сбора: суммы в чатах изменятся. Сверь уже полученные переводы. Продолжить?')">${hidden}<input type="hidden" name="force" value="yes"><button class="ghost">Пересобрать опубликованный сбор</button></form>` : ''}
@@ -828,6 +835,25 @@ export async function buildServer(bot: Bot) {
     return found.filter((b): b is NonNullable<typeof b> => !!b);
   };
 
+  const recalcCoachBudgets = async (
+    budget: Budget,
+    opts: { coachDeltaChange?: number; coachNote?: string },
+  ): Promise<Team[]> => {
+    await recalcBudget(budget.id, opts);
+    const affected = usesSharedCoach(budget.month, budget.year)
+      ? await monthBudgetsOf(budget.month, budget.year) : [budget];
+    for (const other of affected) {
+      if (other.id !== budget.id) await recalcBudget(other.id);
+    }
+    const failed: Team[] = [];
+    for (const affectedBudget of affected) {
+      if (affectedBudget.message_id != null && !(await refreshBudgetMessage(api, affectedBudget.id))) {
+        failed.push(affectedBudget.team);
+      }
+    }
+    return failed;
+  };
+
   app.get('/budgets/:period', async (req, reply) => {
     const period = parsePeriod((req.params as { period: string }).period);
     const msg = (req.query as Record<string, string>).msg;
@@ -852,6 +878,11 @@ export async function buildServer(bot: Bot) {
     const paidSum = combined.filter((c) => c.paid).reduce((s, c) => s + Number(c.amount), 0);
     const paidCount = combined.filter((c) => c.paid).length;
     const anySent = monthBudgets.some((b) => b.message_id != null);
+    const sharedCoach = usesSharedCoach(period.month, period.year);
+    const commonDraftReady = !sharedCoach || sharedCoachBudgetsReady(
+      monthBudgets.find((b) => b.team === 'RED') ?? null,
+      monthBudgets.find((b) => b.team === 'BLACK') ?? null,
+    );
     const editableBudgets = monthBudgets.filter((b) => b.message_id == null);
     const confirmation = monthLabel(period.month, period.year);
     const coachControls = monthBudgets.map((b) => {
@@ -861,12 +892,13 @@ export async function buildServer(bot: Bot) {
       const effective = Math.max(0, details.coach_sessions + delta);
       const action = `/budgets/${seg}/coach`;
       const teamInput = `<input type="hidden" name="team" value="${b.team}">`;
-      const lateConfirm = b.message_id != null
-        ? 'onsubmit="return confirm(\'Сбор уже опубликован. Сумма в чате изменится; сверь уже полученные переводы. Продолжить?\')"'
+      const lateConfirm = (sharedCoach ? anySent : b.message_id != null)
+        ? `onsubmit="return confirm('${sharedCoach ? 'Суммы в чатах обеих команд могут измениться.' : 'Сумма в чате изменится.'} Сверь уже полученные переводы. Продолжить?')"`
         : '';
       return `<div class="card">
         <h2>${teamBadge(b.team)} · тренер</h2>
-        <p class="muted">Календарь: ${esc(details.coach_sessions)} трен. · поправка: ${delta > 0 ? '+' : ''}${esc(delta)} · к оплате: ${esc(effective)} трен.</p>
+        <p class="muted">Календарь: ${esc(details.coach_sessions)} трен. · поправка: ${delta > 0 ? '+' : ''}${esc(delta)} · к оплате: ${esc(effective)} трен.${sharedCoach ? ` · общий взнос тренера: ${esc(details.coach_per_person)}₽/чел.` : ''}</p>
+        ${sharedCoach ? '<p class="muted">Стоимость тренировок обеих команд делится на всех игроков. Поправка в одной команде меняет оба бюджета.</p>' : ''}
         ${b.message_id != null ? '<p class="muted">Сбор опубликован. Поздние правки меняют сумму в чате — проверь уже поступившие оплаты.</p>' : ''}
         <div class="row">
           <form class="inline" method="post" action="${action}" ${lateConfirm}>${teamInput}<input type="hidden" name="change" value="-1"><button class="ghost" ${effective === 0 ? 'disabled' : ''}>Тренер −</button></form>
@@ -932,7 +964,7 @@ export async function buildServer(bot: Bot) {
 
     const rows = combined
       .map(
-        (c) => `<tr>
+        (c) => `<tr id="charge-${c.id}">
         <td>${esc(formatFullName(c.name))}</td>
         <td>${teamBadge(c.team)}</td>
         <td class="muted">${esc(c.tg_login)}</td>
@@ -950,14 +982,15 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Бюджет ${esc(monthLabel(period.month, period.year))}</h1>
       <div class="card row" style="align-items:center">
-        ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
+        ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button ${commonDraftReady ? '' : 'disabled'}>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
         <form class="inline" method="post" action="/budgets/${seg}/debtors"><button class="ghost">Напомнить должникам</button></form>
         <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
       </div>
+      ${commonDraftReady ? '' : '<div class="card muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд перед публикацией.</div>'}
       ${payoutCard}
       ${coachControls}
       ${friendlyControls}
-      <div class="card">${progressBar(paidSum, total)}</div>
+      <div class="card">${progressBar(paidSum, total)}${sharedCoach ? '<p class="muted">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</p>' : ''}</div>
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
@@ -993,11 +1026,10 @@ export async function buildServer(bot: Bot) {
     const effective = Math.max(0, budget.details.coach_sessions + (budget.details.coach_delta ?? 0));
     if (change === '-1' && effective === 0) return redirect(reply, back, 'Оплат тренера уже ноль');
     try {
-      await recalcBudget(budget.id, { coachDeltaChange: Number(change) });
-      const updated = budget.message_id != null ? await refreshBudgetMessage(api, budget.id) : true;
-      return redirect(reply, back, updated
+      const failed = await recalcCoachBudgets(budget, { coachDeltaChange: Number(change) });
+      return redirect(reply, back, failed.length === 0
         ? `Поправка тренера ${budget.team} сохранена`
-        : `Поправка сохранена, но опубликованное сообщение не обновилось`);
+        : `Поправка сохранена, но сообщения не обновились: ${failed.join(', ')}`);
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }
@@ -1012,11 +1044,10 @@ export async function buildServer(bot: Bot) {
     const note = (req.body as { note?: string })?.note?.trim() ?? '';
     if (note.length > 300) return redirect(reply, back, 'Комментарий слишком длинный');
     try {
-      await recalcBudget(budget.id, { coachNote: note });
-      const updated = budget.message_id != null ? await refreshBudgetMessage(api, budget.id) : true;
-      return redirect(reply, back, updated
+      const failed = await recalcCoachBudgets(budget, { coachNote: note });
+      return redirect(reply, back, failed.length === 0
         ? `Комментарий тренера ${budget.team} сохранён`
-        : `Комментарий сохранён, но опубликованное сообщение не обновилось`);
+        : `Комментарий сохранён, но сообщения не обновились: ${failed.join(', ')}`);
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }
@@ -1133,7 +1164,7 @@ export async function buildServer(bot: Bot) {
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
     const back = budget ? `/budgets/${periodOf(budget.month, budget.year)}` : '/budgets';
-    return redirect(reply, back, 'Оплата обновлена');
+    return reply.redirect(`${back}?msg=${encodeURIComponent('Оплата обновлена')}${budget ? `#charge-${id}` : ''}`);
   });
 
   // ── Игры (учёт взносов; кросс-командно по участникам) ─────

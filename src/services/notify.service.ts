@@ -10,6 +10,7 @@ import {
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
+import { sharedCoachBudgetsReady, usesSharedCoach } from '../domain/budget.js';
 import { gamesForPlayers } from '../domain/gamefee.js';
 import { chatStatusesByLogin } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
@@ -82,6 +83,17 @@ export async function renderBudgetFromDb(
 
 /** Отправить сообщение сбора в чат команды и запомнить message_id. */
 export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void> {
+  const budget = await getBudgetById(budgetId);
+  if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
+  if (budget.message_id != null) throw new Error('Сбор уже опубликован в чате команды');
+  if (usesSharedCoach(budget.month, budget.year)) {
+    const other = await getBudget(budget.team === 'RED' ? 'BLACK' : 'RED', budget.month, budget.year);
+    const red = budget.team === 'RED' ? budget : other;
+    const black = budget.team === 'BLACK' ? budget : other;
+    if (!sharedCoachBudgetsReady(red, black)) {
+      throw new Error('Общий черновик устарел. Пересобери бюджеты обеих команд и проверь суммы перед публикацией');
+    }
+  }
   const rendered = await renderBudgetFromDb(budgetId);
   if (!rendered) throw new Error(`Бюджет #${budgetId} не найден`);
   if (rendered.messageId != null) throw new Error('Сбор уже опубликован в чате команды');

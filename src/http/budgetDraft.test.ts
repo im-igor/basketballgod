@@ -26,23 +26,23 @@ test('админка показывает тот же черновик и вып
     const details = (team: 'RED' | 'BLACK') => JSON.stringify({
       total_players: 2, players_team: 1, players_other: 1, paid_gym_sessions: 0,
       coach_sessions: team === 'RED' ? 2 : 0, gym_per_person: 0,
-      coach_per_person: team === 'RED' ? 10000 : 0,
-      base_per_person: team === 'RED' ? 10000 : 0,
+      coach_per_person: 5000, base_per_person: 5000,
+      coach_shared_sessions: { RED: 2, BLACK: 0 },
     });
     const redBudget = (await db.query<{ id: number }>(
-      'insert into budgets (team, month, year, total_per_player, details) values ($1,11,2026,10000,$2) returning id',
+      'insert into budgets (team, month, year, total_per_player, details) values ($1,11,2026,5000,$2) returning id',
       ['RED', details('RED')],
     )).rows[0]!.id;
     const blackBudget = (await db.query<{ id: number }>(
-      'insert into budgets (team, month, year, total_per_player, details) values ($1,11,2026,0,$2) returning id',
+      'insert into budgets (team, month, year, total_per_player, details) values ($1,11,2026,5000,$2) returning id',
       ['BLACK', details('BLACK')],
     )).rows[0]!.id;
     await db.query(
-      'insert into charges (budget_id, player_id, tg_login, name, base_amount, amount, paid) values ($1,$2,$3,$4,10000,10000,true)',
+      'insert into charges (budget_id, player_id, tg_login, name, base_amount, amount, paid) values ($1,$2,$3,$4,5000,5000,true)',
       [redBudget, redPlayer, '@redplayer', 'Игрок Ред'],
     );
     await db.query(
-      'insert into charges (budget_id, player_id, tg_login, name, base_amount, amount) values ($1,$2,$3,$4,0,0)',
+      'insert into charges (budget_id, player_id, tg_login, name, base_amount, amount) values ($1,$2,$3,$4,5000,5000)',
       [blackBudget, blackPlayer, '@blackplayer', 'Игрок Блэк'],
     );
     let membership: 'member' | 'left' | 'error' = 'member';
@@ -84,14 +84,19 @@ test('админка показывает тот же черновик и вып
     assert.match(page.body, /Сохранить комментарий/);
     assert.match(page.body, /\+ Товарищеский/);
     assert.match(page.body, /убрать посл\./);
+    assert.match(page.body, /Базовый взнос общий для Red и Black/);
+    assert.match(page.body, /общий взнос тренера: 5000₽/);
 
     const coachUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(coachUpdate.headers.location)), /Поправка/);
     let redCharge = (await db.query<{ amount: number; paid: boolean }>(
       'select amount, paid from charges where budget_id=$1', [redBudget],
     )).rows[0]!;
-    assert.equal(Number(redCharge.amount), 5000);
+    assert.equal(Number(redCharge.amount), 2500);
     assert.equal(redCharge.paid, true);
+    assert.equal(Number((await db.query<{ amount: number }>(
+      'select amount from charges where budget_id=$1', [blackBudget],
+    )).rows[0]!.amount), 2500);
 
     await post('/budgets/11-2026/coach-note', { team: 'RED', note: 'Зачёт отменённой тренировки' });
     const note = (await db.query<{ details: { coach_note: string } }>(
@@ -99,6 +104,7 @@ test('админка показывает тот же черновик и вып
     )).rows[0]!.details.coach_note;
     assert.equal(note, 'Зачёт отменённой тренировки');
     assert.match((await renderBudgetFromDb(redBudget))!.text, /Зачёт отменённой тренировки/);
+    assert.match((await renderBudgetFromDb(blackBudget))!.text, /Зачёт отменённой тренировки/);
 
     await post('/budgets/11-2026/friendly', {
       opponent: 'Соседи', logins: '@redplayer, @blackplayer', coach: 'yes',
@@ -111,7 +117,7 @@ test('админка показывает тот же черновик и вып
     )).rows[0]!.fee_per_player;
     assert.equal(Number((await db.query<{ amount: number }>(
       'select amount from charges where budget_id=$1', [blackBudget],
-    )).rows[0]!.amount), Number(friendlyFee));
+    )).rows[0]!.amount), 2500 + Number(friendlyFee));
 
     await post('/budgets/11-2026/friendly/delete-last', {});
     assert.equal((await db.query<{ count: number }>(
@@ -119,14 +125,23 @@ test('админка показывает тот же черновик и вып
     )).rows[0]!.count, 0);
     assert.equal(Number((await db.query<{ amount: number }>(
       'select amount from charges where budget_id=$1', [blackBudget],
-    )).rows[0]!.amount), 0);
+    )).rows[0]!.amount), 2500);
 
     await post('/budgets/11-2026/coach', { team: 'RED', change: '1' });
     redCharge = (await db.query<{ amount: number; paid: boolean }>(
       'select amount, paid from charges where budget_id=$1', [redBudget],
     )).rows[0]!;
-    assert.equal(Number(redCharge.amount), 10000);
+    assert.equal(Number(redCharge.amount), 5000);
     assert.equal(redCharge.paid, true);
+
+    const readyDetails = (await db.query<{ details: Record<string, unknown> }>(
+      'select details from budgets where id=$1', [blackBudget],
+    )).rows[0]!.details;
+    const staleDetails = { ...readyDetails };
+    delete staleDetails.coach_shared_sessions;
+    await db.query('update budgets set details=$2 where id=$1', [blackBudget, JSON.stringify(staleDetails)]);
+    await assert.rejects(sendBudgetToChat(api as never, redBudget), /Пересобери бюджеты обеих команд/);
+    await db.query('update budgets set details=$2 where id=$1', [blackBudget, JSON.stringify(readyDetails)]);
 
     const published = await post('/budgets/publish', { month: '11', year: '2026' });
     assert.match(decodeURIComponent(String(published.headers.location)), /Сборы отправлены/);
@@ -139,13 +154,16 @@ test('админка показывает тот же черновик и вып
 
     const lateUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(lateUpdate.headers.location)), /Поправка/);
-    assert.equal(edited.length, 1);
-    assert.equal(edited[0]![0], -2);
+    assert.equal(edited.length, 2);
+    assert.deepEqual(new Set(edited.map((item) => item[0])), new Set([-1, -2]));
     redCharge = (await db.query<{ amount: number; paid: boolean }>(
       'select amount, paid from charges where budget_id=$1', [redBudget],
     )).rows[0]!;
-    assert.equal(Number(redCharge.amount), 5000);
+    assert.equal(Number(redCharge.amount), 2500);
     assert.equal(redCharge.paid, true);
+    assert.equal(Number((await db.query<{ amount: number }>(
+      'select amount from charges where budget_id=$1', [blackBudget],
+    )).rows[0]!.amount), 2500);
   } finally {
     await app?.close();
     mock.restoreAll();

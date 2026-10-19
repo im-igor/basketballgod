@@ -193,6 +193,25 @@ test('полная сборка бюджета учитывает разовые
   assert.equal((await listExtraFeeAllocations()).length, 2);
 });
 
+test('с ноября сборка одной команды обновляет общий базовый взнос обеих с учётом поправок', async () => {
+  await saveBudget({ team: 'RED', month: 11, year: 2026, total_per_player: 1000,
+    details: { ...details, coach_delta: 2, coach_note: 'Перенос двух оплат' }, charges: [charge(4)] });
+  await saveBudget({ team: 'BLACK', month: 11, year: 2026, total_per_player: 1000,
+    details: { ...details, coach_delta: 1 }, charges: [charge(1), charge(2), charge(3)] });
+
+  const built = await buildAndSaveBudgets(11, 2026, ['RED']);
+  assert.equal(built.length, 1);
+  const red = (await getBudget('RED', 11, 2026))!;
+  const black = (await getBudget('BLACK', 11, 2026))!;
+  assert.equal(red.total_per_player, 4500);
+  assert.equal(black.total_per_player, 4500);
+  assert.deepEqual(red.details!.coach_shared_sessions, { RED: 2, BLACK: 1 });
+  assert.deepEqual(black.details!.coach_shared_sessions, { RED: 2, BLACK: 1 });
+  assert.equal(red.details!.coach_shared_notes?.RED, 'Перенос двух оплат');
+  assert.equal((await getCharges(red.id))[0]!.base_amount, 4500);
+  assert.ok((await getCharges(black.id)).every((c) => c.base_amount === 4500));
+});
+
 test('текст бюджета RED и BLACK: игры участников за обе команды, чемпионат и месяц начисления', async () => {
   const addGame = (ids: number[], patch: Partial<Parameters<typeof saveGame>[0]>) => saveGame({
     event_uid: null, team: 'BLACK', opponent: 'Jumpball Строгино', played_on: '2026-09-20',

@@ -690,17 +690,14 @@ export async function buildServer(bot: Bot) {
     const commonDraftReady = !usesSharedCoach(month, year) || sharedCoachBudgetsReady(redBudget, blackBudget);
     let draftsCard = '';
     if (built.length > 0) {
-      const previews: string[] = [];
-      for (const b of built) {
+      const previews = await Promise.all(built.map(async (b) => {
         const rendered = await renderBudgetFromDb(b.id, { api });
-        if (!rendered) continue;
-        previews.push(
-          `<div style="margin-top:12px">
+        if (!rendered) return '';
+        return `<div style="margin-top:12px">
             <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a></div>
             <div style="white-space:pre-wrap;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere">${rendered.text}</div>
-          </div>`,
-        );
-      }
+          </div>`;
+      }));
       const hidden = `<input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">`;
       draftsCard = `<div class="card">
         <div class="row" style="justify-content:space-between;align-items:center">

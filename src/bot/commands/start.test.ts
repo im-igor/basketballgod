@@ -42,6 +42,26 @@ test('/start привязывает Telegram ID к игроку для пров�
     assert.equal(Number(player.tg_user_id), 12345);
     assert.equal((await checkTeamChatMembership(api as never, 'RED', ['@TestPlayer']))[0]?.status, 'member');
     assert.equal(checkedUserId, 12345);
+
+    const logins = ['@TestPlayer'];
+    for (let i = 0; i < 8; i++) {
+      const login = `@player${i}`;
+      logins.push(login);
+      await db.query('insert into players (name, tg_login, team, tg_user_id) values ($1,$2,$3,$4)',
+        [`Игрок ${i}`, login, 'RED', 100 + i]);
+    }
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const checks = await checkTeamChatMembership({ getChatMember: async (_chatId: number, userId: number) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return { status: userId === 100 ? 'left' : 'member' };
+    } } as never, 'RED', logins);
+    assert.deepEqual(checks.map((check) => check.tg_login), logins);
+    assert.equal(checks[1]?.status, 'left');
+    assert.ok(maxInFlight > 1 && maxInFlight <= 4);
   } finally {
     mock.restoreAll();
     await db.close();

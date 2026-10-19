@@ -29,7 +29,7 @@ import {
 } from '../db/repos/budgets.repo.js';
 import { listAllGamesForMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
-import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
+import { getMonthlyPayout } from '../db/repos/monthlyPayouts.repo.js';
 import { listScheduledGames, listScheduleDuplicateGroups } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
@@ -621,15 +621,7 @@ export async function buildServer(bot: Bot) {
     const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
 
-    // Список — один общий бюджет на месяц (обе команды в одной строке).
-    const [budgets, extraFees, monthlyPayouts] = await Promise.all([
-      listBudgets(),
-      listExtraFees(),
-      listMonthlyPayouts(),
-    ]);
-    const payoutsByMonth = new Map(
-      monthlyPayouts.map((item) => [`${item.year}-${String(item.month).padStart(2, '0')}`, item]),
-    );
+    const extraFees = await listExtraFees();
     const selectedPeriod = year * 100 + month;
     const relevantExtraFees = extraFees.filter((fee) =>
       fee.active && selectedPeriod >= fee.start_period &&
@@ -637,50 +629,6 @@ export async function buildServer(bot: Bot) {
         ? selectedPeriod === fee.start_period
         : fee.end_period === null || selectedPeriod <= fee.end_period),
     );
-    const byMonth = new Map<string, typeof budgets>();
-    for (const b of budgets) {
-      const k = `${b.year}-${String(b.month).padStart(2, '0')}`;
-      (byMonth.get(k) ?? byMonth.set(k, []).get(k)!).push(b);
-    }
-    const rows = [...byMonth.entries()]
-      .sort((a, b) => b[0].localeCompare(a[0])) // новые сверху
-      .map(([, group]) => {
-        const first = group[0]!;
-        const key = `${first.year}-${String(first.month).padStart(2, '0')}`;
-        const red = group.find((g) => g.team === 'RED');
-        const black = group.find((g) => g.team === 'BLACK');
-        const payouts = payoutsByMonth.get(key);
-        const teamBaseInfo = [
-          red ? `${teamBadge('RED')} ${red.total_per_player ?? '—'}₽` : '',
-          black ? `${teamBadge('BLACK')} ${black.total_per_player ?? '—'}₽` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ');
-        const baseInfo = usesSharedCoach(first.month, first.year) &&
-          sharedCoachBudgetsReady(red ?? null, black ?? null)
-          ? `Общий для Red и Black: ${red!.total_per_player}₽`
-          : teamBaseInfo;
-        const sentCount = group.filter((g) => g.message_id).length;
-        const status =
-          sentCount === 0
-            ? '<span class="badge no">черновик</span>'
-            : sentCount === group.length
-              ? '<span class="badge yes">отправлен</span>'
-              : '<span class="badge red">частично</span>';
-        return `<tr>
-          <td><a href="/budgets/${periodOf(first.month, first.year)}">${esc(monthLabel(first.month, first.year))}</a></td>
-          <td>${baseInfo}</td>
-          <td>${payouts
-            ? `<a href="/budgets/${periodOf(first.month, first.year)}#payouts"><b>${esc(payouts.coach_amount)}₽</b></a><div class="muted">${payouts.coach_training_sessions} трен. · ${payouts.coach_games} игр.</div>`
-            : '<span class="muted">ещё не рассчитано</span>'}</td>
-          <td>${payouts
-            ? `<a href="/budgets/${periodOf(first.month, first.year)}#payouts"><b>${esc(payouts.gym_amount)}₽</b></a><div class="muted">${payouts.paid_gym_sessions} аренд.</div>`
-            : '<span class="muted">ещё не рассчитано</span>'}</td>
-          <td>${status}</td>
-        </tr>`;
-      })
-      .join('');
-
     // Черновики за выбранный период (обе команды) — если бюджеты уже собраны.
     const [redBudget, blackBudget] = await Promise.all([
       getBudget('RED', month, year),
@@ -740,11 +688,7 @@ export async function buildServer(bot: Bot) {
           <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button>Собрать</button></div>
         </form></div>
-      ${draftsCard}
-      <div class="card"><h2>История расчётов</h2><table class="budgets-table">
-        <thead><tr><th>Месяц</th><th>Базовый взнос</th><th>Тренеру</th><th>Зал</th><th>Статус</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
-      </table></div>`;
+      ${draftsCard}`;
     return html(reply, layout('Расчёт бюджета', body, { flash: msg }));
   });
 

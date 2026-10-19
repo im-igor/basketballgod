@@ -3,10 +3,11 @@ import test from 'node:test';
 import { layout } from './views.js';
 
 test('верхнее меню ведёт по основному процессу, а периодические действия убраны в управление', () => {
-  const html = layout('Бюджеты', '');
+  const html = layout('Расчёт бюджета', '');
   const schedule = html.indexOf('href="/schedule"');
   const games = html.indexOf('href="/games"');
   const budgets = html.indexOf('href="/budgets"');
+  const collections = html.indexOf('href="/collections"');
   const management = html.indexOf('aria-label="Управление"');
   const players = html.indexOf('href="/players"');
   const extraFees = html.indexOf('href="/extra-fees"');
@@ -15,13 +16,20 @@ test('верхнее меню ведёт по основному процесс�
   const cron = html.indexOf('href="/cron"');
   const backups = html.indexOf('href="/backups"');
 
-  assert.ok(schedule < games && games < budgets && budgets < management);
+  assert.ok(schedule < games && games < budgets && budgets < collections && collections < management);
   assert.ok(management < players && players < extraFees && extraFees < tariffs && tariffs < tags && tags < cron && cron < backups);
   assert.match(html, /<span class="step-number">1<\/span>Расписание/);
   assert.match(html, /<span class="step-number">2<\/span>Игры/);
-  assert.match(html, /<span class="step-number">3<\/span>Бюджеты/);
+  assert.match(html, /<span class="step-number">3<\/span>Расчёт бюджета/);
+  assert.match(html, /<span class="step-number">4<\/span>Сборы/);
   assert.match(html, /href="\/budgets" aria-current="page"/);
   assert.doesNotMatch(html, /class="nav-menu" open/);
+});
+
+test('страница сбора отмечает четвёртый раздел активным', () => {
+  const html = layout('Сбор октября', '');
+  assert.match(html, /href="\/collections" aria-current="page"/);
+  assert.doesNotMatch(html, /href="\/budgets" aria-current="page"/);
 });
 
 test('раздел из меню управления раскрывает его и отмечается активным', () => {

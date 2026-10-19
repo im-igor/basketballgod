@@ -168,7 +168,8 @@ export function layout(
   const primarySections = [
     ['1', 'Расписание', '/schedule'],
     ['2', 'Игры', '/games'],
-    ['3', 'Бюджеты', '/budgets'],
+    ['3', 'Расчёт бюджета', '/budgets'],
+    ['4', 'Сборы', '/collections'],
   ] as const;
   const managementSections = [
     ['Игроки', '/players'],

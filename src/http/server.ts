@@ -178,7 +178,7 @@ export async function buildServer(bot: Bot) {
           </form>
         </div>
       </div>
-      <div class="card muted">Раздел «Бюджеты» — отправка сборов, отметки оплат и напоминания должникам.</div>`;
+      <div class="card muted">«Расчёт бюджета» — сборка, черновики и корректировки. «Сборы» — прогресс оплат, отметки переводов и напоминания должникам.</div>`;
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
@@ -729,7 +729,7 @@ export async function buildServer(bot: Bot) {
       ? `<span class="badge yes">активно: ${relevantExtraFees.length}</span>`
       : '<span class="badge black">нет активных</span>';
 
-    const body = `<h1>Бюджеты</h1>
+    const body = `<h1>Расчёт бюджета</h1>
       <div class="card"><h2>Собрать черновик</h2>
         <div class="workflow-check">
           <div class="workflow-check-main">${extraFeesStatus}<div class="workflow-check-text">
@@ -744,11 +744,11 @@ export async function buildServer(bot: Bot) {
           <div style="flex:0"><label>&nbsp;</label><button>Собрать</button></div>
         </form></div>
       ${draftsCard}
-      <div class="card"><table class="budgets-table">
+      <div class="card"><h2>История расчётов</h2><table class="budgets-table">
         <thead><tr><th>Месяц</th><th>Базовый взнос</th><th>Тренеру</th><th>Зал</th><th>Статус</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="5" class="muted">Пока нет бюджетов</td></tr>'}</tbody>
       </table></div>`;
-    return html(reply, layout('Бюджеты', body, { flash: msg }));
+    return html(reply, layout('Расчёт бюджета', body, { flash: msg }));
   });
 
   /** Прочитать и провалидировать месяц/год из тела формы. */
@@ -835,6 +835,48 @@ export async function buildServer(bot: Bot) {
     return found.filter((b): b is NonNullable<typeof b> => !!b);
   };
 
+  app.get('/collections', async (req, reply) => {
+    const msg = (req.query as Record<string, string>).msg;
+    const budgets = await listBudgets();
+    const withCharges = await Promise.all(budgets.map(async (budget) => ({
+      budget, charges: await getCharges(budget.id),
+    })));
+    const byMonth = new Map<string, typeof withCharges>();
+    for (const item of withCharges) {
+      const key = periodOf(item.budget.month, item.budget.year);
+      (byMonth.get(key) ?? byMonth.set(key, []).get(key)!).push(item);
+    }
+    const cards = [...byMonth].map(([seg, items]) => {
+      const charges = items.flatMap((item) => item.charges);
+      const paid = charges.filter((charge) => charge.paid);
+      const unpaidCount = charges.length - paid.length;
+      const total = charges.reduce((sum, charge) => sum + Number(charge.amount), 0);
+      const paidAmount = paid.reduce((sum, charge) => sum + Number(charge.amount), 0);
+      const published = items.filter((item) => item.budget.message_id != null).length;
+      const canRemind = items.some((item) => item.budget.message_id != null &&
+        item.charges.some((charge) => !charge.paid));
+      const first = items[0]!.budget;
+      const status = published === 2
+        ? '<span class="badge yes">опубликован</span>'
+        : published > 0 ? '<span class="badge red">частично опубликован</span>'
+          : '<span class="badge no">черновик</span>';
+      return `<div class="card">
+        <div class="row" style="align-items:center;justify-content:space-between">
+          <div><h2 style="margin:0"><a href="/collections/${seg}">${esc(monthLabel(first.month, first.year))}</a></h2>${status}</div>
+          <div class="row" style="align-items:center">
+            <form class="inline" method="post" action="/collections/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
+            <a href="/collections/${seg}">Открыть список →</a>
+          </div>
+        </div>
+        <p><b>${charges.length}</b> участников · <b>${paid.length}</b> сдали · <b>${unpaidCount}</b> не сдали</p>
+        ${progressBar(paidAmount, total)}
+      </div>`;
+    }).join('');
+    const body = `<h1>Сборы</h1>
+      ${cards || '<div class="card muted">Бюджетов пока нет. Сначала собери черновик в разделе «Расчёт бюджета».</div>'}`;
+    return html(reply, layout('Сборы', body, { flash: msg }));
+  });
+
   const recalcCoachBudgets = async (
     budget: Budget,
     opts: { coachDeltaChange?: number; coachNote?: string },
@@ -854,10 +896,14 @@ export async function buildServer(bot: Bot) {
     return failed;
   };
 
-  app.get('/budgets/:period', async (req, reply) => {
+  const renderBudgetDetail = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    view: 'calculation' | 'collection',
+  ) => {
     const period = parsePeriod((req.params as { period: string }).period);
     const msg = (req.query as Record<string, string>).msg;
-    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    if (!period) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Неверный период бюджета');
     const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
@@ -866,7 +912,7 @@ export async function buildServer(bot: Bot) {
       getMonthlyPayout(period.month, period.year),
       listAllGamesForMonth(period.month, period.year),
     ]);
-    if (monthBudgets.length === 0) return redirect(reply, '/budgets', 'Бюджет не найден');
+    if (monthBudgets.length === 0) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Бюджет не найден');
     const combined: (Charge & { team: Team })[] = [];
     for (const b of monthBudgets) {
       for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team });
@@ -973,28 +1019,14 @@ export async function buildServer(bot: Bot) {
         <td>${c.extra_items.map((item) => `${esc(item.title)}: +${esc(item.amount)}₽`).join('<br>')}</td>
         <td><b>${esc(c.amount)}₽</b></td>
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
-        <td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
+        ${view === 'collection' ? `<td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
           <input type="hidden" name="value" value="${c.paid ? 'no' : 'yes'}">
           <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Перевёл'}</button>
-        </form></td></tr>`,
+        </form></td>` : ''}</tr>`,
       )
       .join('');
 
-    const body = `<h1>Бюджет ${esc(monthLabel(period.month, period.year))}</h1>
-      <div class="card row" style="align-items:center">
-        ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button ${commonDraftReady ? '' : 'disabled'}>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
-        <form class="inline" method="post" action="/budgets/${seg}/debtors"><button class="ghost">Напомнить должникам</button></form>
-        <span class="muted" style="margin-left:auto">Сдали ${paidCount} из ${combined.length}${lastCheck ? ` · последняя проверка: ${esc(lastCheck)}` : ''}</span>
-      </div>
-      ${commonDraftReady ? '' : '<div class="card muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд перед публикацией.</div>'}
-      ${payoutCard}
-      ${coachControls}
-      ${friendlyControls}
-      <div class="card">${progressBar(paidSum, total)}${sharedCoach ? '<p class="muted">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</p>' : ''}</div>
-      <div class="card"><table class="pay-table">
-        <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
-      ${editableBudgets.length ? `<details class="card">
+    const deleteCard = editableBudgets.length ? `<details class="card">
         <summary style="cursor:pointer;font-weight:650;color:var(--danger)">Удалить бюджет из базы</summary>
         <div class="muted" style="margin:10px 0 12px">
           Удалится бюджет выбранной команды и все его начисления, включая историю разовых взносов за этот месяц — они смогут начислиться заново.
@@ -1005,9 +1037,43 @@ export async function buildServer(bot: Bot) {
           <div><label>Подтверждение</label><input name="confirmation" autocomplete="off" placeholder="${esc(confirmation)}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button class="danger">Удалить</button></div>
         </form>
-      </details>` : ''}`;
-    return html(reply, layout(`Бюджет ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
-  });
+      </details>` : '';
+    if (view === 'calculation') {
+      const body = `<h1>Расчёт бюджета ${esc(monthLabel(period.month, period.year))}</h1>
+        <p><a href="/budgets?month=${period.month}&year=${period.year}">← Черновик месяца</a> · <a href="/collections/${seg}">Перейти к сбору →</a></p>
+        <div class="card row" style="align-items:center">
+          ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button ${commonDraftReady ? '' : 'disabled'}>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
+          <span class="muted">${monthBudgets.length} команд · ${combined.length} участников</span>
+        </div>
+        ${commonDraftReady ? '' : '<div class="card muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд перед публикацией.</div>'}
+        ${payoutCard}
+        ${coachControls}
+        ${friendlyControls}
+        ${sharedCoach ? '<div class="card muted">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</div>' : ''}
+        <div class="card"><h2>Начисления игрокам</h2><table class="pay-table">
+          <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
+        ${deleteCard}`;
+      return html(reply, layout(`Расчёт бюджета ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
+    }
+
+    const publishedTeams = new Set(monthBudgets.filter((b) => b.message_id != null).map((b) => b.team));
+    const canRemind = combined.some((c) => !c.paid && publishedTeams.has(c.team));
+    const body = `<h1>Сбор ${esc(monthLabel(period.month, period.year))}</h1>
+      <p><a href="/collections">← Все сборы</a> · <a href="/budgets/${seg}">К расчёту бюджета →</a></p>
+      <div class="card row" style="align-items:center;justify-content:space-between">
+        <span><b>${combined.length}</b> участников · <b>${paidCount}</b> сдали · <b>${combined.length - paidCount}</b> не сдали${lastCheck ? ` · последняя отметка: ${esc(lastCheck)}` : ''}</span>
+        <form class="inline" method="post" action="/budgets/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
+      </div>
+      <div class="card">${progressBar(paidSum, total)}</div>
+      <div class="card"><table class="pay-table">
+        <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
+    return html(reply, layout(`Сбор ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
+  };
+
+  app.get('/budgets/:period', (req, reply) => renderBudgetDetail(req, reply, 'calculation'));
+  app.get('/collections/:period', (req, reply) => renderBudgetDetail(req, reply, 'collection'));
 
   const budgetForForm = async (period: { month: number; year: number }, body: unknown) => {
     const team = (body as { team?: string })?.team;
@@ -1140,30 +1206,37 @@ export async function buildServer(bot: Bot) {
     }
   });
 
-  // Напомнить должникам в чатах обеих команд (за месяц бюджета).
-  app.post('/budgets/:period/debtors', async (req, reply) => {
+  // Напомнить должникам по опубликованным сборам месяца.
+  const remindDebtors = async (req: FastifyRequest, reply: FastifyReply, backToList: boolean) => {
     const period = parsePeriod((req.params as { period: string }).period);
-    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
+    if (!period) return redirect(reply, '/collections', 'Неверный период бюджета');
     const seg = periodOf(period.month, period.year);
+    const back = backToList ? '/collections' : `/collections/${seg}`;
     try {
       let count = 0;
+      let published = 0;
       for (const b of await monthBudgetsOf(period.month, period.year)) {
+        if (b.message_id == null) continue;
+        published++;
         count += (await sendDebtors(api, b.id)).count;
       }
-      return redirect(reply, `/budgets/${seg}`, count ? `Напоминание отправлено (должников: ${count})` : 'Должников нет');
+      return redirect(reply, back, !published ? 'Сбор ещё не опубликован'
+        : count ? `Напоминание отправлено (должников: ${count})` : 'Должников нет');
     } catch (err) {
-      return redirect(reply, `/budgets/${seg}`, `Ошибка: ${(err as Error).message}`);
+      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }
-  });
+  };
+  app.post('/budgets/:period/debtors', (req, reply) => remindDebtors(req, reply, false));
+  app.post('/collections/:period/debtors', (req, reply) => remindDebtors(req, reply, true));
 
   app.post('/charges/:id/pay', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const value = (req.body as { value?: string }).value === 'yes';
     const charge = await setChargePaid(id, value);
-    if (!charge) return redirect(reply, '/budgets', 'Оплата обновлена');
+    if (!charge) return redirect(reply, '/collections', 'Оплата не найдена');
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
-    const back = budget ? `/budgets/${periodOf(budget.month, budget.year)}` : '/budgets';
+    const back = budget ? `/collections/${periodOf(budget.month, budget.year)}` : '/collections';
     return reply.redirect(`${back}?msg=${encodeURIComponent('Оплата обновлена')}${budget ? `#charge-${id}` : ''}`);
   });
 

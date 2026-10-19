@@ -86,6 +86,27 @@ test('админка показывает тот же черновик и вып
     assert.match(page.body, /убрать посл\./);
     assert.match(page.body, /Базовый взнос общий для Red и Black/);
     assert.match(page.body, /общий взнос тренера: 5000₽/);
+    assert.doesNotMatch(page.body, /action="\/charges\/\d+\/pay"/);
+    assert.doesNotMatch(page.body, /Напомнить должникам/);
+
+    const collections = await app.inject({ method: 'GET', url: '/collections', headers: { cookie } });
+    assert.equal(collections.statusCode, 200);
+    assert.match(collections.body, /2<\/b> участников · <b>1<\/b> сдали · <b>1<\/b> не сдали/);
+    assert.match(collections.body, /href="\/collections\/11-2026"/);
+    assert.match(collections.body, /action="\/collections\/11-2026\/debtors"/);
+    const collection = await app.inject({ method: 'GET', url: '/collections/11-2026', headers: { cookie } });
+    assert.equal(collection.statusCode, 200);
+    assert.match(collection.body, /action="\/charges\/\d+\/pay"/);
+    assert.doesNotMatch(collection.body, /Тренер −/);
+    assert.doesNotMatch(collection.body, /Товарищеский матч/);
+    const blackChargeId = (await db.query<{ id: number }>(
+      'select id from charges where budget_id=$1', [blackBudget],
+    )).rows[0]!.id;
+    const paidResponse = await post(`/charges/${blackChargeId}/pay`, { value: 'yes' });
+    assert.match(String(paidResponse.headers.location), new RegExp(`/collections/11-2026\\?msg=.*#charge-${blackChargeId}$`));
+    assert.match((await app.inject({ method: 'GET', url: '/collections', headers: { cookie } })).body,
+      /2<\/b> участников · <b>2<\/b> сдали · <b>0<\/b> не сдали/);
+    await post(`/charges/${blackChargeId}/pay`, { value: 'no' });
 
     const coachUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(coachUpdate.headers.location)), /Поправка/);
@@ -151,6 +172,10 @@ test('админка показывает тот же черновик и вып
     assert.match(decodeURIComponent(String(publishedAgain.headers.location)), /Нет неопубликованных/);
     assert.equal(sent.length, 2);
     await assert.rejects(sendBudgetToChat(api as never, redBudget), /уже опубликован/);
+    const reminder = await post('/collections/11-2026/debtors', {});
+    assert.match(decodeURIComponent(String(reminder.headers.location)), /\/collections\?msg=Напоминание отправлено/);
+    assert.equal(sent.length, 3);
+    assert.match(String(sent[2]![1]), /Должники/);
 
     const lateUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(lateUpdate.headers.location)), /Поправка/);

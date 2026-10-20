@@ -620,6 +620,7 @@ export async function buildServer(bot: Bot) {
     const def = defaultBudgetPeriod();
     const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
+    const checkChats = q.checkChats === '1';
 
     const extraFees = await listExtraFees();
     const selectedPeriod = year * 100 + month;
@@ -639,7 +640,7 @@ export async function buildServer(bot: Bot) {
     let draftsCard = '';
     if (built.length > 0) {
       const previews = await Promise.all(built.map(async (b) => {
-        const rendered = await renderBudgetFromDb(b.id, { api });
+        const rendered = await renderBudgetFromDb(b.id, checkChats ? { api } : {});
         if (!rendered) return '';
         return `<div style="margin-top:12px">
             <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a></div>
@@ -651,13 +652,14 @@ export async function buildServer(bot: Bot) {
         <div class="row" style="justify-content:space-between;align-items:center">
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <form class="inline" method="get" action="/budgets">${hidden}<input type="hidden" name="checkChats" value="1"><button class="ghost">${checkChats ? 'Проверить чаты снова' : 'Проверить игроков в чатах'}</button></form>
             <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
             ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
-        <p class="muted">Порядок работы: внеси правки тренера и игр, сверь суммы и отметки игроков в черновике здесь или в личке бота, затем опубликуй сбор. После публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
+        <p class="muted">Порядок работы: внеси правки тренера и игр, сверь суммы, при необходимости проверь игроков в чатах, затем опубликуй сбор. Проверка чатов запускается только кнопкой и показывает состояние на момент запроса. После публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
         ${commonDraftReady ? '' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
-        <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
+        ${checkChats ? '<p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>' : ''}
         ${previews.join('')}
         ${built.some((b) => b.message_id != null) ? `<form class="inline" method="post" action="/budgets/build" onsubmit="return confirm('Это поздняя пересборка опубликованного сбора: суммы в чатах изменятся. Сверь уже полученные переводы. Продолжить?')">${hidden}<input type="hidden" name="force" value="yes"><button class="ghost">Пересобрать опубликованный сбор</button></form>` : ''}
       </div>`;

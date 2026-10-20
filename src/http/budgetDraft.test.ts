@@ -46,10 +46,12 @@ test('админка показывает тот же черновик и вып
       [blackBudget, blackPlayer, '@blackplayer', 'Игрок Блэк'],
     );
     let membership: 'member' | 'left' | 'error' = 'member';
+    let membershipChecks = 0;
     const sent: unknown[][] = [];
     const edited: unknown[][] = [];
     const api = {
       getChatMember: async () => {
+        membershipChecks++;
         if (membership === 'error') throw new Error('Тестовая ошибка Telegram');
         return { status: membership };
       },
@@ -67,11 +69,18 @@ test('админка показывает тот же черновик и вып
     });
 
     const privateDraft = await renderBudgetFromDb(redBudget, { api: api as never });
+    const plainDraft = await renderBudgetFromDb(redBudget);
     const preview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.equal(preview.statusCode, 200);
-    assert.ok(preview.body.includes(privateDraft!.text));
-    assert.match(preview.body, /🟡Ред Игрок/);
-    assert.match(preview.body, /бот ещё не знает Telegram ID игрока/);
+    assert.ok(preview.body.includes(plainDraft!.text));
+    assert.doesNotMatch(preview.body, /бот ещё не знает Telegram ID игрока/);
+    assert.match(preview.body, /Проверить игроков в чатах/);
+    assert.equal(membershipChecks, 0);
+    const checkedPreview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026&checkChats=1', headers: { cookie } });
+    assert.ok(checkedPreview.body.includes(privateDraft!.text));
+    assert.match(checkedPreview.body, /🟡Ред Игрок/);
+    assert.match(checkedPreview.body, /бот ещё не знает Telegram ID игрока/);
+    assert.equal(membershipChecks, 1);
     membership = 'left';
     assert.match((await renderBudgetFromDb(blackBudget, { api: api as never }))!.text, /🚫Блэк Игрок/);
     membership = 'error';

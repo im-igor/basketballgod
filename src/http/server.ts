@@ -34,7 +34,7 @@ import { calculateMonthlyPayoutPreview } from '../services/monthlyPayout.service
 import { listScheduledGames, listScheduleDuplicateGroups } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget, updateBudgetCorrection } from '../services/budget.service.js';
-import { correctionNote } from '../domain/budgetCorrections.js';
+import { correctionNote, isLegacyAutoCorrectionNote } from '../domain/budgetCorrections.js';
 import {
   registerFriendly,
   registerManualGame,
@@ -660,7 +660,7 @@ export async function buildServer(bot: Bot) {
         ${adjustmentRow('Зал', correction.gym_delta, 'gym')}
         <form method="post" action="/budgets/${seg}/correction-note">
           <label for="correction-note">Комментарий в текстах бюджетов</label>
-          <textarea id="correction-note" name="note" maxlength="500" rows="3" ${anySent ? 'disabled' : ''}>${esc(correction.note_edited ? correction.note : correctionNote(correction))}</textarea>
+          <textarea id="correction-note" name="note" maxlength="500" rows="3" ${anySent ? 'disabled' : ''}>${esc(correction.note_edited && !isLegacyAutoCorrectionNote(correction) ? correction.note : correctionNote(correction))}</textarea>
           <button class="ghost" style="margin-top:8px" ${anySent ? 'disabled' : ''}>Сохранить комментарий</button>
         </form>
         <form method="post" action="/budgets/${seg}/correction-review" style="margin-top:12px">

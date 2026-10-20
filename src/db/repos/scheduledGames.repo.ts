@@ -1,7 +1,6 @@
 import { query } from '../pool.js';
 import type { ScheduledGame, ScheduleSource, Team } from '../types.js';
 import { groupScheduleDuplicates, type ScheduleDuplicateGroup } from '../../domain/schedule.js';
-import { env } from '../../config/env.js';
 
 export interface ScheduledGameInput {
   source: ScheduleSource;
@@ -69,16 +68,10 @@ export async function setScheduledGameCalendarEventId(id: string, calendarEventI
 
 export async function listScheduledGames(limit = 250): Promise<ScheduledGame[]> {
   const { rows } = await query<ScheduledGame>(
-    `select game.* from scheduled_games game
-     cross join lateral (
-       select game.game_date + coalesce(game.game_time, time '23:59:59') as starts_at
-     ) event
-     order by (event.starts_at < now() at time zone $2) asc,
-       case when event.starts_at >= now() at time zone $2 then event.starts_at end asc,
-       case when event.starts_at < now() at time zone $2 then event.starts_at end desc,
-       game.id asc
+    `select * from scheduled_games
+     order by game_date desc, game_time desc nulls last, id desc
      limit $1`,
-    [limit, env.TZ],
+    [limit],
   );
   return rows;
 }

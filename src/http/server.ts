@@ -87,7 +87,9 @@ function isAuthed(req: FastifyRequest): boolean {
 }
 
 function redirect(reply: FastifyReply, to: string, msg?: string): FastifyReply {
-  const url = msg ? `${to}${to.includes('?') ? '&' : '?'}msg=${encodeURIComponent(msg)}` : to;
+  const [rawPath, anchor] = to.split('#', 2);
+  const path = rawPath ?? to;
+  const url = msg ? `${path}${path.includes('?') ? '&' : '?'}msg=${encodeURIComponent(msg)}${anchor ? `#${anchor}` : ''}` : to;
   return reply.redirect(url);
 }
 
@@ -456,10 +458,6 @@ export async function buildServer(bot: Bot) {
           ${text('poll_game_time', 'Время (ЧЧ:ММ)', c.poll_game_time, '12:00')}
           ${numf('poll_game_horizon_days', 'Горизонт (дней вперёд)', c.poll_game_horizon_days, '7')}
         </div>
-        <div class="row" style="margin-top:8px">
-          ${numf('budget_day', 'Бюджет: день месяца (1–28)', c.budget_day, '26')}
-          ${text('budget_time', 'Бюджет: время (ЧЧ:ММ)', c.budget_time, '20:00')}
-        </div>
         <h2 style="margin-top:18px">Обновление расписаний турниров</h2>
         <div class="row" style="align-items:center">
           <label class="inline" style="display:flex;gap:7px;align-items:center;margin:0">
@@ -500,8 +498,6 @@ export async function buildServer(bot: Bot) {
       poll_game_weekday: int(b.poll_game_weekday),
       poll_game_time: str(b.poll_game_time),
       poll_game_horizon_days: int(b.poll_game_horizon_days),
-      budget_day: int(b.budget_day),
-      budget_time: str(b.budget_time),
       schedule_import_enabled: b.schedule_import_enabled === 'yes',
       schedule_import_interval_minutes: scheduleImportInterval,
       schedule_import_send_polls: b.schedule_import_send_polls === 'yes',
@@ -637,20 +633,53 @@ export async function buildServer(bot: Bot) {
       getBudget('BLACK', month, year),
     ]);
     const built = [redBudget, blackBudget].filter((b): b is NonNullable<typeof b> => !!b);
+    const correction = built.find((b) => b.details?.correction)?.details?.correction;
+    const anySent = built.some((b) => b.message_id != null);
+    const sharedCoach = usesSharedCoach(month, year);
     const commonDraftReady = (!usesSharedCoach(month, year) || sharedCoachBudgetsReady(redBudget, blackBudget)) &&
       built.every((b) => !b.details?.correction || b.details.correction.reviewed);
     let draftsCard = '';
     if (built.length > 0) {
-      const previews = await Promise.all(built.map(async (b) => {
+      const seg = periodOf(month, year);
+      const adjustmentRow = (label: string, count: number, component: 'coach' | 'gym', team?: Team) => {
+        const buttons = (change: -1 | 1) => `<form class="inline" method="post" action="/budgets/${seg}/correction">
+          <input type="hidden" name="component" value="${component}">
+          ${team ? `<input type="hidden" name="team" value="${team}">` : ''}
+          <input type="hidden" name="change" value="${change}">
+          <button class="ghost" aria-label="${label} ${change < 0 ? 'уменьшить' : 'увеличить'} на один" ${anySent ? 'disabled' : ''}>${change < 0 ? '−1' : '+1'}</button>
+        </form>`;
+        return `<div class="budget-correction-row"><span>${label}: <b>${count > 0 ? '+' : ''}${count}</b></span>
+          <div class="budget-correction-actions">${buttons(-1)}${buttons(1)}</div></div>`;
+      };
+      const correctionPanel = correction ? `<aside class="budget-correction-panel" id="corrections">
+        <h3>Корректировки за ${esc(monthLabel(correction.source_month, correction.source_year))}</h3>
+        <p class="muted">Учтены в обоих черновиках.</p>
+        ${sharedCoach
+          ? adjustmentRow('Тренер', correction.coach_delta.RED + correction.coach_delta.BLACK, 'coach')
+          : adjustmentRow('Тренер RED', correction.coach_delta.RED, 'coach', 'RED') + adjustmentRow('Тренер BLACK', correction.coach_delta.BLACK, 'coach', 'BLACK')}
+        ${adjustmentRow('Зал', correction.gym_delta, 'gym')}
+        <form method="post" action="/budgets/${seg}/correction-note">
+          <label for="correction-note">Комментарий в текстах бюджетов</label>
+          <textarea id="correction-note" name="note" maxlength="500" rows="3" ${anySent ? 'disabled' : ''}>${esc(correction.note_edited ? correction.note : correctionNote(correction))}</textarea>
+          <button class="ghost" style="margin-top:8px" ${anySent ? 'disabled' : ''}>Сохранить комментарий</button>
+        </form>
+        <form method="post" action="/budgets/${seg}/correction-review" style="margin-top:12px">
+          <button ${anySent || correction.reviewed ? 'disabled' : ''}>${correction.reviewed ? 'Подтверждено' : 'Подтвердить корректировки'}</button>
+        </form>
+      </aside>` : '';
+      const previews = await Promise.all(built.map(async (b, index) => {
         const rendered = await renderBudgetFromDb(b.id, { savedChatStatus: true });
         if (!rendered) return '';
         return `<div style="margin-top:12px">
-            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a> · ${b.details?.chat_check?.checked_at ? `чаты проверены ${esc(fmtDateTime(b.details.chat_check.checked_at))}` : 'чаты ещё не проверены'}</div>
-            <div style="white-space:pre-wrap;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere">${rendered.text}</div>
+            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} · ${b.details?.chat_check?.checked_at ? `чаты проверены ${esc(fmtDateTime(b.details.chat_check.checked_at))}` : 'чаты ещё не проверены'}</div>
+            <div class="${index === 0 && correctionPanel ? 'budget-preview-grid' : ''}">
+              <div class="budget-preview-message">${rendered.text}</div>
+              ${index === 0 ? correctionPanel : ''}
+            </div>
           </div>`;
       }));
       const hidden = `<input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">`;
-      draftsCard = `<div class="card">
+      draftsCard = `<div class="card" id="drafts">
         <div class="row" style="justify-content:space-between;align-items:center">
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -659,7 +688,7 @@ export async function buildServer(bot: Bot) {
           </div>
         </div>
         <p class="muted">Порядок работы: собери бюджет, проверь корректировки и тексты, затем опубликуй сбор. Опубликованные суммы не меняются.</p>
-        ${commonDraftReady ? '' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
+        ${commonDraftReady ? '' : correction && !correction.reviewed ? '<p class="muted">Проверь и подтверди корректировки перед публикацией.</p>' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
         <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
       </div>`;
@@ -718,7 +747,7 @@ export async function buildServer(bot: Bot) {
     }
   });
 
-  // Отправить черновики бюджета обеих команд админам в личку (с кнопкой публикации).
+  // Отправить черновики бюджета обеих команд админам в личку для просмотра.
   app.post('/budgets/draft', async (req, reply) => {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
@@ -900,45 +929,6 @@ export async function buildServer(bot: Bot) {
         </form>
       </div>`;
     }).join('');
-    const correction = monthBudgets.find((b) => b.details?.correction)?.details?.correction;
-    const adjustmentRow = (label: string, component: 'coach' | 'gym', count: number, rate: number, team?: Team) => {
-      const forms = (change: -1 | 1) => `<form class="inline" method="post" action="/budgets/${seg}/correction">
-        <input type="hidden" name="component" value="${component}">
-        ${team ? `<input type="hidden" name="team" value="${team}">` : ''}
-        <input type="hidden" name="change" value="${change}">
-        <button class="ghost" ${anySent ? 'disabled' : ''}>${change < 0 ? '−1' : '+1'}</button>
-      </form>`;
-      return `<div class="row" style="align-items:center;justify-content:space-between;margin:8px 0">
-        <span>${label}: <b>${count > 0 ? '+' : ''}${count}</b> × ${esc(rate)} ₽ = <b>${count * rate} ₽</b></span>
-        <span>${forms(-1)} ${forms(1)}</span>
-      </div>`;
-    };
-    const correctionCard = correction ? `<div class="card" id="corrections">
-      <h2>Корректировки</h2>
-      <p class="muted">Изменения относительно опубликованного бюджета за ${esc(monthLabel(correction.source_month, correction.source_year))}. Суммы влияют только на сбор с игроков за ${esc(monthLabel(period.month, period.year))}.</p>
-      ${correction.source_changes?.length ? `<details style="margin:10px 0" open><summary>Изменения календаря по датам</summary><ul>${correction.source_changes.map((change) => `<li>${esc(change)}</li>`).join('')}</ul></details>` : correction.rate_estimated ? '<p class="muted">Даты изменений недоступны: старый опубликованный бюджет не содержит списка событий. Проверь количества вручную.</p>' : '<p class="muted">Изменений платных сессий в календаре не найдено.</p>'}
-      ${correction.source_snapshot ? `<details style="margin:10px 0"><summary>Актуальный календарь за ${esc(monthLabel(correction.source_month, correction.source_year))} на момент сборки · событий с оплатой: ${correction.source_snapshot.length}</summary><ul>${[...correction.source_snapshot].sort((a, b) => a.start.localeCompare(b.start)).map((event) => `<li>${esc(event.start.includes('T') ? fmtDateTime(event.start) : isoToRu(event.start))} · ${esc(event.team)}${event.paid_coach ? ' · тренер' : ''}${event.paid_gym ? ' · зал' : ''}</li>`).join('')}</ul></details>` : ''}
-      ${correction.rate_estimated ? '<p class="muted">У старого бюджета нет снимка тарифов. Проверь ставки исходного месяца перед подтверждением.</p>' : ''}
-      ${adjustmentRow('Тренер RED', 'coach', correction.coach_delta.RED, correction.coach_rate, 'RED')}
-      ${adjustmentRow('Тренер BLACK', 'coach', correction.coach_delta.BLACK, correction.coach_rate, 'BLACK')}
-      ${adjustmentRow('Зал', 'gym', correction.gym_delta, correction.gym_rate)}
-      <details style="margin:10px 0"><summary>Тарифы исходного месяца</summary>
-        <form method="post" action="/budgets/${seg}/correction-rates" class="row">
-          <div><label>Тренер, ₽/сессия</label><input name="coach_rate" type="number" min="0" max="1000000" step="0.01" value="${esc(correction.coach_rate)}" required></div>
-          <div><label>Зал, ₽/аренда</label><input name="gym_rate" type="number" min="0" max="1000000" step="0.01" value="${esc(correction.gym_rate)}" required></div>
-          <div style="flex:0"><label>&nbsp;</label><button class="ghost" ${anySent ? 'disabled' : ''}>Сохранить тарифы</button></div>
-        </form>
-      </details>
-      <form method="post" action="/budgets/${seg}/correction-note">
-        <label>Комментарий для текстов бюджетов</label>
-        <textarea name="note" maxlength="500" rows="2" style="width:100%" ${anySent ? 'disabled' : ''}>${esc(correction.note)}</textarea>
-        <button class="ghost" ${anySent ? 'disabled' : ''}>Сохранить комментарий</button>
-      </form>
-      <div class="row" style="align-items:center;margin-top:10px">
-        <form class="inline" method="post" action="/budgets/${seg}/correction-review"><button ${anySent || correction.reviewed ? 'disabled' : ''}>${correction.reviewed ? 'Подтверждено' : 'Подтвердить корректировки'}</button></form>
-        <a href="/budgets?month=${period.month}&year=${period.year}">Посмотреть тексты черновиков →</a>
-      </div>
-    </div>` : '';
     const lastFriendly = [...monthGames].reverse().find((g) => g.team === 'MIXED' && g.stat_url === null);
     const friendlyLateConfirm = anySent
       ? 'onsubmit="return confirm(\'Сбор уже опубликован. Суммы в чатах изменятся; сверь уже полученные переводы. Продолжить?\')"'
@@ -1035,7 +1025,6 @@ export async function buildServer(bot: Bot) {
         </div>
         ${commonDraftReady ? '' : '<div class="card muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд перед публикацией.</div>'}
         ${payoutCard}
-        ${correctionCard}
         ${coachControls}
         ${friendlyControls}
         ${sharedCoach ? '<div class="card muted">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</div>' : ''}
@@ -1079,7 +1068,7 @@ export async function buildServer(bot: Bot) {
   app.post('/budgets/:period/correction', async (req, reply) => {
     const period = parsePeriod((req.params as { period: string }).period);
     if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const back = `/budgets?month=${period.month}&year=${period.year}#drafts`;
     const body = req.body as { component?: string; team?: string; change?: string };
     if (!['coach', 'gym'].includes(body.component ?? '') || !['-1', '1'].includes(body.change ?? '')) {
       return redirect(reply, back, 'Неверная корректировка');
@@ -1090,9 +1079,12 @@ export async function buildServer(bot: Bot) {
       const correction = structuredClone(current);
       const change = Number(body.change);
       if (body.component === 'gym') correction.gym_delta += change;
+      else if (usesSharedCoach(period.month, period.year)) correction.coach_delta.RED += change;
       else if (body.team === 'RED' || body.team === 'BLACK') correction.coach_delta[body.team] += change;
       else return redirect(reply, back, 'Неверная команда');
-      if (Math.abs(correction.gym_delta) > 100 || Object.values(correction.coach_delta).some((n) => Math.abs(n) > 100)) {
+      if (Math.abs(correction.gym_delta) > 100 ||
+        Math.abs(correction.coach_delta.RED + correction.coach_delta.BLACK) > 100 ||
+        Object.values(correction.coach_delta).some((n) => Math.abs(n) > 100)) {
         return redirect(reply, back, 'Слишком большая корректировка');
       }
       if (!correction.note_edited) correction.note = correctionNote(correction);
@@ -1108,7 +1100,7 @@ export async function buildServer(bot: Bot) {
   app.post('/budgets/:period/correction-note', async (req, reply) => {
     const period = parsePeriod((req.params as { period: string }).period);
     if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const back = `/budgets?month=${period.month}&year=${period.year}#drafts`;
     const note = (req.body as { note?: string })?.note?.trim() ?? '';
     if (note.length > 500) return redirect(reply, back, 'Комментарий слишком длинный');
     try {
@@ -1126,7 +1118,7 @@ export async function buildServer(bot: Bot) {
   app.post('/budgets/:period/correction-rates', async (req, reply) => {
     const period = parsePeriod((req.params as { period: string }).period);
     if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const back = `/budgets?month=${period.month}&year=${period.year}#drafts`;
     const body = req.body as { coach_rate?: string; gym_rate?: string };
     const coachRate = Number(body.coach_rate);
     const gymRate = Number(body.gym_rate);
@@ -1150,7 +1142,7 @@ export async function buildServer(bot: Bot) {
   app.post('/budgets/:period/correction-review', async (req, reply) => {
     const period = parsePeriod((req.params as { period: string }).period);
     if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
+    const back = `/budgets?month=${period.month}&year=${period.year}#drafts`;
     try {
       const current = await correctionForPeriod(period.month, period.year);
       if (!current) return redirect(reply, back, 'Сначала собери черновик');
@@ -1378,7 +1370,7 @@ export async function buildServer(bot: Bot) {
 
     const importForm = `<div class="card"><h2>Добавить по ссылке на протокол</h2>
       <div class="muted" style="margin-bottom:8px">
-        Работает как /budget: сыгравшие определяются по времени на площадке &gt; 0, сопоставляются с ростером, а взнос добавляется в выбранный месяц бюджета.
+        Сыгравшие определяются по времени на площадке &gt; 0, сопоставляются с ростером, а взнос добавляется в выбранный месяц бюджета.
         Для МЛБЛ дата берётся автоматически из протокола. Можно указать несколько ссылок; для ЛЧБ после ссылки допустима дата ДД.ММ.ГГГГ.
       </div>
       <div class="muted" style="margin-bottom:12px;overflow-wrap:anywhere">

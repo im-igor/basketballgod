@@ -1,19 +1,12 @@
 import type { Bot, Context } from 'grammy';
 import { adminOnly } from '../middlewares/auth.js';
-import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
+import { normalizeLogin, parseMonthYear } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
 import { monthLabel, isoToRu } from '../../domain/dates.js';
-import { listPlayers, getByLogin, setActive, linkTelegramUser } from '../../db/repos/players.repo.js';
+import { getByLogin, setActive, linkTelegramUser } from '../../db/repos/players.repo.js';
 import { syncAllToSheet } from '../../services/sheetSync.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
-import { getTariffs } from '../../db/repos/tariffs.repo.js';
-import { buildAndSaveBudgets } from '../../services/budget.service.js';
-import {
-  validateGame,
-  registerValidatedGames,
-  type GamePlan,
-} from '../../services/gameFee.service.js';
-import { sendBudgetDraftToAdmins, sendDebtorsDraftToAdmins } from '../../services/notify.service.js';
+import { sendDebtorsDraftToAdmins } from '../../services/notify.service.js';
 import { buildPayPrompt } from '../payMark.js';
 import { sendPollDraftsToAdmins } from '../pollDraft.js';
 import { buildPollDrafts } from '../../services/poll.service.js';
@@ -30,13 +23,12 @@ const HELP = `<b>basketballgod — команды</b>
 
 <b>Бюджет и оплаты:</b>
 Разовые взносы настраиваются в админке, раздел «Разовые сборы»: с сыгравших или со всех участников бюджета, один раз на человека.
-/budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку; ссылки на игры опциональны
+Сборка бюджета, корректировки и публикация доступны в админке, раздел «Расчёт бюджета».
 /debtors [RED|BLACK] [MM YYYY] — черновик списка должников в личку с кнопкой «Отправить в чат» (без команды — обе; по умолч. текущий месяц)
 /pay [MM YYYY] — оплаты кнопками: все игроки обеих команд, ✅ у оплативших, нажатие переключает (по умолч. текущий месяц)
 /poll — черновики опросов на неделю в личку (тренировки и игры, каждый со своим горизонтом): правка текста/вариантов/форварда, пропуск и отправка в чат кнопкой
 
-Игры ЛЧБ и МЛБЛ в /budget: ссылки на протоколы парсятся автоматически; сыгравшим считается игрок со временем на площадке > 0. Каждый сыгравший должен быть в ростере (любой команды — кросс-команда разрешена) с active=YES и employee=TRUE. Месяц команды /budget — месяц, в бюджет которого попадёт игра: например, сентябрьский матч указывается при сборе бюджета октября.
-Товарищеские и исключения можно завести вручную в админке (раздел «Игры»): состав @login, тумблеры «тренер/судья». Для импортированного матча решение по конфликту тренера берётся из раздела «Расписание». Взнос падает каждому в бюджет его домашней команды.`;
+Игры ЛЧБ и МЛБЛ импортируются в админке (раздел «Игры»). Товарищеские и исключения также заводятся там вручную. Взнос падает каждому в бюджет его домашней команды.`;
 
 /** Текст аргументов команды (grammY типизирует ctx.match как string | RegExpMatchArray). */
 const argText = (ctx: Context): string => (typeof ctx.match === 'string' ? ctx.match : '');
@@ -107,49 +99,6 @@ export function registerCommands(bot: Bot): void {
     await ctx.reply('Выгружаю данные из БД в таблицу…');
     const summary = await syncAllToSheet();
     await ctx.reply(`Готово:\n${summary}`);
-  })));
-
-  // /budget RED|BLACK MM YYYY [ссылка [дд.мм.гггг]] … — черновик бюджета команды в личку.
-  bot.command('budget', adminOnly(safe(async (ctx) => {
-    const { value, error } = parseBudgetArgs(argText(ctx));
-    if (error || !value) {
-      await ctx.reply(error ?? 'Не удалось разобрать аргументы. /budget RED|BLACK MM YYYY [ссылка …]');
-      return;
-    }
-    const { team, month, year, games } = value;
-    const existingBudgets = await Promise.all(TEAMS.map((item) => getBudget(item, month, year)));
-    if (existingBudgets.some((budget) => budget?.message_id != null)) {
-      await ctx.reply('Сбор за этот месяц опубликован. Его нельзя пересобрать; корректировки внеси в следующий черновик.');
-      return;
-    }
-    await ctx.reply(`Считаю бюджет ${team} за ${monthLabel(month, year)}…`);
-
-    // Игры (если есть): сперва валидируем все, и только если без ошибок — сохраняем.
-    if (games.length > 0) {
-      // Ростер обеих команд: игроки теперь могут играть за чужую команду (кросс-команда),
-      // поэтому чужой игрок на стат-странице должен распознаваться, а не падать в ошибку.
-      const [roster, tariffs] = await Promise.all([listPlayers(), getTariffs()]);
-      const plans: GamePlan[] = [];
-      const errors: string[] = [];
-      for (const g of games) {
-        const res = await validateGame(g.url, team, g.date, roster, tariffs);
-        if (res.ok) plans.push(res.plan);
-        else errors.push(...res.errors);
-      }
-      if (errors.length > 0) {
-        await ctx.reply(
-          `❌ Игры не приняты, бюджет не собран. Исправь указанные ошибки ` +
-            `(состав: active=YES и employee=TRUE; конфликты тренера: раздел «Расписание») и повтори:\n\n` +
-            errors.map((e) => `• ${e}`).join('\n'),
-        );
-        return;
-      }
-      await registerValidatedGames(plans, month, year);
-    }
-
-    const built = await buildAndSaveBudgets(month, year, [team], ctx.api);
-    // Инфо-сообщение + сам драфт с кнопкой уходят админам в личку отдельными сообщениями.
-    await sendBudgetDraftToAdmins(ctx.api, built);
   })));
 
   // /debtors [RED|BLACK] [MM YYYY] — без команды напоминаем обеим.

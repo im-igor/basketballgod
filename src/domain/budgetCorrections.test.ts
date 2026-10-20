@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Budget, Tariffs } from '../db/types.js';
 import type { CalendarEvent } from '../google/calendar.js';
-import { calendarDifference, payoutCorrections, proposeCorrection, snapshotEvents } from './budgetCorrections.js';
+import { calendarDifference, correctionNote, payoutCorrections, proposeCorrection, snapshotEvents } from './budgetCorrections.js';
 
 const tariffs: Tariffs = {
   coach_per_session: 5000, coach_per_game: 5000,
@@ -43,7 +43,7 @@ test('отмена октябрьской тренировки предлага�
   assert.equal(suggested.gym_rate, 25500);
   assert.equal(suggested.reviewed, false);
   assert.deepEqual(suggested.source_snapshot, snapshotEvents(current, tariffs).events);
-  assert.match(suggested.note, /зал -1, тренер RED -1/);
+  assert.equal(suggested.note, 'Корректировка за Октябрь 2026: тренер -1, зал -1.');
 
   const payout = payoutCorrections(red, black, current, tariffs);
   assert.deepEqual(payout.map((c) => c.amount), [-5000, -25500]);
@@ -57,6 +57,15 @@ test('перенос тренировки показывает старую и �
   assert.deepEqual(diff.coach_delta, { RED: 0, BLACK: 0 });
   assert.equal(diff.gym_delta, 0);
   assert.match(diff.changed[0]!, /2026-10-22 RED: перенесено на 2026-10-23/);
+});
+
+test('автокомментарий складывает тренировки обеих команд без названий команд', () => {
+  assert.equal(correctionNote({ source_month: 10, source_year: 2026,
+    coach_delta: { RED: -1, BLACK: -1 }, gym_delta: -1 }),
+  'Корректировка за Октябрь 2026: тренер -2, зал -1.');
+  assert.equal(correctionNote({ source_month: 10, source_year: 2026,
+    coach_delta: { RED: 1, BLACK: -1 }, gym_delta: -1 }),
+  'Корректировка за Октябрь 2026: зал -1.');
 });
 
 test('старый опубликованный бюджет без снимка сравнивается по сохранённым количествам', () => {

@@ -85,14 +85,13 @@ export function calendarDifference(
   };
 }
 
-export function correctionNote(c: Pick<BudgetCorrection, 'source_month' | 'source_year' | 'coach_delta' | 'gym_delta' | 'source_changes'>): string {
+export function correctionNote(c: Pick<BudgetCorrection, 'source_month' | 'source_year' | 'coach_delta' | 'gym_delta'>): string {
+  const coachDelta = c.coach_delta.RED + c.coach_delta.BLACK;
   const parts = [
+    coachDelta ? `тренер ${coachDelta > 0 ? '+' : ''}${coachDelta}` : '',
     c.gym_delta ? `зал ${c.gym_delta > 0 ? '+' : ''}${c.gym_delta}` : '',
-    ...TEAMS.map((team) => c.coach_delta[team]
-      ? `тренер ${team} ${c.coach_delta[team] > 0 ? '+' : ''}${c.coach_delta[team]}` : ''),
   ].filter(Boolean);
-  return parts.length ? `Корректировка за ${monthLabel(c.source_month, c.source_year)}: ${parts.join(', ')}.` +
-    (c.source_changes?.length ? ` События: ${c.source_changes.join('; ')}.` : '') : '';
+  return parts.length ? `Корректировка за ${monthLabel(c.source_month, c.source_year)}: ${parts.join(', ')}.` : '';
 }
 
 export function proposeCorrection(

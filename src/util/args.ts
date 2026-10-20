@@ -49,10 +49,10 @@ export interface BudgetArgs {
   games: BudgetGameArg[];
 }
 
-const BUDGET_FORMAT = 'Формат: /budget RED|BLACK MM YYYY [ссылка [ДД.ММ.ГГГГ]] …';
+const BUDGET_FORMAT = 'Укажи команду RED/BLACK, месяц и год бюджета; затем ссылки на игры и при необходимости даты ДД.ММ.ГГГГ';
 
 /**
- * Разбор аргументов /budget: обязательны команда, месяц, год; далее — необязательные
+ * Разбор полей импорта игр в админке: обязательны команда, месяц, год; далее — необязательные
  * пары «ссылка [дата]». Дата относится к ближайшей предыдущей ссылке.
  */
 export function parseBudgetArgs(text: string): { value?: BudgetArgs; error?: string } {

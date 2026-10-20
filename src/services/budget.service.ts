@@ -100,6 +100,7 @@ export async function buildAndSaveBudgets(
   const previousByTeam = { RED: previous[0], BLACK: previous[1] };
   const priorCorrection = previous.find((budget) => budget?.details?.correction)?.details?.correction;
   const correction = priorCorrection ? structuredClone(priorCorrection) : suggested;
+  if (!correction.note_edited) correction.note = correctionNote(correction);
   // Сохраняем список платных событий актуального календаря вместе с проверяемым хешем.
   correction.source_snapshot = suggested.source_snapshot;
   if (priorCorrection?.source_fingerprint && priorCorrection.source_fingerprint !== suggested.source_fingerprint) {
@@ -315,6 +316,7 @@ export async function recalcBudget(
 
 /** Карточка корректировок общая для обеих команд и пересчитывает оба черновика. */
 export async function updateBudgetCorrection(month: number, year: number, correction: BudgetCorrection): Promise<void> {
+  if (!correction.note_edited) correction.note = correctionNote(correction);
   const budgets = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
   if (budgets.some((budget) => budget?.message_id != null)) {
     throw new Error('Опубликованный бюджет нельзя изменить');

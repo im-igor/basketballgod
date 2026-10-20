@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Bot } from 'grammy';
 
 test('админка показывает тот же черновик и выполняет правки до публикации', async () => {
-  const [{ pool }, { migrate }, { buildServer }, { draftKeyboard, renderBudgetFromDb, sendBudgetToChat }, { setBudgetChatCheck }] = await Promise.all([
+  const [{ pool }, { migrate }, { buildServer }, { renderBudgetFromDb, sendBudgetToChat }, { setBudgetChatCheck }] = await Promise.all([
     import('../db/pool.js'), import('../db/migrator.js'), import('./server.js'), import('../services/notify.service.js'),
     import('../db/repos/budgets.repo.js'),
   ]);
@@ -174,10 +174,15 @@ test('админка показывает тот же черновик и вып
     await assert.rejects(sendBudgetToChat(api as never, redBudget), /Пересобери бюджеты обеих команд/);
     await db.query('update budgets set details=$2 where id=$1', [blackBudget, JSON.stringify(readyDetails)]);
 
+    const draftSent = await post('/budgets/draft', { month: '11', year: '2026' });
+    assert.match(decodeURIComponent(String(draftSent.headers.location)), /Черновики отправлены в личку/);
+    assert.equal(sent.length, 2);
+    assert.ok(sent.every((message) => !('reply_markup' in (message[2] as Record<string, unknown>))));
+    sent.length = 0;
+
     const published = await post('/budgets/publish', { month: '11', year: '2026' });
     assert.match(decodeURIComponent(String(published.headers.location)), /Сборы отправлены/);
     assert.equal(sent.length, 2);
-    assert.equal(draftKeyboard(redBudget, 'RED', true).inline_keyboard.flat().some((button) => button.callback_data?.startsWith('budpub:')), false);
     const publishedAgain = await post('/budgets/publish', { month: '11', year: '2026' });
     assert.match(decodeURIComponent(String(publishedAgain.headers.location)), /Нет неопубликованных/);
     assert.equal(sent.length, 2);

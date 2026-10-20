@@ -109,6 +109,14 @@ button.danger:hover { filter:brightness(.92); }
 .workflow-check-text { min-width:0; }
 .workflow-check-text strong { display:block; margin-bottom:2px; }
 .workflow-check a { flex:none; font-weight:650; }
+.budget-preview-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,.9fr); gap:16px; align-items:start; }
+.budget-preview-message { min-width:0; white-space:pre-wrap; background:var(--field); border:1px solid var(--line); border-radius:10px; padding:14px; overflow-wrap:anywhere; }
+.budget-correction-panel { min-width:0; background:var(--field); border:1px solid var(--line); border-radius:10px; padding:16px; }
+.budget-correction-panel h3 { margin:0 0 8px; font-size:15px; }
+.budget-correction-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; }
+.budget-correction-actions { display:flex; gap:6px; }
+.budget-correction-actions button { min-width:40px; padding:6px 10px; }
+@media (max-width:850px){ .budget-preview-grid { grid-template-columns:1fr; } }
 .restore-guide li { margin:0 0 12px; }
 .restore-guide pre { overflow-x:auto; padding:12px; background:var(--field); border:1px solid var(--line); border-radius:9px; font-size:12px; line-height:1.55; }
 .login-wrap { max-width:390px; margin:12vh auto; padding:28px; }

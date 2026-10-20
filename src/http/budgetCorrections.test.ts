@@ -59,14 +59,19 @@ test('кнопки корректировки и комментарий меня
       payload: new URLSearchParams(values).toString(),
     });
 
-    const page = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
+    const page = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.match(page.body, /Корректировки/);
-    assert.match(page.body, /2026-10-22 RED: отменено или изменено/);
-    assert.match(page.body, /Актуальный календарь за Октябрь 2026/);
-    assert.match(page.body, /23\.10\.2026, 19:00/);
-    assert.match(page.body, /Тренер RED/);
+    assert.match(page.body, /budget-preview-grid/);
+    assert.match(page.body, /Корректировка за Октябрь 2026: тренер -1, зал -1/);
+    assert.match(page.body, /Тренер: <b>-1<\/b>/);
+    assert.doesNotMatch(page.body, /Тренер RED:/);
+    assert.doesNotMatch(page.body, />открыть<\/a>/);
+    assert.doesNotMatch(page.body, /Тарифы исходного месяца/);
     assert.match(page.body, /Зал/);
     assert.match(page.body, /Подтвердить корректировки/);
+    assert.match(page.body, /disabled>Опубликовать готовые сборы/);
+    const detail = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
+    assert.doesNotMatch(detail.body, /<h2>Корректировки<\/h2>/);
     const payoutPreview = await app.inject({
       method: 'GET', url: '/budgets/11-2026?preview=payout', headers: { cookie },
     });
@@ -76,13 +81,19 @@ test('кнопки корректировки и комментарий меня
     for (const id of budgetIds) {
       assert.match((await renderBudgetFromDb(id))!.text, /Зачёт &lt;октября&gt;/);
     }
-    await post('/budgets/11-2026/correction', { component: 'gym', change: '1' });
+    const changed = await post('/budgets/11-2026/correction', { component: 'gym', change: '1' });
+    assert.match(String(changed.headers.location), /^\/budgets\?month=11&year=2026&msg=.*#drafts$/);
+    await post('/budgets/11-2026/correction', { component: 'coach', change: '1' });
+    const editedPreview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
+    assert.match(editedPreview.body, /72500 руб/);
+    assert.match(editedPreview.body, /Зачёт &lt;октября&gt;/);
     for (const id of budgetIds) {
       const budget = (await db.query<{ total_per_player: number; details: { correction: typeof correction } }>(
         'select total_per_player, details from budgets where id=$1', [id],
       )).rows[0]!;
-      assert.equal(Number(budget.total_per_player), 70000);
+      assert.equal(Number(budget.total_per_player), 72500);
       assert.equal(budget.details.correction.gym_delta, 0);
+      assert.equal(budget.details.correction.coach_delta.RED + budget.details.correction.coach_delta.BLACK, 0);
       assert.equal(budget.details.correction.note, 'Зачёт <октября>');
       assert.equal(budget.details.correction.reviewed, false);
     }
@@ -95,6 +106,7 @@ test('кнопки корректировки и комментарий меня
     }
     const preview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.match(preview.body, /Зачёт &lt;октября&gt;/);
+    assert.match(preview.body, /Подтверждено/);
   } finally {
     await app?.close();
     mock.restoreAll();

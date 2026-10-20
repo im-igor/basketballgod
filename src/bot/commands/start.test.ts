@@ -23,6 +23,7 @@ test('/start привязывает Telegram ID к игроку для пров�
       handlers.set(name, handler);
     } } as unknown as Bot;
     registerCommands(bot);
+    assert.equal(handlers.has('budget'), false);
     let checkedUserId: unknown;
     const api = { getChatMember: async (_chatId: number, userId: number) => {
       checkedUserId = userId;
@@ -36,6 +37,7 @@ test('/start привязывает Telegram ID к игроку для пров�
       reply: async (text: string) => { reply = text; },
     } as unknown as Context);
     assert.match(reply, /Telegram ID привязан/);
+    assert.match(reply, /Сборка бюджета, корректировки и публикация доступны в админке/);
     const player = (await db.query<{ tg_user_id: string }>(
       "select tg_user_id from players where lower(tg_login)='@testplayer'",
     )).rows[0]!;

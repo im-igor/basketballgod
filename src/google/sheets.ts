@@ -122,8 +122,6 @@ export async function writeCronToSheet(c: {
   poll_game_horizon_days: number | null;
   fixation_day: number | null;
   fixation_time: string | null;
-  budget_day: number | null;
-  budget_time: string | null;
   schedule_import_enabled: boolean;
   schedule_import_interval_minutes: number;
   schedule_import_send_polls: boolean;
@@ -139,8 +137,6 @@ export async function writeCronToSheet(c: {
     ['poll_game_horizon_days', s(c.poll_game_horizon_days)],
     ['fixation_day', s(c.fixation_day)],
     ['fixation_time', s(c.fixation_time)],
-    ['budget_day', s(c.budget_day)],
-    ['budget_time', s(c.budget_time)],
     ['schedule_import_enabled', String(c.schedule_import_enabled)],
     ['schedule_import_interval_minutes', s(c.schedule_import_interval_minutes)],
     ['schedule_import_send_polls', String(c.schedule_import_send_polls)],

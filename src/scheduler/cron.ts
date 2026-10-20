@@ -2,11 +2,9 @@ import cron from 'node-cron';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
-import { buildAndSaveBudgets } from '../services/budget.service.js';
-import { sendBudgetDraftToAdmins, sendMonthlyPayoutToAdmins } from '../services/notify.service.js';
+import { sendMonthlyPayoutToAdmins } from '../services/notify.service.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { CronConfig } from '../db/types.js';
-import { nextMonthOf, monthLabel } from '../domain/dates.js';
 import { log } from '../util/logger.js';
 import { refreshConfiguredSchedules } from '../services/scheduleRefresh.service.js';
 import { calculateAndSaveMonthlyPayout } from '../services/monthlyPayout.service.js';
@@ -26,7 +24,6 @@ interface Schedule {
   tz: string;
   pollTrainingCron: string;
   pollGameCron: string;
-  budgetCron: string;
   scheduleImportCron: string | null;
 }
 
@@ -103,7 +100,6 @@ function envSchedule(): Schedule {
     tz: env.TZ,
     pollTrainingCron: env.POLL_TRAINING_CRON,
     pollGameCron: env.POLL_GAME_CRON,
-    budgetCron: env.MONTHLY_CRON,
     scheduleImportCron: null,
   };
 }
@@ -122,13 +118,10 @@ export function weeklyCron(
 /** Собрать расписание из значений cron_config; каждое поле — с фолбэком на env/дефолты. */
 function buildSchedule(cfg: CronConfig): Schedule {
   const fb = envSchedule();
-  const budT = parseHm(cfg.budget_time);
-  const dayOk = (d: number | null | undefined): d is number => d != null && d >= 1 && d <= 28;
   return {
     tz: cfg.timezone || fb.tz,
     pollTrainingCron: weeklyCron(cfg.poll_training_time, cfg.poll_training_weekday, fb.pollTrainingCron),
     pollGameCron: weeklyCron(cfg.poll_game_time, cfg.poll_game_weekday, fb.pollGameCron),
-    budgetCron: budT && dayOk(cfg.budget_day) ? `${budT.m} ${budT.h} ${cfg.budget_day} * *` : fb.budgetCron,
     scheduleImportCron: cfg.schedule_import_enabled
       ? scheduleImportCron(cfg.schedule_import_interval_minutes || 60)
       : null,
@@ -150,7 +143,7 @@ async function loadSchedule(): Promise<{ sch: Schedule; fromDb: boolean }> {
 }
 
 function scheduleKey(s: Schedule): string {
-  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.budgetCron}|${s.scheduleImportCron ?? 'off'}`;
+  return `${s.tz}|${s.pollTrainingCron}|${s.pollGameCron}|${s.scheduleImportCron ?? 'off'}`;
 }
 
 // Активные задачи расписания (пересоздаются при смене конфига) и «ключ» текущего расписания.
@@ -163,7 +156,6 @@ function applySchedule(api: Api, sch: Schedule): void {
   for (const expr of [
     sch.pollTrainingCron,
     sch.pollGameCron,
-    sch.budgetCron,
     sch.scheduleImportCron,
     MONTH_END_PAYOUT_CRON,
     MONTH_END_PAYOUT_RETRY_CRON,
@@ -184,15 +176,6 @@ function applySchedule(api: Api, sch: Schedule): void {
     // Опросы на игры (TYPE=GAME|FRIENDLY, без форварда).
     cron.schedule(sch.pollGameCron, job('weekly-polls-game', async () => {
       await sendWeeklyPolls(api, 'game', { trackWindow: true });
-    }), { timezone: sch.tz }),
-
-    // Бюджет: собираем бюджеты обеих команд по составу и тарифам из БД,
-    // отправляем ЧЕРНОВИКИ администраторам в личку (в чаты публикует админ кнопкой).
-    cron.schedule(sch.budgetCron, job('monthly-budget', async () => {
-      const { month, year } = nextMonthOf(new Date());
-      log.info(`[cron] сбор бюджета за ${monthLabel(month, year)}`);
-      const built = await buildAndSaveBudgets(month, year, undefined, api);
-      await sendBudgetDraftToAdmins(api, built);
     }), { timezone: sch.tz }),
 
     // В 23:55 последнего календарного дня фиксируем реальные тренировки, игры и
@@ -226,7 +209,7 @@ function applySchedule(api: Api, sch: Schedule): void {
   currentKey = scheduleKey(sch);
   log.info(
     `[cron] расписание активно (TZ=${sch.tz}) — опросы: тренировки "${sch.pollTrainingCron}", ` +
-      `игры "${sch.pollGameCron}"; бюджет "${sch.budgetCron}"; ` +
+      `игры "${sch.pollGameCron}"; ` +
       `расчёты в конце месяца "${MONTH_END_PAYOUT_CRON}" (проверка "${MONTH_END_PAYOUT_RETRY_CRON}"); ` +
       `импорт расписаний ${sch.scheduleImportCron ? `"${sch.scheduleImportCron}"` : 'выключен'}`,
   );

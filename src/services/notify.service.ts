@@ -15,28 +15,14 @@ import { gamesForPlayers } from '../domain/gamefee.js';
 import { chatStatusesByLogin } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { monthRange } from '../domain/dates.js';
-import { calendarFingerprint, snapshotEvents } from '../domain/budgetCorrections.js';
+import { calendarFingerprint, correctionNote, snapshotEvents } from '../domain/budgetCorrections.js';
 import { listEvents } from '../google/calendar.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, MonthlyPayout, Team } from '../db/types.js';
-import type { BuiltBudget } from './budget.service.js';
+import { updateBudgetCorrection } from './budget.service.js';
 import { buildMonthlyPayoutMessage } from '../domain/payouts.js';
 
 const payment = { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL };
-
-/** Клавиатура под черновиком: правки тренера/товарищеского + публикация. */
-export function draftKeyboard(budgetId: number, team: Team, published = false): InlineKeyboard {
-  if (published) return new InlineKeyboard();
-  const keyboard = new InlineKeyboard()
-    .text('Тренер −', `budcoach:${budgetId}:-1`)
-    .text('Тренер +', `budcoach:${budgetId}:1`)
-    .text('✏️ коммент', `budnote:${budgetId}`)
-    .row()
-    .text('🤝 + Товарищеский', `budfriendly:${budgetId}`)
-    .text('🗑 убрать посл.', `budfrdel:${budgetId}`)
-    .row();
-  return keyboard.text(`✅ Опубликовать в чат ${team}`, `budpub:${budgetId}`);
-}
 
 /**
  * Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат).
@@ -74,11 +60,15 @@ export async function renderBudgetFromDb(
     paid: c.paid,
     chatStatus: chatStatuses.get(c.tg_login.toLowerCase()),
   }));
+  const details = budget.details as BudgetDetails;
+  const previewDetails = budget.message_id == null && details.correction && !details.correction.note_edited
+    ? { ...details, correction: { ...details.correction, note: correctionNote(details.correction) } }
+    : details;
   const text = buildBudgetMessage({
     team: budget.team,
     month: budget.month,
     year: budget.year,
-    details: budget.details as BudgetDetails,
+    details: previewDetails,
     tariffs,
     charges: views,
     games: gamesForPlayers(games, charges.map((c) => c.player_id)),
@@ -89,11 +79,19 @@ export async function renderBudgetFromDb(
 
 /** Отправить сообщение сбора в чат команды и запомнить message_id. */
 export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void> {
-  const budget = await getBudgetById(budgetId);
+  let budget = await getBudgetById(budgetId);
   if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
   if (budget.message_id != null) throw new Error('Сбор уже опубликован в чате команды');
   if (budget.details?.correction && !budget.details.correction.reviewed) {
     throw new Error('Подтверди корректировки перед публикацией');
+  }
+  // Старый подтверждённый черновик мог хранить прежний автотекст с названием команды.
+  // Перед отправкой сохраняем тот же текст, который показан в предварительном просмотре.
+  if (budget.details?.correction && !budget.details.correction.note_edited &&
+    budget.details.correction.note !== correctionNote(budget.details.correction)) {
+    await updateBudgetCorrection(budget.month, budget.year, budget.details.correction);
+    budget = await getBudgetById(budgetId);
+    if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
   }
   const snapshot = budget.details?.event_snapshot;
   const correction = budget.details?.correction;
@@ -143,39 +141,6 @@ export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void
   await setBudgetMessage(budgetId, chat.chatId, msg.message_id);
 }
 
-/**
- * Отправить ЧЕРНОВИКИ бюджета администраторам в личку — отдельным сообщением на
- * каждую команду, с кнопкой «Опубликовать в чат». Сам сбор в чат команды не уходит:
- * его публикует бот после нажатия кнопки (см. bot/budgetPublish.ts), поэтому
- * message_id известен и отметки оплат «+» продолжают работать.
- */
-export async function sendBudgetDraftToAdmins(
-  api: Api,
-  built: BuiltBudget[],
-): Promise<void> {
-  for (const b of built) {
-    const team = b.team;
-    const rendered = await renderBudgetFromDb(b.budgetId, { savedChatStatus: true });
-    const draftText = rendered?.text ?? b.message;
-    const keyboard = draftKeyboard(b.budgetId, team, rendered?.messageId != null);
-    for (const adminId of env.ADMIN_TG_IDS) {
-      // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.
-      await api
-        .sendMessage(adminId, draftText, {
-          parse_mode: 'HTML',
-          link_preview_options: { is_disabled: true },
-          reply_markup: keyboard,
-        })
-        .catch((err) =>
-          log.warn(
-            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
-            (err as Error).message,
-          ),
-        );
-    }
-  }
-}
-
 /** Отправить зафиксированные в конце месяца суммы администраторам в личку. */
 export async function sendMonthlyPayoutToAdmins(
   api: Api,
@@ -213,15 +178,12 @@ export async function sendBudgetDraftsByMonth(
     if (!budget || !budget.details) continue;
     const rendered = await renderBudgetFromDb(budget.id, { savedChatStatus: true });
     if (!rendered) continue;
-    const keyboard = draftKeyboard(budget.id, team, budget.message_id != null);
-
     for (const adminId of env.ADMIN_TG_IDS) {
-      // Шлём только сам драфт сбора, с кнопкой публикации — без вводного сообщения.
+      // Это копия для просмотра; правка и публикация доступны в админке.
       await api
         .sendMessage(adminId, rendered.text, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
-          reply_markup: keyboard,
         })
         .catch((err) =>
           log.warn(

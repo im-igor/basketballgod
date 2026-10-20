@@ -111,6 +111,9 @@ export interface BudgetCorrection {
   source_snapshot?: BudgetEventSnapshot['events'];
   quantities_edited?: boolean;
   source_changes?: string[];
+  /** Даты отменённых и добавленных платных событий относительно опубликованного бюджета. */
+  source_removed_dates?: string[];
+  source_added_dates?: string[];
   rate_estimated?: boolean;
 }
 

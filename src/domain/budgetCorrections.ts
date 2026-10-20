@@ -1,6 +1,6 @@
 import type { Budget, BudgetCorrection, BudgetEventSnapshot, PayoutCorrection, Tariffs, Team } from '../db/types.js';
 import type { CalendarEvent } from '../google/calendar.js';
-import { monthLabel } from './dates.js';
+import { isoToRu, monthLabel } from './dates.js';
 import { createHash } from 'node:crypto';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
@@ -27,6 +27,8 @@ export interface CalendarDifference {
   coach_delta: Record<Team, number>;
   gym_delta: number;
   changed: string[];
+  removed_dates: string[];
+  added_dates: string[];
 }
 
 export function calendarFingerprint(events: CalendarEvent[]): string {
@@ -59,20 +61,25 @@ export function calendarDifference(
     ? snapshot ? gymCount(snapshot.events) : red?.details?.paid_gym_sessions ?? black?.details?.paid_gym_sessions ?? 0
     : gymCount(active);
   const changed: string[] = [];
+  const removedDates: string[] = [];
+  const addedDates: string[] = [];
   if (snapshot) {
     const currentByKey = new Map(active.map((e) => [`${e.team}:${e.uid}`, e]));
     const originalByKey = new Map(snapshot.events.map((e) => [`${e.team}:${e.uid}`, e]));
     for (const e of snapshot.events) {
       const now = currentByKey.get(`${e.team}:${e.uid}`);
-      if ((e.paid_coach && !now?.paid_coach) || (e.paid_gym && !now?.paid_gym))
+      if ((e.paid_coach && !now?.paid_coach) || (e.paid_gym && !now?.paid_gym)) {
         changed.push(`${e.start.slice(0, 10)} ${e.team}: отменено или изменено`);
-      else if (now && e.start !== now.start)
+        removedDates.push(e.start.slice(0, 10));
+      } else if (now && e.start !== now.start)
         changed.push(`${e.start.slice(0, 10)} ${e.team}: перенесено на ${now.start.slice(0, 10)}`);
     }
     for (const e of active) {
       const before = originalByKey.get(`${e.team}:${e.uid}`);
-      if ((e.paid_coach && !before?.paid_coach) || (e.paid_gym && !before?.paid_gym))
+      if ((e.paid_coach && !before?.paid_coach) || (e.paid_gym && !before?.paid_gym)) {
         changed.push(`${e.start.slice(0, 10)} ${e.team}: добавлено или изменено`);
+        addedDates.push(e.start.slice(0, 10));
+      }
     }
   }
   return {
@@ -82,16 +89,42 @@ export function calendarDifference(
     },
     gym_delta: gymCount(active) - originalGym,
     changed: [...new Set(changed)],
+    removed_dates: [...new Set(removedDates)].sort(),
+    added_dates: [...new Set(addedDates)].sort(),
   };
 }
 
-export function correctionNote(c: Pick<BudgetCorrection, 'source_month' | 'source_year' | 'coach_delta' | 'gym_delta'>): string {
+function countWord(count: number, one: string, few: string, many: string): string {
+  const n = Math.abs(count);
+  if (n % 100 >= 11 && n % 100 <= 14) return many;
+  if (n % 10 === 1) return one;
+  if (n % 10 >= 2 && n % 10 <= 4) return few;
+  return many;
+}
+
+function legacyDates(changes: string[] | undefined, kind: 'отменено' | 'добавлено'): string[] {
+  return (changes ?? []).flatMap((change) => {
+    const match = change.match(/^(\d{4}-\d{2}-\d{2}) (?:RED|BLACK): (отменено|добавлено) или изменено$/);
+    return match?.[2] === kind ? [match[1]!] : [];
+  });
+}
+
+export function correctionNote(c: Pick<BudgetCorrection,
+  'source_month' | 'source_year' | 'coach_delta' | 'gym_delta' |
+  'source_changes' | 'source_removed_dates' | 'source_added_dates'>): string {
   const coachDelta = c.coach_delta.RED + c.coach_delta.BLACK;
   const parts = [
-    coachDelta ? `тренер ${coachDelta > 0 ? '+' : ''}${coachDelta}` : '',
-    c.gym_delta ? `зал ${c.gym_delta > 0 ? '+' : ''}${c.gym_delta}` : '',
+    coachDelta ? `${coachDelta > 0 ? '+' : ''}${coachDelta} ${countWord(coachDelta, 'сессия', 'сессии', 'сессий')} тренера` : '',
+    c.gym_delta ? `${c.gym_delta > 0 ? '+' : ''}${c.gym_delta} ${countWord(c.gym_delta, 'аренда', 'аренды', 'аренд')} зала` : '',
   ].filter(Boolean);
-  return parts.length ? `Корректировка за ${monthLabel(c.source_month, c.source_year)}: ${parts.join(', ')}.` : '';
+  if (!parts.length) return '';
+  const removed = c.source_removed_dates ?? legacyDates(c.source_changes, 'отменено');
+  const added = c.source_added_dates ?? legacyDates(c.source_changes, 'добавлено');
+  const dates = [...new Set([
+    ...(coachDelta < 0 || c.gym_delta < 0 ? removed : []),
+    ...(coachDelta > 0 || c.gym_delta > 0 ? added : []),
+  ])].sort().map((date) => isoToRu(date));
+  return `${parts.join(', ')} - за ${dates.length ? dates.join(', ') : monthLabel(c.source_month, c.source_year)}`;
 }
 
 export function proposeCorrection(
@@ -114,6 +147,8 @@ export function proposeCorrection(
     source_snapshot: currentSnapshot,
     quantities_edited: false,
     source_changes: difference.changed,
+    source_removed_dates: difference.removed_dates,
+    source_added_dates: difference.added_dates,
     rate_estimated: published && !snapshot,
   };
   c.note = correctionNote(c);

@@ -62,7 +62,7 @@ test('кнопки корректировки и комментарий меня
     const page = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.match(page.body, /Корректировки/);
     assert.match(page.body, /budget-preview-grid/);
-    assert.match(page.body, /Корректировка за Октябрь 2026: тренер -1, зал -1/);
+    assert.match(page.body, /-1 сессия тренера, -1 аренда зала - за 22\.10\.2026/);
     assert.match(page.body, /Тренер: <b>-1<\/b>/);
     assert.doesNotMatch(page.body, /Тренер RED:/);
     assert.doesNotMatch(page.body, />открыть<\/a>/);

@@ -100,9 +100,10 @@ export async function buildAndSaveBudgets(
   const previousByTeam = { RED: previous[0], BLACK: previous[1] };
   const priorCorrection = previous.find((budget) => budget?.details?.correction)?.details?.correction;
   const correction = priorCorrection ? structuredClone(priorCorrection) : suggested;
-  if (!correction.note_edited) correction.note = correctionNote(correction);
   // Сохраняем список платных событий актуального календаря вместе с проверяемым хешем.
   correction.source_snapshot = suggested.source_snapshot;
+  correction.source_removed_dates = suggested.source_removed_dates;
+  correction.source_added_dates = suggested.source_added_dates;
   if (priorCorrection?.source_fingerprint && priorCorrection.source_fingerprint !== suggested.source_fingerprint) {
     correction.source_fingerprint = suggested.source_fingerprint;
     correction.source_changes = suggested.source_changes;
@@ -110,9 +111,9 @@ export async function buildAndSaveBudgets(
     if (!correction.quantities_edited) {
       correction.coach_delta = suggested.coach_delta;
       correction.gym_delta = suggested.gym_delta;
-      if (!correction.note_edited) correction.note = correctionNote(correction);
     }
   }
+  if (!correction.note_edited) correction.note = correctionNote(correction);
   const effectiveCoach = Object.fromEntries(TEAMS.map((team) => [team, Math.max(
     0, computed[team].details.coach_sessions + (previousByTeam[team]?.details?.coach_delta ?? 0),
   )])) as Record<Team, number>;

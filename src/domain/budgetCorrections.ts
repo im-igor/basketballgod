@@ -127,6 +127,20 @@ export function correctionNote(c: Pick<BudgetCorrection,
   return `${parts.join(', ')} - за ${dates.length ? dates.join(', ') : monthLabel(c.source_month, c.source_year)}`;
 }
 
+/** Прежний автоматически сформированный текст, который мог сохраниться в старом черновике. */
+export function isLegacyAutoCorrectionNote(c: Pick<BudgetCorrection,
+  'source_month' | 'source_year' | 'coach_delta' | 'gym_delta' | 'note'>): boolean {
+  const coachDelta = c.coach_delta.RED + c.coach_delta.BLACK;
+  const parts = [
+    coachDelta ? `тренер ${coachDelta > 0 ? '+' : ''}${coachDelta}` : '',
+    c.gym_delta ? `зал ${c.gym_delta > 0 ? '+' : ''}${c.gym_delta}` : '',
+  ].filter(Boolean);
+  const legacy = parts.length
+    ? `Корректировка за ${monthLabel(c.source_month, c.source_year)}: ${parts.join(', ')}.`
+    : '';
+  return c.note === legacy;
+}
+
 export function proposeCorrection(
   month: number, year: number, red: Budget | null, black: Budget | null,
   current: CalendarEvent[], tariffs: Tariffs,

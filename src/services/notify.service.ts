@@ -15,7 +15,7 @@ import { gamesForPlayers } from '../domain/gamefee.js';
 import { chatStatusesByLogin } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { monthRange } from '../domain/dates.js';
-import { calendarFingerprint, correctionNote, snapshotEvents } from '../domain/budgetCorrections.js';
+import { calendarFingerprint, correctionNote, isLegacyAutoCorrectionNote, snapshotEvents } from '../domain/budgetCorrections.js';
 import { listEvents } from '../google/calendar.js';
 import { log } from '../util/logger.js';
 import type { BudgetDetails, MonthlyPayout, Team } from '../db/types.js';
@@ -61,8 +61,10 @@ export async function renderBudgetFromDb(
     chatStatus: chatStatuses.get(c.tg_login.toLowerCase()),
   }));
   const details = budget.details as BudgetDetails;
-  const previewDetails = budget.message_id == null && details.correction && !details.correction.note_edited
-    ? { ...details, correction: { ...details.correction, note: correctionNote(details.correction) } }
+  const correction = details.correction;
+  const showCurrentAutoNote = correction && (!correction.note_edited || isLegacyAutoCorrectionNote(correction));
+  const previewDetails = budget.message_id == null && correction && showCurrentAutoNote
+    ? { ...details, correction: { ...correction, note: correctionNote(correction) } }
     : details;
   const text = buildBudgetMessage({
     team: budget.team,
@@ -87,9 +89,10 @@ export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void
   }
   // Старый подтверждённый черновик мог хранить прежний автотекст с названием команды.
   // Перед отправкой сохраняем тот же текст, который показан в предварительном просмотре.
-  if (budget.details?.correction && !budget.details.correction.note_edited &&
-    budget.details.correction.note !== correctionNote(budget.details.correction)) {
-    await updateBudgetCorrection(budget.month, budget.year, budget.details.correction);
+  const correctionToNormalize = budget.details?.correction;
+  if (correctionToNormalize && (!correctionToNormalize.note_edited || isLegacyAutoCorrectionNote(correctionToNormalize)) &&
+    correctionToNormalize.note !== correctionNote(correctionToNormalize)) {
+    await updateBudgetCorrection(budget.month, budget.year, { ...correctionToNormalize, note_edited: false });
     budget = await getBudgetById(budgetId);
     if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
   }
@@ -176,7 +179,7 @@ export async function sendBudgetDraftsByMonth(
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
-    const rendered = await renderBudgetFromDb(budget.id, { savedChatStatus: true });
+    const rendered = await renderBudgetFromDb(budget.id);
     if (!rendered) continue;
     for (const adminId of env.ADMIN_TG_IDS) {
       // Это копия для просмотра; правка и публикация доступны в админке.

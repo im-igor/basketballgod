@@ -17,7 +17,7 @@ import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
-import { correctionNote, proposeCorrection, snapshotEvents } from '../domain/budgetCorrections.js';
+import { correctionNote, isLegacyAutoCorrectionNote, proposeCorrection, snapshotEvents } from '../domain/budgetCorrections.js';
 import { checkTeamChatMembership } from './chatCheck.service.js';
 import type { BudgetCorrection, BudgetDetails, Player, Team } from '../db/types.js';
 
@@ -113,7 +113,10 @@ export async function buildAndSaveBudgets(
       correction.gym_delta = suggested.gym_delta;
     }
   }
-  if (!correction.note_edited) correction.note = correctionNote(correction);
+  if (!correction.note_edited || isLegacyAutoCorrectionNote(correction)) {
+    correction.note_edited = false;
+    correction.note = correctionNote(correction);
+  }
   const effectiveCoach = Object.fromEntries(TEAMS.map((team) => [team, Math.max(
     0, computed[team].details.coach_sessions + (previousByTeam[team]?.details?.coach_delta ?? 0),
   )])) as Record<Team, number>;
@@ -317,7 +320,10 @@ export async function recalcBudget(
 
 /** Карточка корректировок общая для обеих команд и пересчитывает оба черновика. */
 export async function updateBudgetCorrection(month: number, year: number, correction: BudgetCorrection): Promise<void> {
-  if (!correction.note_edited) correction.note = correctionNote(correction);
+  if (!correction.note_edited || isLegacyAutoCorrectionNote(correction)) {
+    correction.note_edited = false;
+    correction.note = correctionNote(correction);
+  }
   const budgets = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
   if (budgets.some((budget) => budget?.message_id != null)) {
     throw new Error('Опубликованный бюджет нельзя изменить');

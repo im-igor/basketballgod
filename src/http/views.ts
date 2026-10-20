@@ -90,6 +90,9 @@ label { display:block; font-size:12px; font-weight:600; color:var(--muted); marg
 button { background:var(--accent); color:#fff; border:1px solid var(--accent); border-radius:9px; min-height:40px; padding:8px 14px; cursor:pointer; font-weight:650; transition:background .15s,border-color .15s,transform .08s; }
 button:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
 button:active { transform:translateY(1px); }
+button.loading { opacity:.8; cursor:wait; }
+button.loading::before { content:""; display:inline-block; width:13px; height:13px; margin-right:8px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:button-spin .7s linear infinite; }
+@keyframes button-spin { to { transform:rotate(360deg); } }
 button.ghost { background:var(--card); border-color:var(--field-line); color:var(--ghost-fg); }
 button.ghost:hover { background:var(--hover); border-color:var(--muted); color:var(--fg); }
 .theme-toggle { width:40px; padding:0; display:grid; place-items:center; font-size:17px; }
@@ -207,8 +210,9 @@ export function layout(
 <script>(function(){try{var saved=localStorage.getItem('bbg_theme');var theme=saved||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch(e){}})()</script>
 <style>${STYLE}</style></head>
 <body>${nav}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
-<script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})()
-(function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})()</script>
+<script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})();
+(function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})();
+(function(){document.querySelectorAll('.budget-build-form').forEach(function(form){var button=form.querySelector('button[type="submit"]');if(!button)return;var label=button.textContent;form.addEventListener('submit',function(event){if(event.defaultPrevented)return;if(form.getAttribute('aria-busy')==='true'){event.preventDefault();return}form.setAttribute('aria-busy','true');button.disabled=true;button.classList.add('loading');button.textContent=form.getAttribute('data-loading-label')||'Собираю бюджет…'});window.addEventListener('pageshow',function(){form.removeAttribute('aria-busy');button.disabled=false;button.classList.remove('loading');button.textContent=label})})})()</script>
 </body></html>`;
 }
 

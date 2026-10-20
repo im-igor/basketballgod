@@ -44,8 +44,8 @@ async function confirmedLateEdit(userId: number, budgetId: number, action: strin
 }
 
 async function redrawDraft(api: Api, p: Pending, r: RecalcResult): Promise<void> {
-  // Перерисовываем черновик через рендер с проверкой чата (метка «🟡 проверить» сохраняется).
-  const rendered = await renderBudgetFromDb(r.budgetId, { api });
+  // Сохраняем в черновике отметки проверки, сделанной при сборке бюджета.
+  const rendered = await renderBudgetFromDb(r.budgetId, { savedChatStatus: true });
   await api
     .editMessageText(p.chatId, p.msgId, rendered?.text ?? r.message, {
       parse_mode: 'HTML',
@@ -79,7 +79,7 @@ export function registerBudgetAdjust(bot: Bot): void {
       }
       const otherRefreshed = budget && usesSharedCoach(budget.month, budget.year)
         ? await refreshOtherTeam(ctx.api, budget.team, budget.month, budget.year) : true;
-      const rendered = await renderBudgetFromDb(r.budgetId, { api: ctx.api });
+      const rendered = await renderBudgetFromDb(r.budgetId, { savedChatStatus: true });
       await ctx
         .editMessageText(rendered?.text ?? r.message, {
           parse_mode: 'HTML',
@@ -167,7 +167,7 @@ export function registerBudgetAdjust(bot: Bot): void {
       const removed = await deleteLastManualFriendly(budget.month, budget.year);
       const r = await recalcBudget(id);
       if (r) {
-        const rendered = await renderBudgetFromDb(r.budgetId, { api: ctx.api });
+        const rendered = await renderBudgetFromDb(r.budgetId, { savedChatStatus: true });
         await ctx
           .editMessageText(rendered?.text ?? r.message, {
             parse_mode: 'HTML',

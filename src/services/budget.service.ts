@@ -1,3 +1,4 @@
+import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { listEvents } from '../google/calendar.js';
 import { listPlayers } from '../db/repos/players.repo.js';
@@ -8,6 +9,7 @@ import {
   getBudget,
   getBudgetById,
   getCharges,
+  setBudgetChatCheck,
   type ChargeInput,
 } from '../db/repos/budgets.repo.js';
 import { computeBudgets, usesSharedCoach, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
@@ -15,6 +17,7 @@ import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
+import { checkTeamChatMembership } from './chatCheck.service.js';
 import type { BudgetDetails, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
@@ -47,6 +50,7 @@ export async function buildAndSaveBudgets(
   month: number,
   year: number,
   teamsToProcess: Team[] = TEAMS,
+  api?: Api,
 ): Promise<BuiltBudget[]> {
   const { from, to } = monthRange(month, year);
 
@@ -92,6 +96,7 @@ export async function buildAndSaveBudgets(
     : 0;
 
   const out: BuiltBudget[] = [];
+  const savedForCheck: { team: Team; id: number; logins: string[] }[] = [];
   // При общем тренере изменение расписания одной команды влияет на оба бюджета.
   for (const team of shared ? TEAMS : teamsToProcess) {
     const result = computed[team];
@@ -114,6 +119,7 @@ export async function buildAndSaveBudgets(
       ...(shared ? { coach_shared_sessions: effectiveCoach, coach_shared_notes: sharedNotes } : {}),
       coach_delta: coachDelta,
       coach_note: coachNote,
+      ...(prevDetails?.chat_check ? { chat_check: prevDetails.chat_check } : {}),
     };
     // Приводим result к учтённой дельте (для инфо-сообщения и возврата).
     result.details = details;
@@ -129,6 +135,7 @@ export async function buildAndSaveBudgets(
     }));
     const saved = await saveBudget({ team, month, year, total_per_player: base, details, charges });
     const savedCharges = await getCharges(saved.id);
+    savedForCheck.push({ team, id: saved.id, logins: savedCharges.map((c) => c.tg_login) });
     const teamGames = gamesForPlayers(allGames, savedCharges.map((c) => c.player_id));
     for (const c of result.charges) {
       const stored = savedCharges.find((s) => s.player_id === c.player.id)!;
@@ -148,6 +155,16 @@ export async function buildAndSaveBudgets(
       payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
     });
     if (teamsToProcess.includes(team)) out.push({ team, budgetId: saved.id, result, message, gamesCount: teamGames.length });
+  }
+  if (api) {
+    const checkedAt = new Date().toISOString();
+    await Promise.all(savedForCheck.map(async ({ team, id, logins }) => {
+      const checks = await checkTeamChatMembership(api, team, logins);
+      await setBudgetChatCheck(id, {
+        checked_at: checkedAt,
+        statuses: Object.fromEntries(checks.map((check) => [check.tg_login.toLowerCase(), check.status])),
+      });
+    }));
   }
   return out;
 }

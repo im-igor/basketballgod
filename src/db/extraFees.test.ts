@@ -193,13 +193,16 @@ test('полная сборка бюджета учитывает разовые
   assert.equal((await listExtraFeeAllocations()).length, 2);
 });
 
-test('с ноября сборка одной команды обновляет общий базовый взнос обеих с учётом поправок', async () => {
+test('с ноября сборка одной команды обновляет общий взнос и сохраняет проверку чатов обеих команд', async () => {
+  await sql('update players set tg_user_id = 101 where id = 1');
   await saveBudget({ team: 'RED', month: 11, year: 2026, total_per_player: 1000,
     details: { ...details, coach_delta: 2, coach_note: 'Перенос двух оплат' }, charges: [charge(4)] });
   await saveBudget({ team: 'BLACK', month: 11, year: 2026, total_per_player: 1000,
     details: { ...details, coach_delta: 1 }, charges: [charge(1), charge(2), charge(3)] });
 
-  const built = await buildAndSaveBudgets(11, 2026, ['RED']);
+  let checks = 0;
+  const api = { getChatMember: async () => { checks++; return { status: 'left' }; } } as never;
+  const built = await buildAndSaveBudgets(11, 2026, ['RED'], api);
   assert.equal(built.length, 1);
   const red = (await getBudget('RED', 11, 2026))!;
   const black = (await getBudget('BLACK', 11, 2026))!;
@@ -208,8 +211,16 @@ test('с ноября сборка одной команды обновляет 
   assert.deepEqual(red.details!.coach_shared_sessions, { RED: 2, BLACK: 1 });
   assert.deepEqual(black.details!.coach_shared_sessions, { RED: 2, BLACK: 1 });
   assert.equal(red.details!.coach_shared_notes?.RED, 'Перенос двух оплат');
+  assert.equal(checks, 1);
+  assert.equal(red.details!.chat_check?.statuses['@p4'], 'missing_id');
+  assert.equal(black.details!.chat_check?.statuses['@p1'], 'left');
+  assert.equal(black.details!.chat_check?.statuses['@p2'], 'missing_id');
+  assert.ok(red.details!.chat_check?.checked_at);
+  assert.match((await renderBudgetFromDb(black.id, { savedChatStatus: true }))!.text, /🚫1 Игрок/);
   assert.equal((await getCharges(red.id))[0]!.base_amount, 4500);
   assert.ok((await getCharges(black.id)).every((c) => c.base_amount === 4500));
+  await recalcBudget(black.id);
+  assert.equal((await getBudget('BLACK', 11, 2026))!.details!.chat_check?.statuses['@p1'], 'left');
 });
 
 test('текст бюджета RED и BLACK: игры участников за обе команды, чемпионат и месяц начисления', async () => {

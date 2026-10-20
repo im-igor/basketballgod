@@ -620,7 +620,6 @@ export async function buildServer(bot: Bot) {
     const def = defaultBudgetPeriod();
     const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
     const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
-    const checkChats = q.checkChats === '1';
 
     const extraFees = await listExtraFees();
     const selectedPeriod = year * 100 + month;
@@ -640,10 +639,10 @@ export async function buildServer(bot: Bot) {
     let draftsCard = '';
     if (built.length > 0) {
       const previews = await Promise.all(built.map(async (b) => {
-        const rendered = await renderBudgetFromDb(b.id, checkChats ? { api } : {});
+        const rendered = await renderBudgetFromDb(b.id, { savedChatStatus: true });
         if (!rendered) return '';
         return `<div style="margin-top:12px">
-            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a></div>
+            <div class="muted" style="margin-bottom:6px">${teamBadge(b.team)} — <a href="/budgets/${periodOf(b.month, b.year)}">открыть</a> · ${b.details?.chat_check?.checked_at ? `чаты проверены ${esc(fmtDateTime(b.details.chat_check.checked_at))}` : 'чаты ещё не проверены'}</div>
             <div style="white-space:pre-wrap;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere">${rendered.text}</div>
           </div>`;
       }));
@@ -652,16 +651,15 @@ export async function buildServer(bot: Bot) {
         <div class="row" style="justify-content:space-between;align-items:center">
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <form class="inline" method="get" action="/budgets">${hidden}<input type="hidden" name="checkChats" value="1"><button class="ghost">${checkChats ? 'Проверить чаты снова' : 'Проверить игроков в чатах'}</button></form>
             <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
             ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
-        <p class="muted">Порядок работы: внеси правки тренера и игр, сверь суммы, при необходимости проверь игроков в чатах, затем опубликуй сбор. Проверка чатов запускается только кнопкой и показывает состояние на момент запроса. После публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
+        <p class="muted">Порядок работы: внеси правки тренера и игр, собери бюджет, сверь суммы и отметки игроков, затем опубликуй сбор. Чаты проверяются при сборке; после публикации меняй суммы только при необходимости и сверяй уже полученные переводы.</p>
         ${commonDraftReady ? '' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
-        ${checkChats ? '<p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>' : ''}
+        <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
-        ${built.some((b) => b.message_id != null) ? `<form class="inline" method="post" action="/budgets/build" onsubmit="return confirm('Это поздняя пересборка опубликованного сбора: суммы в чатах изменятся. Сверь уже полученные переводы. Продолжить?')">${hidden}<input type="hidden" name="force" value="yes"><button class="ghost">Пересобрать опубликованный сбор</button></form>` : ''}
+        ${built.some((b) => b.message_id != null) ? `<form class="inline budget-build-form" data-loading-label="Пересобираю бюджет…" method="post" action="/budgets/build" onsubmit="return confirm('Это поздняя пересборка опубликованного сбора: суммы в чатах изменятся. Сверь уже полученные переводы. Продолжить?')">${hidden}<input type="hidden" name="force" value="yes"><button class="ghost" type="submit">Пересобрать опубликованный сбор</button></form>` : ''}
       </div>`;
     }
 
@@ -685,10 +683,10 @@ export async function buildServer(bot: Bot) {
           </div></div>
           <a href="/extra-fees">Проверить</a>
         </div>
-        <form method="post" action="/budgets/build" class="row">
+        <form method="post" action="/budgets/build" class="row budget-build-form" id="budget-build-form" data-loading-label="Собираю бюджет…">
           <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
           <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
-          <div style="flex:0"><label>&nbsp;</label><button>Собрать</button></div>
+          <div style="flex:0"><label>&nbsp;</label><button type="submit">Собрать</button></div>
         </form></div>
       ${draftsCard}`;
     return html(reply, layout('Расчёт бюджета', body, { flash: msg }));
@@ -713,7 +711,7 @@ export async function buildServer(bot: Bot) {
       if (published && (req.body as { force?: string }).force !== 'yes') {
         return redirect(reply, back, 'Сбор уже опубликован. Для поздней пересборки используй отдельную кнопку под черновиками.');
       }
-      await buildAndSaveBudgets(p.month, p.year);
+      await buildAndSaveBudgets(p.month, p.year, undefined, api);
       const failed: Team[] = [];
       if (published) {
         for (const budget of existing) {
@@ -1325,7 +1323,7 @@ export async function buildServer(bot: Bot) {
       // Если бюджета ещё нет — создаём его; существующие черновики пересчитываем.
       const existing = await getBudget(team, parsed.value.month, parsed.value.year);
       if (!existing) {
-        await buildAndSaveBudgets(parsed.value.month, parsed.value.year, [team]);
+        await buildAndSaveBudgets(parsed.value.month, parsed.value.year, [team], api);
       }
       await recalcMonthBudgets(parsed.value.month, parsed.value.year);
 

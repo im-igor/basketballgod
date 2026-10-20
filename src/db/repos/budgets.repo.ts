@@ -130,6 +130,15 @@ export async function getCharges(budgetId: number): Promise<Charge[]> {
   return rows;
 }
 
+/** Сохранить снимок проверки чата без перезаписи расчёта и отметок оплат. */
+export async function setBudgetChatCheck(budgetId: number, check: NonNullable<BudgetDetails['chat_check']>): Promise<void> {
+  await query(
+    `update budgets set details = jsonb_set(details, '{chat_check}', $2::jsonb, true), updated_at = now()
+     where id = $1`,
+    [budgetId, JSON.stringify(check)],
+  );
+}
+
 export async function setChargePaid(chargeId: number, paid: boolean): Promise<Charge | null> {
   const { rows } = await query<Charge>(
     `update charges set paid = $2, paid_at = case when $2 then now() else null end

@@ -5,8 +5,9 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Bot } from 'grammy';
 
 test('админка показывает тот же черновик и выполняет правки до публикации', async () => {
-  const [{ pool }, { migrate }, { buildServer }, { draftKeyboard, renderBudgetFromDb, sendBudgetToChat }] = await Promise.all([
+  const [{ pool }, { migrate }, { buildServer }, { draftKeyboard, renderBudgetFromDb, sendBudgetToChat }, { setBudgetChatCheck }] = await Promise.all([
     import('../db/pool.js'), import('../db/migrator.js'), import('./server.js'), import('../services/notify.service.js'),
+    import('../db/repos/budgets.repo.js'),
   ]);
   const db = new PGlite();
   const sql = (text: string, params?: unknown[]) => params
@@ -45,6 +46,9 @@ test('админка показывает тот же черновик и вып
       'insert into charges (budget_id, player_id, tg_login, name, base_amount, amount) values ($1,$2,$3,$4,5000,5000)',
       [blackBudget, blackPlayer, '@blackplayer', 'Игрок Блэк'],
     );
+    const checkedAt = '2026-10-20T10:00:00.000Z';
+    await setBudgetChatCheck(redBudget, { checked_at: checkedAt, statuses: { '@redplayer': 'missing_id' } });
+    await setBudgetChatCheck(blackBudget, { checked_at: checkedAt, statuses: { '@blackplayer': 'member' } });
     let membership: 'member' | 'left' | 'error' = 'member';
     let membershipChecks = 0;
     const sent: unknown[][] = [];
@@ -68,19 +72,16 @@ test('админка показывает тот же черновик и вып
       payload: new URLSearchParams(values).toString(),
     });
 
-    const privateDraft = await renderBudgetFromDb(redBudget, { api: api as never });
-    const plainDraft = await renderBudgetFromDb(redBudget);
+    const privateDraft = await renderBudgetFromDb(redBudget, { savedChatStatus: true });
     const preview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.equal(preview.statusCode, 200);
-    assert.ok(preview.body.includes(plainDraft!.text));
-    assert.doesNotMatch(preview.body, /бот ещё не знает Telegram ID игрока/);
-    assert.match(preview.body, /Проверить игроков в чатах/);
+    assert.ok(preview.body.includes(privateDraft!.text));
+    assert.match(preview.body, /🟡Ред Игрок/);
+    assert.match(preview.body, /чаты проверены/);
+    assert.doesNotMatch(preview.body, /Проверить игроков в чатах/);
+    assert.match(preview.body, /id="budget-build-form"/);
+    assert.match(preview.body, /Собираю бюджет…/);
     assert.equal(membershipChecks, 0);
-    const checkedPreview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026&checkChats=1', headers: { cookie } });
-    assert.ok(checkedPreview.body.includes(privateDraft!.text));
-    assert.match(checkedPreview.body, /🟡Ред Игрок/);
-    assert.match(checkedPreview.body, /бот ещё не знает Telegram ID игрока/);
-    assert.equal(membershipChecks, 1);
     membership = 'left';
     assert.match((await renderBudgetFromDb(blackBudget, { api: api as never }))!.text, /🚫Блэк Игрок/);
     membership = 'error';

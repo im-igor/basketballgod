@@ -143,7 +143,7 @@ export function registerCommands(bot: Bot): void {
       await registerValidatedGames(plans, month, year);
     }
 
-    const built = await buildAndSaveBudgets(month, year, [team]);
+    const built = await buildAndSaveBudgets(month, year, [team], ctx.api);
     if (usesSharedCoach(month, year)) {
       const failed: Team[] = [];
       for (const affected of TEAMS) {

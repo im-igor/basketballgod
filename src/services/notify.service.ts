@@ -36,13 +36,13 @@ export function draftKeyboard(budgetId: number, team: Team, published = false): 
 
 /**
  * Собрать текст сообщения сбора из сохранённого бюджета (с пометками оплат).
- * Если передан `api` — это черновик для админа (в личке или админке): проверяем
- * участие игроков в чате команды и отличаем отсутствие от невозможности проверки.
+ * В черновике для админа показываем сохранённую при сборке проверку чата.
+ * `api` оставлен для явной проверки актуального состояния без сохранения.
  * Для публикации в чат команды `api` не передаём — сообщение остаётся чистым.
  */
 export async function renderBudgetFromDb(
   budgetId: number,
-  opts: { api?: Api } = {},
+  opts: { api?: Api; savedChatStatus?: boolean } = {},
 ): Promise<{
   team: Team;
   chatId: number | null;
@@ -56,9 +56,11 @@ export async function renderBudgetFromDb(
     getTariffs(),
     listAllGamesForMonth(budget.month, budget.year),
   ]);
-  const chatStatuses = opts.api
-    ? await chatStatusesByLogin(opts.api, budget.team, charges.map((c) => c.tg_login))
-    : new Map();
+  const chatStatuses = opts.savedChatStatus
+    ? new Map(Object.entries(budget.details.chat_check?.statuses ?? {}))
+    : opts.api
+      ? await chatStatusesByLogin(opts.api, budget.team, charges.map((c) => c.tg_login))
+      : new Map();
   const views: ChargeView[] = charges.map((c) => ({
     name: c.name,
     tg_login: c.tg_login,
@@ -118,8 +120,7 @@ export async function sendBudgetDraftToAdmins(
 ): Promise<void> {
   for (const b of built) {
     const team = b.team;
-    // Черновик с проверкой чата: отсутствие и невозможность проверки показываем отдельно.
-    const rendered = await renderBudgetFromDb(b.budgetId, { api });
+    const rendered = await renderBudgetFromDb(b.budgetId, { savedChatStatus: true });
     const draftText = rendered?.text ?? b.message;
     const keyboard = draftKeyboard(b.budgetId, team, rendered?.messageId != null);
     for (const adminId of env.ADMIN_TG_IDS) {
@@ -175,8 +176,7 @@ export async function sendBudgetDraftsByMonth(
   for (const team of TEAMS) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
-    // Черновик в личку → передаём api для проверки членства в чате.
-    const rendered = await renderBudgetFromDb(budget.id, { api });
+    const rendered = await renderBudgetFromDb(budget.id, { savedChatStatus: true });
     if (!rendered) continue;
     const keyboard = draftKeyboard(budget.id, team, budget.message_id != null);
 

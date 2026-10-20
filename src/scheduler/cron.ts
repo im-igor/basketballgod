@@ -191,7 +191,7 @@ function applySchedule(api: Api, sch: Schedule): void {
     cron.schedule(sch.budgetCron, job('monthly-budget', async () => {
       const { month, year } = nextMonthOf(new Date());
       log.info(`[cron] сбор бюджета за ${monthLabel(month, year)}`);
-      const built = await buildAndSaveBudgets(month, year);
+      const built = await buildAndSaveBudgets(month, year, undefined, api);
       await sendBudgetDraftToAdmins(api, built);
     }), { timezone: sch.tz }),
 

@@ -7,7 +7,18 @@ export async function getTariffs(): Promise<Tariffs> {
      from tariffs where id = 1`,
   );
   if (!rows[0]) throw new Error('Тарифы не инициализированы — запусти миграции');
-  return rows[0];
+  return normalizeTariffs(rows[0]);
+}
+
+/** PostgreSQL возвращает numeric строкой; арифметика бюджета требует чисел. */
+function normalizeTariffs(row: Tariffs): Tariffs {
+  return {
+    coach_per_session: Number(row.coach_per_session),
+    coach_per_game: Number(row.coach_per_game),
+    gym_paid_price: Number(row.gym_paid_price),
+    locker_rent_price: Number(row.locker_rent_price),
+    referee_default: Number(row.referee_default),
+  };
 }
 
 export async function updateTariffs(t: Partial<Tariffs>): Promise<Tariffs> {
@@ -29,5 +40,5 @@ export async function updateTariffs(t: Partial<Tariffs>): Promise<Tariffs> {
       t.referee_default ?? null,
     ],
   );
-  return rows[0]!;
+  return normalizeTariffs(rows[0]!);
 }

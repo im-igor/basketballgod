@@ -28,10 +28,12 @@ export async function saveBudget(input: {
          total_per_player = excluded.total_per_player,
          details = excluded.details,
          updated_at = now()
+       where budgets.message_id is null
        returning *`,
       [input.team, input.month, input.year, input.total_per_player, JSON.stringify(input.details)],
     );
-    const budget = rows[0]!;
+    const budget = rows[0];
+    if (!budget) throw new Error('Опубликованный бюджет нельзя изменить');
 
     const fees = (await client.query<ExtraFee>('select * from extra_fees order by id')).rows;
     const allocations = (await client.query<ExtraFeeAllocation>('select * from extra_fee_allocations')).rows;
@@ -103,7 +105,7 @@ export async function deleteBudget(
 ): Promise<Budget | null> {
   return budgetTransaction(async (client) => {
     const { rows } = await client.query<Budget>(
-      'delete from budgets where team = $1 and month = $2 and year = $3 returning *',
+      'delete from budgets where team = $1 and month = $2 and year = $3 and message_id is null returning *',
       [team, month, year],
     );
     return rows[0] ?? null;

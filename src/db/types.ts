@@ -77,6 +77,49 @@ export interface BudgetDetails {
   // Ручные корректировки черновика (кнопками в личке):
   coach_delta?: number; // ± оплат тренера к календарному coach_sessions
   coach_note?: string | null; // комментарий к строке тренера
+  /** Состав и тарифы, по которым был собран опубликованный бюджет. */
+  event_snapshot?: BudgetEventSnapshot;
+  /** Зачёт изменений прошлого месяца только в сборе с игроков. */
+  correction?: BudgetCorrection;
+}
+
+export interface BudgetEventSnapshot {
+  events: Array<{
+    uid: string;
+    team: Team;
+    start: string;
+    paid_coach: boolean;
+    paid_gym: boolean;
+  }>;
+  coach_rate: number;
+  gym_rate: number;
+  locker_rate: number;
+}
+
+export interface BudgetCorrection {
+  source_month: number;
+  source_year: number;
+  coach_delta: Record<Team, number>;
+  gym_delta: number;
+  coach_rate: number;
+  gym_rate: number;
+  note: string;
+  note_edited: boolean;
+  reviewed: boolean;
+  source_fingerprint?: string;
+  /** Актуальные оплачиваемые события прошлого месяца на момент сборки черновика. */
+  source_snapshot?: BudgetEventSnapshot['events'];
+  quantities_edited?: boolean;
+  source_changes?: string[];
+  rate_estimated?: boolean;
+}
+
+export interface PayoutCorrection {
+  component: 'COACH' | 'GYM';
+  team?: Team;
+  sessions: number;
+  amount: number;
+  note: string;
 }
 
 /** Зафиксированные в конце месяца суммы к переводу. */
@@ -102,6 +145,7 @@ export interface MonthlyPayout {
   locker_rent_price: number;
   coach_items: MonthlyPayoutItem[];
   gym_items: MonthlyPayoutItem[];
+  corrections: PayoutCorrection[];
   calculated_at: string | Date;
   notified_at: string | Date | null;
 }

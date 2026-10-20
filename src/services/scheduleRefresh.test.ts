@@ -180,6 +180,25 @@ test('разные внешние ID одного матча образуют д
   assert.equal(games.find((game) => game.id === currentGame.id)!.present_in_source, true);
 });
 
+test('список расписания показывает ближайшие будущие игры, затем прошедшие от новых к старым', async () => {
+  const common = {
+    source: 'LCHB' as const,
+    source_url: 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/',
+    team: 'RED' as const,
+    team_a: 'Yandex Red', team_b: 'Соперник',
+    game_time: '19:00', location: null, details_url: null,
+  };
+  for (const [external_id, game_date] of [
+    ['past-old', '2000-10-01'], ['future-later', '2099-10-03'],
+    ['past-new', '2000-10-03'], ['future-next', '2099-10-01'],
+  ]) await upsertScheduledGame({ ...common, external_id: external_id!, game_date: game_date! });
+
+  assert.deepEqual((await listScheduledGames()).map((game) => game.external_id),
+    ['future-next', 'future-later', 'past-new', 'past-old']);
+  assert.deepEqual((await listScheduledGames(2)).map((game) => game.external_id),
+    ['future-next', 'future-later']);
+});
+
 test('бот уведомляет администраторов о дубле только один раз', async () => {
   const common = {
     source: 'MLBL' as const,

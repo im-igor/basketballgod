@@ -9,8 +9,8 @@ export async function saveMonthlyPayout(input: MonthlyPayoutInput): Promise<Mont
     `insert into monthly_payouts (
        month, year, coach_amount, gym_amount, coach_training_sessions, coach_games,
        paid_gym_sessions, coach_per_session, coach_per_game, gym_paid_price, locker_rent_price,
-       coach_items, gym_items
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       coach_items, gym_items, corrections
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      on conflict (year, month) do nothing
      returning *`,
     [
@@ -27,6 +27,7 @@ export async function saveMonthlyPayout(input: MonthlyPayoutInput): Promise<Mont
       input.locker_rent_price,
       JSON.stringify(input.coach_items),
       JSON.stringify(input.gym_items),
+      JSON.stringify(input.corrections ?? []),
     ],
   );
   if (rows[0]) return rows[0];

@@ -62,9 +62,11 @@ export function buildMonthlyPayoutMessage(payout: MonthlyPayout): string {
     return `• ${date}${team}${escapeHtml(item.label)} — ${item.amount} ₽`;
   };
 
-  return `💸 <b>Расчёты за ${label}</b>\n\n` +
-    `<b>Тренеру: ${payout.coach_amount} ₽</b>\n` +
+  return `💸 <b>Начисления за ${label}</b>\n\n` +
+    `<b>Тренеру начислено: ${payout.coach_amount} ₽</b>\n` +
     `${payout.coach_items.map(line).join('\n') || '• начислений нет'}\n\n` +
-    `<b>Зал: ${payout.gym_amount} ₽</b>\n` +
-    `${payout.gym_items.map(line).join('\n') || '• начислений нет'}`;
+    `<b>За зал начислено: ${payout.gym_amount} ₽</b>\n` +
+    `${payout.gym_items.map(line).join('\n') || '• начислений нет'}` +
+    (payout.corrections?.length ? `\n\n<b>Изменения относительно опубликованного бюджета:</b>\n` +
+      payout.corrections.map((c) => `• ${escapeHtml(c.note)}: ${c.amount > 0 ? '+' : ''}${c.amount} ₽`).join('\n') : '');
 }

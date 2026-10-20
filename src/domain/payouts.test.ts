@@ -70,10 +70,15 @@ test('сообщение в личку содержит суммы и полну
   };
 
   const message = buildMonthlyPayoutMessage(payout);
-  assert.match(message, /Расчёты за Октябрь 2026/);
-  assert.match(message, /Тренеру: 49000 ₽/);
+  assert.match(message, /Начисления за Октябрь 2026/);
+  assert.match(message, /Тренеру начислено: 49000 ₽/);
   assert.match(message, /03\.10\.2026 · RED · Тренировка &lt;RED&gt; — 5000 ₽/);
   assert.match(message, /05\.10\.2026 · BLACK · Игра с Соколами — 4500 ₽/);
-  assert.match(message, /Зал: 105000 ₽/);
+  assert.match(message, /За зал начислено: 105000 ₽/);
   assert.match(message, /Аренда шкафчика — 3000 ₽/);
+  const withCorrection = buildMonthlyPayoutMessage({
+    ...payout,
+    corrections: [{ component: 'GYM', sessions: -1, amount: -25500, note: 'Отменена 1 аренда' }],
+  });
+  assert.match(withCorrection, /Отменена 1 аренда: -25500 ₽/);
 });

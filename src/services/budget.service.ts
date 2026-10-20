@@ -17,8 +17,9 @@ import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
+import { correctionNote, proposeCorrection, snapshotEvents } from '../domain/budgetCorrections.js';
 import { checkTeamChatMembership } from './chatCheck.service.js';
-import type { BudgetDetails, Player, Team } from '../db/types.js';
+import type { BudgetCorrection, BudgetDetails, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 
@@ -53,13 +54,24 @@ export async function buildAndSaveBudgets(
   api?: Api,
 ): Promise<BuiltBudget[]> {
   const { from, to } = monthRange(month, year);
+  const sourceMonth = month === 1 ? 12 : month - 1;
+  const sourceYear = month === 1 ? year - 1 : year;
+  const { from: sourceFrom, to: sourceTo } = monthRange(sourceMonth, sourceYear);
 
-  const [tariffs, allPlayers, redEvents, blackEvents] = await Promise.all([
+  const [tariffs, allPlayers, redEvents, blackEvents, sourceRedEvents, sourceBlackEvents,
+    sourceRedBudget, sourceBlackBudget] = await Promise.all([
     getTariffs(),
     listPlayers(),
     listEvents('RED', from, to),
     listEvents('BLACK', from, to),
+    listEvents('RED', sourceFrom, sourceTo),
+    listEvents('BLACK', sourceFrom, sourceTo),
+    getBudget('RED', sourceMonth, sourceYear),
+    getBudget('BLACK', sourceMonth, sourceYear),
   ]);
+  const snapshot = snapshotEvents([...redEvents, ...blackEvents], tariffs);
+  const suggested = proposeCorrection(sourceMonth, sourceYear, sourceRedBudget, sourceBlackBudget,
+    [...sourceRedEvents, ...sourceBlackEvents], tariffs);
 
   const events: BudgetEvent[] = [...redEvents, ...blackEvents].map((e) => ({
     team: e.team,
@@ -82,7 +94,24 @@ export async function buildAndSaveBudgets(
 
   const computed = computeBudgets({ month, year, tariffs, events, active, games });
   const previous = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
+  if (previous.some((budget) => budget?.message_id != null)) {
+    throw new Error('Опубликованный бюджет нельзя пересобрать. Корректировку внеси в следующий черновик.');
+  }
   const previousByTeam = { RED: previous[0], BLACK: previous[1] };
+  const priorCorrection = previous.find((budget) => budget?.details?.correction)?.details?.correction;
+  const correction = priorCorrection ? structuredClone(priorCorrection) : suggested;
+  // Сохраняем список платных событий актуального календаря вместе с проверяемым хешем.
+  correction.source_snapshot = suggested.source_snapshot;
+  if (priorCorrection?.source_fingerprint && priorCorrection.source_fingerprint !== suggested.source_fingerprint) {
+    correction.source_fingerprint = suggested.source_fingerprint;
+    correction.source_changes = suggested.source_changes;
+    correction.reviewed = false;
+    if (!correction.quantities_edited) {
+      correction.coach_delta = suggested.coach_delta;
+      correction.gym_delta = suggested.gym_delta;
+      if (!correction.note_edited) correction.note = correctionNote(correction);
+    }
+  }
   const effectiveCoach = Object.fromEntries(TEAMS.map((team) => [team, Math.max(
     0, computed[team].details.coach_sessions + (previousByTeam[team]?.details?.coach_delta ?? 0),
   )])) as Record<Team, number>;
@@ -91,8 +120,12 @@ export async function buildAndSaveBudgets(
   ])) as Record<Team, string | null>;
   const shared = usesSharedCoach(month, year);
   const totalPlayers = computed.RED.details.total_players;
+  const carryCoach = (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate;
+  const gymTotal = computed.RED.details.paid_gym_sessions * tariffs.gym_paid_price +
+    tariffs.locker_rent_price + correction.gym_delta * correction.gym_rate;
+  const gymPer = totalPlayers > 0 ? Math.ceil(gymTotal / totalPlayers) : 0;
   const sharedCoachPer = totalPlayers > 0
-    ? Math.ceil((effectiveCoach.RED + effectiveCoach.BLACK) * tariffs.coach_per_session / totalPlayers)
+    ? Math.ceil(((effectiveCoach.RED + effectiveCoach.BLACK) * tariffs.coach_per_session + carryCoach) / totalPlayers)
     : 0;
 
   const out: BuiltBudget[] = [];
@@ -108,17 +141,22 @@ export async function buildAndSaveBudgets(
     const coachNote = prevDetails?.coach_note ?? null;
     const coachPer =
       shared ? sharedCoachPer : result.details.players_team > 0
-        ? Math.ceil((effectiveCoach[team] * tariffs.coach_per_session) / result.details.players_team)
+        ? Math.ceil((effectiveCoach[team] * tariffs.coach_per_session +
+          correction.coach_delta[team] * correction.coach_rate) / result.details.players_team)
         : 0;
-    const base = result.details.gym_per_person + coachPer;
+    const base = gymPer + coachPer;
+    if (base < 0) throw new Error('Зачёт превышает новый сбор. Уменьши корректировку или перенеси остаток на следующий месяц.');
 
     const details: BudgetDetails = {
       ...result.details,
+      gym_per_person: gymPer,
       coach_per_person: coachPer,
       base_per_person: base,
       ...(shared ? { coach_shared_sessions: effectiveCoach, coach_shared_notes: sharedNotes } : {}),
       coach_delta: coachDelta,
       coach_note: coachNote,
+      event_snapshot: snapshot,
+      correction,
       ...(prevDetails?.chat_check ? { chat_check: prevDetails.chat_check } : {}),
     };
     // Приводим result к учтённой дельте (для инфо-сообщения и возврата).
@@ -184,10 +222,11 @@ export interface RecalcResult {
  */
 export async function recalcBudget(
   budgetId: number,
-  opts: { coachDeltaChange?: number; coachNote?: string } = {},
+  opts: { coachDeltaChange?: number; coachNote?: string; correction?: BudgetCorrection } = {},
 ): Promise<RecalcResult | null> {
   const budget = await getBudgetById(budgetId);
   if (!budget || !budget.details) return null;
+  if (budget.message_id != null) throw new Error('Опубликованный бюджет нельзя изменить');
   const d = budget.details as BudgetDetails;
 
   const [tariffs, charges, allGames] = await Promise.all([
@@ -197,6 +236,7 @@ export async function recalcBudget(
   ]);
 
   const coachDelta = (d.coach_delta ?? 0) + (opts.coachDeltaChange ?? 0);
+  const correction = opts.correction ?? d.correction;
   const coachNote =
     opts.coachNote !== undefined ? opts.coachNote || null : d.coach_note ?? null;
   const effCoach = Math.max(0, d.coach_sessions + coachDelta);
@@ -213,12 +253,21 @@ export async function recalcBudget(
   const sharedNotes: Record<Team, string | null> = budget.team === 'RED'
     ? { RED: coachNote, BLACK: otherDetails?.coach_note ?? d.coach_shared_notes?.BLACK ?? null }
     : { RED: otherDetails?.coach_note ?? d.coach_shared_notes?.RED ?? null, BLACK: coachNote };
+  const carryCoach = correction
+    ? (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate : 0;
+  const gymTotal = d.paid_gym_sessions * tariffs.gym_paid_price + tariffs.locker_rent_price +
+    (correction ? correction.gym_delta * correction.gym_rate : 0);
+  const gymPer = correction
+    ? d.total_players > 0 ? Math.ceil(gymTotal / d.total_players) : 0
+    : d.gym_per_person;
   const coachPer = shared
     ? d.total_players > 0
-      ? Math.ceil((sharedSessions.RED + sharedSessions.BLACK) * tariffs.coach_per_session / d.total_players)
+      ? Math.ceil(((sharedSessions.RED + sharedSessions.BLACK) * tariffs.coach_per_session + carryCoach) / d.total_players)
       : 0
-    : d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session) / d.players_team) : 0;
-  const base = d.gym_per_person + coachPer;
+    : d.players_team > 0 ? Math.ceil((effCoach * tariffs.coach_per_session +
+      (correction?.coach_delta[budget.team] ?? 0) * (correction?.coach_rate ?? 0)) / d.players_team) : 0;
+  const base = gymPer + coachPer;
+  if (base < 0) throw new Error('Зачёт превышает новый сбор. Уменьши корректировку или перенеси остаток на следующий месяц.');
 
   // Взносы за игры — по всему пулу месяца (кросс-команда учитывается по участнику).
   const gamesForBudget: GameForBudget[] = allGames.map((g) => ({
@@ -239,8 +288,10 @@ export async function recalcBudget(
     ...d,
     coach_delta: coachDelta,
     coach_note: coachNote,
+    gym_per_person: gymPer,
     coach_per_person: coachPer,
     base_per_person: base,
+    ...(correction ? { correction } : {}),
     ...(shared ? { coach_shared_sessions: sharedSessions, coach_shared_notes: sharedNotes } : {}),
   };
   await saveBudget({
@@ -260,4 +311,13 @@ export async function recalcBudget(
   });
 
   return { team: budget.team, budgetId, message, coachDelta, effCoach };
+}
+
+/** Карточка корректировок общая для обеих команд и пересчитывает оба черновика. */
+export async function updateBudgetCorrection(month: number, year: number, correction: BudgetCorrection): Promise<void> {
+  const budgets = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
+  if (budgets.some((budget) => budget?.message_id != null)) {
+    throw new Error('Опубликованный бюджет нельзя изменить');
+  }
+  for (const budget of budgets) if (budget) await recalcBudget(budget.id, { correction });
 }

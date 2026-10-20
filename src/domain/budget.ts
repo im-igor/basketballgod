@@ -67,6 +67,7 @@ export function sharedCoachBudgetsReady(red: Budget | null, black: Budget | null
     a.coach_per_person === b.coach_per_person &&
     a.coach_shared_sessions.RED === b.coach_shared_sessions.RED &&
     a.coach_shared_sessions.BLACK === b.coach_shared_sessions.BLACK &&
+    JSON.stringify(a.correction ?? null) === JSON.stringify(b.correction ?? null) &&
     Number(red.total_per_player) === Number(black.total_per_player);
 }
 

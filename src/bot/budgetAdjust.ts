@@ -23,24 +23,14 @@ interface Pending {
 
 // Ожидание текстового ответа от админа (по user_id). В памяти: теряется при рестарте — не страшно.
 const pending = new Map<number, Pending>();
-const lateConfirmations = new Map<string, number>();
-
-/** Для опубликованного сбора первое нажатие показывает предупреждение; повторное подтверждает правку. */
-async function confirmedLateEdit(userId: number, budgetId: number, action: string, bothTeams = false): Promise<boolean> {
+/** Опубликованные суммы сохраняются; правки идут в следующий черновик. */
+async function confirmedLateEdit(_userId: number, budgetId: number, _action: string, bothTeams = false): Promise<boolean> {
   const budget = await getBudgetById(budgetId);
   if (!budget) return true;
   const other = bothTeams
     ? await getBudget(budget.team === 'RED' ? 'BLACK' : 'RED', budget.month, budget.year)
     : null;
-  if (budget.message_id == null && other?.message_id == null) return true;
-  const key = `${userId}:${budgetId}:${action}`;
-  const expiresAt = lateConfirmations.get(key) ?? 0;
-  if (expiresAt > Date.now()) {
-    lateConfirmations.delete(key);
-    return true;
-  }
-  lateConfirmations.set(key, Date.now() + 60_000);
-  return false;
+  return budget.message_id == null && other?.message_id == null;
 }
 
 async function redrawDraft(api: Api, p: Pending, r: RecalcResult): Promise<void> {
@@ -69,7 +59,7 @@ export function registerBudgetAdjust(bot: Bot): void {
       const budget = await getBudgetById(id);
       const shared = budget ? usesSharedCoach(budget.month, budget.year) : false;
       if (!(await confirmedLateEdit(ctx.from!.id, id, `coach:${changeRaw}`, shared))) {
-        await ctx.answerCallbackQuery({ text: `Сбор уже опубликован. Суммы ${shared ? 'в обоих чатах' : 'в чате'} изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.`, show_alert: true });
+        await ctx.answerCallbackQuery({ text: 'Сбор опубликован; суммы зафиксированы. Используй корректировки следующего бюджета.', show_alert: true });
         return;
       }
       const r = await recalcBudget(id, { coachDeltaChange: Number(changeRaw) });
@@ -106,7 +96,7 @@ export function registerBudgetAdjust(bot: Bot): void {
     const budget = await getBudgetById(id);
     if (!(await confirmedLateEdit(ctx.from!.id, id, 'note',
       budget ? usesSharedCoach(budget.month, budget.year) : false))) {
-      await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Проверь полученные переводы и нажми кнопку ещё раз для поздней правки.', show_alert: true });
+      await ctx.answerCallbackQuery({ text: 'Сбор опубликован; суммы зафиксированы.', show_alert: true });
       return;
     }
     const msg = ctx.callbackQuery.message;
@@ -130,7 +120,7 @@ export function registerBudgetAdjust(bot: Bot): void {
     }
     const id = Number(ctx.callbackQuery.data.split(':')[1]);
     if (!(await confirmedLateEdit(ctx.from!.id, id, 'friendly', true))) {
-      await ctx.answerCallbackQuery({ text: 'Сбор уже опубликован. Суммы в чатах изменятся; сверь полученные переводы. Нажми кнопку ещё раз для подтверждения.', show_alert: true });
+      await ctx.answerCallbackQuery({ text: 'Сбор опубликован; суммы зафиксированы.', show_alert: true });
       return;
     }
     const msg = ctx.callbackQuery.message;

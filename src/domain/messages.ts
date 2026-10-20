@@ -119,20 +119,26 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const sharedSessions = d.coach_shared_sessions;
   const sharedNotes = d.coach_shared_notes;
   const sharedBudget = usesSharedCoach(input.month, input.year) && !!sharedSessions;
+  const correction = d.correction;
+  const coachCarry = correction
+    ? (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate : 0;
+  const gymCarry = correction ? correction.gym_delta * correction.gym_rate : 0;
+  const signed = (amount: number) => amount < 0 ? ` - ${Math.abs(amount)}` : amount > 0 ? ` + ${amount}` : '';
   const coachLine = sharedBudget
     ? `Тренер ${sharedSessions.RED + sharedSessions.BLACK} трен.\n` +
-      `${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session} / ${d.total_players} = ${d.coach_per_person} руб.\n` +
+      `${coachCarry ? `(${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session}${signed(coachCarry)})` : `${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session}`} / ${d.total_players} = ${d.coach_per_person} руб.\n` +
       (sharedNotes?.RED ? `Комментарий Red: ${escapeHtml(sharedNotes.RED)}\n` : '') +
       (sharedNotes?.BLACK ? `Комментарий Black: ${escapeHtml(sharedNotes.BLACK)}\n` : '')
-    : `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${effCoach} x ${tariffs.coach_per_session} / ${d.players_team} = ${d.coach_per_person} руб.\n`;
+    : `Тренер в ${team} ${d.coach_sessions} трен.${coachNote} ${correction?.coach_delta[team] ? `(${effCoach} x ${tariffs.coach_per_session}${signed(correction.coach_delta[team] * correction.coach_rate)})` : `${effCoach} x ${tariffs.coach_per_session}`} / ${d.players_team} = ${d.coach_per_person} руб.\n`;
 
   // Шкафчик: при нулевой аренде упоминание и слагаемое из формулы убираем.
   const hasLocker = tariffs.locker_rent_price > 0;
   const lockerText = hasLocker ? ` и оплата шкафчика ${tariffs.locker_rent_price}` : '';
   const lockerSum = hasLocker ? ` + ${tariffs.locker_rent_price}` : '';
   const gymFormula = hasLocker
-    ? `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price}${lockerSum}) / ${d.total_players}`
-    : `${d.paid_gym_sessions} x ${tariffs.gym_paid_price} / ${d.total_players}`;
+    ? `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price}${lockerSum}${signed(gymCarry)}) / ${d.total_players}`
+    : gymCarry ? `(${d.paid_gym_sessions} x ${tariffs.gym_paid_price}${signed(gymCarry)}) / ${d.total_players}`
+      : `${d.paid_gym_sessions} x ${tariffs.gym_paid_price} / ${d.total_players}`;
   const shareWord = hasLocker ? 'делятся' : 'делится';
 
   const calcInner =
@@ -140,7 +146,9 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
     `Зал ${sharedBudget ? '' : 'Black '}по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
     `${gymFormula} = ${d.gym_per_person} руб.\n` +
     `Зал ${sharedBudget ? '' : 'Red '}по вторникам - оплачивается Яндексом${sharedBudget ? '' : ' полностью'}.\n` +
-    `${coachLine}\n` +
+    `${coachLine}` +
+    (correction?.note ? `${escapeHtml(correction.note)}\n` : '') +
+    `\n` +
     `ИТОГО: ${d.base_per_person} руб.\n`;
 
   // Блок прошедших игр входит в ту же цитату, что и расчёт.

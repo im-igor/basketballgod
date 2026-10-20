@@ -3,7 +3,6 @@ import { adminOnly } from '../middlewares/auth.js';
 import { normalizeLogin, parseMonthYear, parseBudgetArgs } from '../../util/args.js';
 import { computeActivityDates } from '../../domain/activity.js';
 import { monthLabel, isoToRu } from '../../domain/dates.js';
-import { usesSharedCoach } from '../../domain/budget.js';
 import { listPlayers, getByLogin, setActive, linkTelegramUser } from '../../db/repos/players.repo.js';
 import { syncAllToSheet } from '../../services/sheetSync.service.js';
 import { getBudget } from '../../db/repos/budgets.repo.js';
@@ -14,7 +13,7 @@ import {
   registerValidatedGames,
   type GamePlan,
 } from '../../services/gameFee.service.js';
-import { sendBudgetDraftToAdmins, sendDebtorsDraftToAdmins, refreshBudgetMessage } from '../../services/notify.service.js';
+import { sendBudgetDraftToAdmins, sendDebtorsDraftToAdmins } from '../../services/notify.service.js';
 import { buildPayPrompt } from '../payMark.js';
 import { sendPollDraftsToAdmins } from '../pollDraft.js';
 import { buildPollDrafts } from '../../services/poll.service.js';
@@ -118,6 +117,11 @@ export function registerCommands(bot: Bot): void {
       return;
     }
     const { team, month, year, games } = value;
+    const existingBudgets = await Promise.all(TEAMS.map((item) => getBudget(item, month, year)));
+    if (existingBudgets.some((budget) => budget?.message_id != null)) {
+      await ctx.reply('Сбор за этот месяц опубликован. Его нельзя пересобрать; корректировки внеси в следующий черновик.');
+      return;
+    }
     await ctx.reply(`Считаю бюджет ${team} за ${monthLabel(month, year)}…`);
 
     // Игры (если есть): сперва валидируем все, и только если без ошибок — сохраняем.
@@ -144,14 +148,6 @@ export function registerCommands(bot: Bot): void {
     }
 
     const built = await buildAndSaveBudgets(month, year, [team], ctx.api);
-    if (usesSharedCoach(month, year)) {
-      const failed: Team[] = [];
-      for (const affected of TEAMS) {
-        const budget = await getBudget(affected, month, year);
-        if (budget?.message_id != null && !(await refreshBudgetMessage(ctx.api, budget.id))) failed.push(affected);
-      }
-      if (failed.length) await ctx.reply(`⚠️ Опубликованные сообщения не обновились: ${failed.join(', ')}`);
-    }
     // Инфо-сообщение + сам драфт с кнопкой уходят админам в личку отдельными сообщениями.
     await sendBudgetDraftToAdmins(ctx.api, built);
   })));

@@ -188,17 +188,16 @@ test('админка показывает тот же черновик и вып
     assert.match(String(sent[2]![1]), /Должники/);
 
     const lateUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
-    assert.match(decodeURIComponent(String(lateUpdate.headers.location)), /Поправка/);
-    assert.equal(edited.length, 2);
-    assert.deepEqual(new Set(edited.map((item) => item[0])), new Set([-1, -2]));
+    assert.match(decodeURIComponent(String(lateUpdate.headers.location)), /Опубликованный бюджет нельзя изменить/);
+    assert.equal(edited.length, 0);
     redCharge = (await db.query<{ amount: number; paid: boolean }>(
       'select amount, paid from charges where budget_id=$1', [redBudget],
     )).rows[0]!;
-    assert.equal(Number(redCharge.amount), 2500);
+    assert.equal(Number(redCharge.amount), 5000);
     assert.equal(redCharge.paid, true);
     assert.equal(Number((await db.query<{ amount: number }>(
       'select amount from charges where budget_id=$1', [blackBudget],
-    )).rows[0]!.amount), 2500);
+    )).rows[0]!.amount), 5000);
   } finally {
     await app?.close();
     mock.restoreAll();

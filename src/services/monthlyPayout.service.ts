@@ -6,9 +6,10 @@ import type { BudgetDetails, MonthlyPayout, MonthlyPayoutItem, Team } from '../d
 import { computeMonthlyPayouts } from '../domain/payouts.js';
 import { monthRange } from '../domain/dates.js';
 import { listEvents } from '../google/calendar.js';
+import { payoutCorrections } from '../domain/budgetCorrections.js';
 
-/** Рассчитать по финальному состоянию календарей и игр и сохранить снимок месяца. */
-export async function calculateAndSaveMonthlyPayout(
+/** Предварительный расчёт по текущему календарю без записи в БД. */
+export async function calculateMonthlyPayoutPreview(
   month: number,
   year: number,
 ): Promise<MonthlyPayout> {
@@ -90,7 +91,7 @@ export async function calculateAndSaveMonthlyPayout(
     amount: tariffs.locker_rent_price,
   });
 
-  return saveMonthlyPayout({
+  return {
     month,
     year,
     coach_amount: result.coach,
@@ -104,5 +105,13 @@ export async function calculateAndSaveMonthlyPayout(
     locker_rent_price: tariffs.locker_rent_price,
     coach_items: coachItems,
     gym_items: gymItems,
-  });
+    corrections: payoutCorrections(redBudget, blackBudget, events, tariffs),
+    calculated_at: new Date(),
+    notified_at: null,
+  };
+}
+
+/** Зафиксировать первый итоговый расчёт месяца для постоплаты. */
+export async function calculateAndSaveMonthlyPayout(month: number, year: number): Promise<MonthlyPayout> {
+  return saveMonthlyPayout(await calculateMonthlyPayoutPreview(month, year));
 }

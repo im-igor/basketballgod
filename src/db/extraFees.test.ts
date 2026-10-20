@@ -9,13 +9,19 @@ import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from '
 import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, setExtraFeeActive } from './repos/extraFees.repo.js';
 import { saveGame } from './repos/games.repo.js';
 import { saveMonthlyPayout } from './repos/monthlyPayouts.repo.js';
-import { buildAndSaveBudgets, recalcBudget } from '../services/budget.service.js';
-import { renderBudgetFromDb } from '../services/notify.service.js';
+import { buildAndSaveBudgets, recalcBudget, updateBudgetCorrection } from '../services/budget.service.js';
+import { calculateAndSaveMonthlyPayout } from '../services/monthlyPayout.service.js';
+import { renderBudgetFromDb, sendBudgetToChat } from '../services/notify.service.js';
 import { buildServer } from '../http/server.js';
 import type { BudgetDetails, Team } from './types.js';
 import type { Bot } from 'grammy';
 
 const db = new PGlite();
+const calendarItems = new Map<string, Array<{ id: string; summary: string; description: string; start: { dateTime: string } }>>();
+const training = (id: string, month: number, team: Team, gym: 'PAID' | 'FREE' = 'FREE') => ({
+  id, summary: `Тренировка ${team}`, description: `TYPE=TRAINING\nCOACH=PAID\nGYM=${gym}`,
+  start: { dateTime: `2026-${String(month).padStart(2, '0')}-15T19:00:00+03:00` },
+});
 // Один PostgreSQL backend, как pool max=1: транзакции не перемешиваются.
 let queue = Promise.resolve();
 async function acquire() {
@@ -63,15 +69,53 @@ before(async () => {
     const release = await acquire();
     return { query: sql, release };
   });
-  mock.method(google, 'calendar', () => ({ events: { list: async () => ({ data: { items: [] } }) } }));
+  mock.method(google, 'calendar', () => ({ events: { list: async (args: { calendarId: string; timeMin: string }) => {
+    const month = new Date(args.timeMin).getMonth() + 1;
+    return { data: { items: calendarItems.get(`${args.calendarId}:${month}`) ?? [] } };
+  } } }));
   await migrate();
   await migrate(); // повторный старт не ломает схему
 });
 beforeEach(async () => {
+  calendarItems.clear();
   await db.exec('truncate monthly_payouts, extra_fee_allocations, extra_fees, charges, budgets, games, players restart identity cascade');
   await db.exec(`insert into players (id, name, tg_login, team, active, is_employee) values
     (1, 'Игрок 1', '@p1', 'BLACK', true, true), (2, 'Игрок 2', '@p2', 'BLACK', true, true),
     (3, 'Игрок 3', '@p3', 'BLACK', true, true), (4, 'Игрок 4', '@p4', 'RED', true, true)`);
+});
+
+test('октябрьская отмена уменьшает начисления и отдельно зачитывается в ноябрьском сборе', async () => {
+  calendarItems.set('test-red:10', [training('oct-red', 10, 'RED', 'PAID')]);
+  calendarItems.set('test-black:10', [training('oct-black', 10, 'BLACK')]);
+  await buildAndSaveBudgets(10, 2026);
+  await sql('update budgets set message_id = id + 100 where month = 10 and year = 2026');
+  calendarItems.set('test-red:10', []); // администратор удалил отменённую тренировку
+  calendarItems.set('test-red:11', Array.from({ length: 4 }, (_, i) => training(`nov-red-${i}`, 11, 'RED')));
+  calendarItems.set('test-black:11', Array.from({ length: 4 }, (_, i) => training(`nov-black-${i}`, 11, 'BLACK', 'PAID')));
+
+  const built = await buildAndSaveBudgets(11, 2026);
+  assert.equal(built.length, 2);
+  const novemberRed = (await getBudget('RED', 11, 2026))!;
+  const novemberBlack = (await getBudget('BLACK', 11, 2026))!;
+  assert.deepEqual(novemberRed.details!.correction?.coach_delta, { RED: -1, BLACK: 0 });
+  assert.equal(novemberRed.details!.correction?.gym_delta, -1);
+  assert.equal(novemberRed.details!.correction?.reviewed, false);
+  assert.equal(Number(novemberRed.total_per_player), 28625);
+  assert.equal(Number(novemberBlack.total_per_player), 28625);
+  assert.match((await renderBudgetFromDb(novemberBlack.id))!.text, /Корректировка за Октябрь 2026/);
+  const telegram = { sendMessage: async () => ({ message_id: 999 }) } as never;
+  await assert.rejects(sendBudgetToChat(telegram, novemberRed.id), /Подтверди корректировки/);
+  await updateBudgetCorrection(11, 2026, { ...novemberRed.details!.correction!, reviewed: true });
+  calendarItems.set('test-red:10', [training('oct-new', 10, 'RED')]);
+  await assert.rejects(sendBudgetToChat(telegram, novemberRed.id), /Календарь прошлого месяца изменился/);
+  calendarItems.set('test-red:10', []);
+  await sendBudgetToChat(telegram, novemberRed.id);
+  assert.equal((await getBudget('RED', 11, 2026))!.message_id, 999);
+
+  const payout = await calculateAndSaveMonthlyPayout(10, 2026);
+  assert.equal(Number(payout.coach_amount), 5000);
+  assert.equal(Number(payout.gym_amount), 3000);
+  assert.deepEqual(payout.corrections.map((c) => c.amount), [-5000, -25500]);
 });
 after(async () => { mock.restoreAll(); await db.close(); await pool.end(); });
 
@@ -319,9 +363,9 @@ test('админка: авторизация, валидация, создани
     assert.match(page.body, /href="\/budgets\/10-2026"/);
     const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
     assert.equal(budgetPage.statusCode, 200);
-    assert.match(budgetPage.body, /Закрытие месяца/);
-    assert.match(budgetPage.body, /Тренеру — 5000₽/);
-    assert.match(budgetPage.body, /Зал — 3000₽/);
+    assert.match(budgetPage.body, /Расчёты с тренером и залом/);
+    assert.match(budgetPage.body, /Начислено тренеру — 5000₽/);
+    assert.match(budgetPage.body, /Начислено за зал — 3000₽/);
     assert.match(budgetPage.body, /Игра с Тестом/);
     assert.match(budgetPage.body, /Аренда шкафчика/);
     assert.match(budgetPage.body, /Разовые/);

@@ -102,6 +102,13 @@ function countWord(count: number, one: string, few: string, many: string): strin
   return many;
 }
 
+function monthInPrepositionalCase(month: number): string {
+  return [
+    'январе', 'феврале', 'марте', 'апреле', 'мае', 'июне',
+    'июле', 'августе', 'сентябре', 'октябре', 'ноябре', 'декабре',
+  ][month - 1] ?? monthLabel(month, 0).toLowerCase();
+}
+
 function legacyDates(changes: string[] | undefined, kind: 'отменено' | 'добавлено'): string[] {
   return (changes ?? []).flatMap((change) => {
     const match = change.match(/^(\d{4}-\d{2}-\d{2}) (?:RED|BLACK): (отменено|добавлено) или изменено$/);
@@ -124,7 +131,13 @@ export function correctionNote(c: Pick<BudgetCorrection,
     ...(coachDelta < 0 || c.gym_delta < 0 ? removed : []),
     ...(coachDelta > 0 || c.gym_delta > 0 ? added : []),
   ])].sort().map((date) => isoToRu(date));
-  return `${parts.join(', ')} - за ${dates.length ? dates.join(', ') : monthLabel(c.source_month, c.source_year)}`;
+  const hasRemoval = coachDelta < 0 || c.gym_delta < 0;
+  const hasAddition = coachDelta > 0 || c.gym_delta > 0;
+  const reason = hasRemoval && hasAddition ? 'изменение' : hasRemoval ? 'отмену' : 'добавление';
+  const period = dates.length
+    ? `${reason} ${dates.join(', ')}`
+    : `${reason} в ${monthInPrepositionalCase(c.source_month)} ${c.source_year}`;
+  return `${parts.join(', ')} - за ${period}`;
 }
 
 /** Прежний автоматически сформированный текст, который мог сохраниться в старом черновике. */

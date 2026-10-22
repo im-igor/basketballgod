@@ -1,17 +1,24 @@
-# ── Стадия сборки ───────────────────────────────────────────
-FROM node:20-slim AS build
+# syntax=docker/dockerfile:1
+
+# ── Зависимости (кэш не зависит от исходников) ──────────────
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 
+# Прод-зависимости готовим до копирования кода: изменение src не запускает prune.
+FROM deps AS prod-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm prune --omit=dev --no-audit --no-fund
+
+# ── Стадия сборки ───────────────────────────────────────────
+FROM deps AS build
 COPY tsconfig.json ./
 COPY src ./src
-COPY scripts ./scripts
+COPY scripts/copy-assets.mjs ./scripts/copy-assets.mjs
 RUN NODE_OPTIONS=--max-old-space-size=3072 npm run build
-
-# Прод-зависимости отдельно (без dev)
-RUN npm prune --omit=dev
 
 # ── Стадия рантайма ─────────────────────────────────────────
 FROM postgres:16-bookworm AS runtime
@@ -19,10 +26,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # PostgreSQL 16 даёт совместимый pg_dump; Node 20 нужен для приложения.
-COPY --from=node:20-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=deps /usr/local/bin/node /usr/local/bin/node
 RUN useradd --create-home --uid 1000 --shell /bin/bash app
 
-COPY --from=build /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 

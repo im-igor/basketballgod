@@ -2,7 +2,7 @@ import '../test/env.js';
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
-import { google } from 'googleapis';
+import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
 import type { Bot } from 'grammy';
 
 test('кнопки корректировки и комментарий меняют оба черновика до подтверждения', async () => {
@@ -15,7 +15,7 @@ test('кнопки корректировки и комментарий меня
     ? db.query(query, params) : db.exec(query).then((results) => results.at(-1)!);
   mock.method(pool, 'query', sql);
   mock.method(pool, 'connect', async () => ({ query: sql, release: () => undefined }));
-  mock.method(google, 'calendar', () => ({ events: { list: async () => ({ data: { items: [] } }) } }));
+  mock.method(calendar_v3.Resource$Events.prototype, 'list', async () => ({ data: { items: [] } }));
   let app: Awaited<ReturnType<typeof buildServer>> | undefined;
   try {
     await migrate();

@@ -1,4 +1,6 @@
-import { google } from 'googleapis';
+// Узкие импорты: общий googleapis загружает типы всех Google API при сборке.
+import { auth, calendar } from 'googleapis/build/src/apis/calendar/index.js';
+import { sheets } from 'googleapis/build/src/apis/sheets/index.js';
 import { env } from '../config/env.js';
 
 /**
@@ -29,10 +31,10 @@ let authClient: ReturnType<typeof buildAuth> | null = null;
 function buildAuth() {
   const creds = loadCredentials();
   if (creds) {
-    return new google.auth.GoogleAuth({ credentials: creds, scopes: SCOPES });
+    return new auth.GoogleAuth({ credentials: creds, scopes: SCOPES });
   }
   // Иначе googleapis сам прочитает файл из GOOGLE_APPLICATION_CREDENTIALS.
-  return new google.auth.GoogleAuth({ scopes: SCOPES });
+  return new auth.GoogleAuth({ scopes: SCOPES });
 }
 
 export function getAuth() {
@@ -41,9 +43,9 @@ export function getAuth() {
 }
 
 export function calendarClient() {
-  return google.calendar({ version: 'v3', auth: getAuth() });
+  return calendar({ version: 'v3', auth: getAuth() });
 }
 
 export function sheetsClient() {
-  return google.sheets({ version: 'v4', auth: getAuth() });
+  return sheets({ version: 'v4', auth: getAuth() });
 }

@@ -234,6 +234,27 @@ docker compose restart app                 # просто перезапуск �
 docker compose up -d --build app           # пересборка после git pull / нового кода
 docker compose down                        # остановить (данные БД сохранятся в volume pgdata)
 ```
+
+Повторная сборка использует кэш BuildKit (современный Docker Compose включает его
+по умолчанию). Установка через `npm ci` и удаление dev-зависимостей вынесены
+в отдельные стадии: при изменении только кода они берутся из кэша.
+Загрузки npm также кэшируются между сборками. После изменения Dockerfile первая
+сборка прогреет новые слои; ускорение ожидается на последующих обновлениях.
+Не очищай build cache и не используй `--no-cache` при обычном деплое.
+
+Если сборка всё ещё долгая, выведи время каждого этапа:
+
+```bash
+docker compose --progress plain build app
+docker compose up -d --no-build app
+```
+
+В логе установки зависимостей и `prune` должно быть `CACHED`, если
+`package.json`, `package-lock.json` и базовый образ не менялись.
+Компиляция использует только типы Google Calendar и Sheets, а не всех Google API,
+что снижает расход памяти на небольшой ВМ.
+Для изменения `.env` или простого перезапуска пересборка не нужна — команды выше.
+
 Бэкап БД:
 ```bash
 docker compose exec db pg_dump -U basketballgod basketballgod > backup_$(date +%F).sql

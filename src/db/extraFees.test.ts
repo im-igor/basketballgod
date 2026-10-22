@@ -2,7 +2,7 @@ import '../test/env.js';
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
-import { google } from 'googleapis';
+import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
 import { pool } from './pool.js';
 import { migrate } from './migrator.js';
 import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from './repos/budgets.repo.js';
@@ -69,10 +69,10 @@ before(async () => {
     const release = await acquire();
     return { query: sql, release };
   });
-  mock.method(google, 'calendar', () => ({ events: { list: async (args: { calendarId: string; timeMin: string }) => {
+  mock.method(calendar_v3.Resource$Events.prototype, 'list', async (args: { calendarId: string; timeMin: string }) => {
     const month = new Date(args.timeMin).getMonth() + 1;
     return { data: { items: calendarItems.get(`${args.calendarId}:${month}`) ?? [] } };
-  } } }));
+  });
   await migrate();
   await migrate(); // повторный старт не ломает схему
 });

@@ -865,7 +865,9 @@ export async function buildServer(bot: Bot) {
     view: 'calculation' | 'collection',
   ) => {
     const period = parsePeriod((req.params as { period: string }).period);
-    const msg = (req.query as Record<string, string>).msg;
+    const query = req.query as Record<string, string>;
+    const msg = query.msg;
+    const showAllCharges = view === 'collection' && query.all === '1';
     if (!period) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Неверный период бюджета');
     const seg = periodOf(period.month, period.year);
 
@@ -986,7 +988,10 @@ export async function buildServer(bot: Bot) {
       <a href="/budgets/${seg}?preview=payout#payouts">Посчитать по текущему календарю →</a>
     </div>`;
 
-    const rows = combined
+    const displayedCharges = view === 'collection' && !showAllCharges
+      ? combined.filter((c) => !c.paid)
+      : combined;
+    const rows = displayedCharges
       .map(
         (c) => `<tr id="charge-${c.id}">
         <td>${esc(formatFullName(c.name))}</td>
@@ -1044,6 +1049,10 @@ export async function buildServer(bot: Bot) {
         <form class="inline" method="post" action="/budgets/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
+      <div class="card row" style="align-items:center;justify-content:space-between">
+        <span class="muted">${showAllCharges ? 'Показаны все участники' : `Показаны должники (${combined.length - paidCount})`}</span>
+        <a class="button ghost" href="/collections/${seg}${showAllCharges ? '' : '?all=1'}">${showAllCharges ? 'Скрыть сдавших' : 'Показать весь список'}</a>
+      </div>
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
@@ -1312,7 +1321,7 @@ export async function buildServer(bot: Bot) {
     if (!charge) return redirect(reply, '/collections', 'Оплата не найдена');
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
-    const back = budget ? `/collections/${periodOf(budget.month, budget.year)}` : '/collections';
+    const back = budget ? `/collections/${periodOf(budget.month, budget.year)}${value ? '?all=1' : ''}` : '/collections';
     return reply.redirect(`${back}?msg=${encodeURIComponent('Оплата обновлена')}${budget ? `#charge-${id}` : ''}`);
   });
 

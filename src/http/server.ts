@@ -1399,7 +1399,7 @@ export async function buildServer(bot: Bot) {
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {
         const stable = s.stable_since && s.checked_at && new Date(s.checked_at).getTime() - new Date(s.stable_since).getTime() >= STABILITY_MS;
-        const label = `${esc(s.team)} #${esc(s.external_id)}`;
+        const label = `${esc(isoToRu(s.game_date))} ${esc(s.team_a)} vs ${esc(s.team_b)}`;
         let statsUrl: string | null = null;
         if (s.details_url) {
           try { statsUrl = gameStatsRef(s.details_url).url.toString(); } catch { /* Нет допустимого протокола. */ }

@@ -1398,7 +1398,9 @@ export async function buildServer(bot: Bot) {
       <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {
-        const label = `${esc(isoToRu(s.game_date))} ${esc(s.team_a)} vs ${esc(s.team_b)}`;
+        const shortTeam = (name: string) => name.trim().replace(/^yandex\s+(black|red)$/i,
+          (_match, color: string) => color.toUpperCase());
+        const label = `${esc(isoToRu(s.game_date))} ${esc(shortTeam(s.team_a))} vs ${esc(shortTeam(s.team_b))}`;
         let statsUrl: string | null = null;
         if (s.details_url) {
           try { statsUrl = gameStatsRef(s.details_url).url.toString(); } catch { /* Нет допустимого протокола. */ }

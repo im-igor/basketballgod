@@ -1,3 +1,4 @@
+import { matchesScheduledTeam } from './schedule.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ScheduledGame } from '../db/types.js';
@@ -53,4 +54,12 @@ test('дублем считается только тот же состав ко
   const groups = groupScheduleDuplicates([original, duplicate, otherDate, otherTime]);
   assert.equal(groups.length, 1);
   assert.deepEqual(groups[0]!.games.map((game) => game.id), ['1', '2']);
+});
+
+
+test('сокращение названия ЛЧБ в расписании сопоставляется с полным протоколом', () => {
+  assert.equal(matchesScheduledTeam('Лига Цифровой Экономи...','Лига Цифровой Экономики'),true);
+  assert.equal(matchesScheduledTeam('Лига Цифровой Экономи…','Лига Цифровой Экономики'),true);
+  assert.equal(matchesScheduledTeam('Лига...','Лига Цифровой Экономики'),false);
+  assert.equal(matchesScheduledTeam('MARKS GROUP','Yandex Red'),false);
 });

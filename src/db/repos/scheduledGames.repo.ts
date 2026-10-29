@@ -89,7 +89,8 @@ export async function markScheduleSourcePresence(
     `update scheduled_games
      set present_in_source = external_id = any($3::text[]),
          updated_at = now()
-     where source = $1 and team = $2`,
+     where source = $1 and team = $2
+       and (source <> 'MLBL' or game_date >= current_date or external_id = any($3::text[]))`,
     [source, team, externalIds],
   );
 }

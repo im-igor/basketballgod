@@ -63,3 +63,13 @@ export function groupScheduleDuplicates(games: ScheduledGame[]): ScheduleDuplica
       games: group.sort((a, b) => Number(a.id) - Number(b.id)),
     }));
 }
+
+
+/** В расписании ЛЧБ длинное название сокращается многоточием, в протоколе оно полное. */
+export function matchesScheduledTeam(scheduled: string, actual: string): boolean {
+  const compact = (value: string) => normalizeScheduledTeamName(value).replace(/[^a-zа-я0-9]/g,'');
+  if (compact(scheduled) === compact(actual)) return true;
+  if (!/(?:\.\.\.|…)\s*$/.test(scheduled)) return false;
+  const prefix = compact(scheduled.replace(/(?:\.\.\.|…)\s*$/,''));
+  return prefix.length >= 10 && compact(actual).startsWith(prefix);
+}

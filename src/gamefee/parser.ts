@@ -190,7 +190,9 @@ function parseTeamBlock(block: HTMLElement): ParsedTeam {
   const timeCol = findColumn(table, TIME_HEADER_RE);
 
   const players: ParsedPlayer[] = [];
+  const headers = new Set(table.querySelectorAll('thead tr'));
   for (const row of table.querySelectorAll('tr')) {
+    if (headers.has(row) || row.querySelector('th')) continue;
     const cells = row.querySelectorAll('th, td');
     if (cells.length === 0) continue;
 

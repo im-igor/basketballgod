@@ -1471,9 +1471,9 @@ export async function buildServer(bot: Bot) {
       ${statsCard}
       ${importForm}
       ${addForm}
-      <div class="card"><table class="games-table">
+      <div class="card"><h2>Игры, включённые в бюджет ${esc(monthLabel(month,year))}</h2><table class="games-table">
         <thead><tr><th>Дата</th><th>Команда</th><th>Соперник</th><th>Сыграло</th><th>Взнос</th><th>Тренер</th><th>Судья</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" class="muted">Игр за этот месяц нет</td></tr>'}</tbody></table></div>`;
+        <tbody>${rows || `<tr><td colspan="8" class="muted">В бюджет игры ещё не добавлены. Проверка статистики сама по себе не добавляет игры: устрани ошибки выше и <a href="/budgets?month=${month}&year=${year}">собери бюджет</a>.</td></tr>`}</tbody></table></div>`;
     return html(reply, layout(`Игры ${monthLabel(month, year)}`, body, { flash: msg }));
   });
 

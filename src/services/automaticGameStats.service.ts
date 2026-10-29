@@ -5,7 +5,7 @@ import { listScheduledGamesInRange, getScheduledGameByExternalId, upsertSchedule
 import { listScheduleSources } from '../db/repos/scheduleSources.repo.js';
 import { fetchSchedulePage } from '../schedule/parser.js';
 import { importCalendarSchedule } from './calendarScheduleImport.service.js';
-import { scheduledMatchupKey } from '../domain/schedule.js';
+import { scheduledMatchupKey, matchesScheduledTeam } from '../domain/schedule.js';
 import { listPlayers } from '../db/repos/players.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { gameStatsRef } from '../gamefee/parser.js';
@@ -82,10 +82,9 @@ async function inspectAutomaticGameStats(
       if (!result.ok) throw new Error(result.errors.join('; '));
       const verified = result.plan;
       plan = verified;
-      const normalize = (s: string) => s.toLowerCase().replace(/[^a-zа-яё0-9]/g, '');
       if (plan.date !== dateOf(game.game_date) ||
-          ![game.team_a, game.team_b].some((name) => normalize(name) === normalize(verified.teamName)) ||
-          ![game.team_a, game.team_b].some((name) => normalize(name) === normalize(verified.opponent ?? ''))) {
+          ![game.team_a, game.team_b].some((name) => matchesScheduledTeam(name, verified.teamName)) ||
+          ![game.team_a, game.team_b].some((name) => matchesScheduledTeam(name, verified.opponent ?? ''))) {
         throw new Error('Дата или команды протокола отличаются от расписания');
       }
       if (!Number.isSafeInteger(plan.fee) || plan.fee < 0) throw new Error('Некорректная сумма взноса');

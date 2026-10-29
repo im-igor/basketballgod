@@ -590,3 +590,15 @@ test('восстановившийся сайт лиги принимает ру
     update.mock.restore();
   }
 });
+
+
+test('завершённая игра МЛБЛ не исчезает при обновлении будущего расписания', async () => {
+  const common = { source:'MLBL' as const,source_url:'https://moscow.ilovebasket.ru/schedule',
+    team:'BLACK' as const,team_a:'Yandex Black',team_b:'Opponent',game_time:'18:00',location:null,details_url:null };
+  const played = await upsertScheduledGame({ ...common,external_id:'past-game',game_date:'2020-10-04' });
+  const future = await upsertScheduledGame({ ...common,external_id:'future-game',game_date:'2099-10-04' });
+  await markScheduleSourcePresence('MLBL','BLACK',[]);
+  const games = await listScheduledGames();
+  assert.equal(games.find((g) => g.id === played.id)!.present_in_source,true);
+  assert.equal(games.find((g) => g.id === future.id)!.present_in_source,false);
+});

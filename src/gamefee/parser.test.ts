@@ -4,6 +4,7 @@ import {
   canonicalGameStatsUrl,
   gameStatsRef,
   parseMlblOnlineJson,
+  parseLchbGameHtml,
   selectTeamPlayers,
 } from './parser.js';
 
@@ -79,4 +80,12 @@ test('не превращает отрицательное время МЛБЛ �
   const game = parseMlblOnlineJson({ GameTeams: [{ TeamName: { CompTeamNameRu: 'Yandex Black' },
     Players: [{ FirstNameRu: 'Иван', LastNameRu: 'Игроков', Seconds: -1 }] }] });
   assert.ok(Number.isNaN(game.teams[0]!.players[0]!.minutes));
+});
+
+
+test('строка шапки ЛЧБ с colspan не становится игроком', () => {
+  const game = parseLchbGameHtml(`<div class="math-p-stat"><h2>Статистика команды Yandex Red</h2>
+    <table><thead><tr><th colspan="2"></th><th>Игрок</th><th>Очки</th><th>ВР</th></tr></thead>
+    <tbody><tr><td></td><td>1</td><td>Тестовый Участник</td><td>5</td><td>12 : 30</td></tr></tbody></table></div>`);
+  assert.deepEqual(game.teams[0]!.players,[{ name:'Тестовый Участник',minutes:12.5 }]);
 });

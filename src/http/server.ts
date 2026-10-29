@@ -866,31 +866,45 @@ export async function buildServer(bot: Bot) {
         try { payout = await calculateMonthlyPayoutPreview(first.month,first.year); }
         catch (err) { payoutError = (err as Error).message; }
       }
+      const money = (value: number) => esc(new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value)) + ' ₽';
       const payoutSummary = payout
-        ? `<p><b>Начислено тренеру: ${esc(payout.coach_amount)} ₽</b> · <b>Начислено за зал: ${esc(payout.gym_amount)} ₽</b></p>
-          <p class="muted">${savedPayout ? 'Итоговый расчёт' : 'Предварительно по текущему календарю'} за ${esc(monthLabel(first.month,first.year))} · ${esc(fmtDateTime(payout.calculated_at))}</p>`
-        : `<p role="alert">Начисления тренеру и за зал пока недоступны: ${esc(payoutError)}. Обнови страницу, чтобы повторить расчёт.</p>`;
+        ? `<div class="settlement-payout-heading"><span>К оплате за месяц</span><span class="settlement-estimate">${savedPayout ? 'Итог' : 'Предварительно'}</span></div>
+          <div class="settlement-payout-values">
+            <div class="settlement-metric"><span>Тренер</span><strong aria-label="Начислено тренеру: ${esc(payout.coach_amount)} ₽">${money(payout.coach_amount)}</strong></div>
+            <div class="settlement-metric"><span>Зал и шкафчик</span><strong aria-label="Начислено за зал: ${esc(payout.gym_amount)} ₽">${money(payout.gym_amount)}</strong></div>
+          </div>
+          <div class="settlement-updated">${savedPayout ? 'Зафиксировано' : 'Обновлено'} ${esc(fmtDateTime(payout.calculated_at))}</div>`
+        : `<div class="settlement-error" role="alert"><b>Не удалось рассчитать начисления</b><span>Обнови страницу, чтобы повторить попытку.</span>
+          <details><summary>Причина ошибки</summary><p>${esc(payoutError)}</p></details></div>`;
       const status = published === 2
         ? '<span class="badge yes">опубликован</span>'
         : published > 0 ? '<span class="badge red">частично опубликован</span>'
           : '<span class="badge no">черновик</span>';
-      cards.push(`<div class="card">
-        <div class="row" style="align-items:center;justify-content:space-between">
-          <div><h2 style="margin:0"><a href="/collections/${seg}">${esc(monthLabel(first.month, first.year))}</a></h2>${status}</div>
-          <div class="row" style="align-items:center">
-            <form class="inline" method="post" action="/collections/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
-            <a href="/collections/${seg}">Открыть список →</a>
+      const outstanding = Math.max(0,total-paidAmount);
+      const percent = total>0 ? Math.round(paidAmount/total*100) : 0;
+      const state = published===2 ? 'published' : published>0 ? 'partial' : 'draft';
+      cards.push(`<section class="settlement-card settlement-card--${state}" aria-label="Расчеты за ${esc(monthLabel(first.month,first.year))}">
+        <div class="settlement-header">
+          <div class="settlement-title"><h2><a href="/collections/${seg}">${esc(monthLabel(first.month,first.year))}</a></h2>${status}</div>
+        </div>
+        <div class="settlement-body">
+          <div class="settlement-collection">
+            <div class="settlement-section-label">Сбор с игроков <a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a></div>
+            <div class="settlement-collected"><strong>${money(paidAmount)}</strong><span>из ${money(total)}</span><b class="settlement-percent">${percent}%</b></div>
+            <div class="settlement-progress" role="progressbar" aria-label="Собрано с игроков" aria-valuenow="${Math.min(100,Math.max(0,percent))}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100,Math.max(0,percent))}%"></span></div>
+            <div class="settlement-counts"><span><b>${paid.length}</b> сдали</span><span><b>${unpaidCount}</b> не сдали</span><span>${charges.length} участников</span></div>
+            <div class="settlement-debt"><span>Осталось собрать <b>${money(outstanding)}</b></span>
+              <form class="inline" method="post" action="/collections/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
+            </div>
+          </div>
+          <div class="settlement-payouts">${payoutSummary}
+${payout ? `<details class="settlement-details"><summary>Расшифровка начислений <span aria-hidden="true">⌄</span></summary>${renderPayoutCard(payout,!!savedPayout,payoutError,`/collections?preview=${seg}#payouts-${seg}`,`payouts-${seg}`)}</details>` : ''}
           </div>
         </div>
-        <p><b>${charges.length}</b> участников · <b>${paid.length}</b> сдали · <b>${unpaidCount}</b> не сдали</p>
-        ${progressBar(paidAmount, total)}
-        <hr><h3>Начисления тренеру и за зал</h3>
-        <p class="muted">За календарный месяц этой карточки, отдельно от поступлений с игроков. Фактические переводы здесь не отмечаются.</p>
-        ${payoutSummary}
-        ${payout ? `<details><summary>Расшифровка начислений</summary>${renderPayoutCard(payout,!!savedPayout,payoutError,`/collections?preview=${seg}#payouts-${seg}`,`payouts-${seg}`)}</details>` : ''}
-      </div>`);
+      </section>`);
     }
     const body = `<h1>Расчеты</h1>
+      <p class="muted settlement-intro">Сборы с игроков и начисления за каждый месяц. Начисления не означают, что перевод тренеру или за зал уже выполнен.</p>
       ${cards.join('') || '<div class="card muted">Бюджетов пока нет. Сначала собери черновик в разделе «Расчёт бюджета».</div>'}`;
     return html(reply, layout('Расчеты', body, { flash: msg }));
   });

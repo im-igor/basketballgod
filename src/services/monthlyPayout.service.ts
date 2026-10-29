@@ -4,9 +4,16 @@ import { saveMonthlyPayout } from '../db/repos/monthlyPayouts.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import type { BudgetDetails, MonthlyPayout, MonthlyPayoutItem, Team } from '../db/types.js';
 import { computeMonthlyPayouts } from '../domain/payouts.js';
-import { monthRange } from '../domain/dates.js';
+import { monthRange, toISODate } from '../domain/dates.js';
 import { listEvents } from '../google/calendar.js';
 import { payoutCorrections } from '../domain/budgetCorrections.js';
+
+/** pg возвращает SQL DATE как локальную полночь Date; сохраняем именно календарный день. */
+function payoutDate(value: string | Date | null): string | null {
+  if (!(value instanceof Date)) return value;
+  if (!Number.isFinite(value.getTime())) throw new Error('Некорректная дата игры в расчёте начислений');
+  return toISODate(value);
+}
 
 /** Предварительный расчёт по текущему календарю без записи в БД. */
 export async function calculateMonthlyPayoutPreview(
@@ -68,7 +75,7 @@ export async function calculateMonthlyPayoutPreview(
   });
   coachItems.push(...games.filter((game) => game.coach_present).map((game) => ({
     kind: 'GAME' as const,
-    date: game.played_on,
+    date: payoutDate(game.played_on),
     label: `Игра${game.opponent ? ` с ${game.opponent}` : ''}`,
     amount: tariffs.coach_per_game,
     ...(game.team === 'MIXED' ? {} : { team: game.team }),

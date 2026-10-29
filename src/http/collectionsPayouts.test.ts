@@ -46,13 +46,16 @@ test('Расчеты показывают итоговые и предварит
     assert.match(page.body,/Октябрьская тренировка/);
     assert.match(page.body,/Октябрьский зал/);
     assert.match(page.body,/Расшифровка начислений/);
+    assert.match(page.body,/settlement-card--draft/);
+    assert.match(page.body,/settlement-payout-values/);
+    assert.match(page.body,/role="progressbar"/);
     assert.doesNotMatch(page.body,/href="\/payouts/);
     assert.equal((await db.query('select * from monthly_payouts where month=11')).rows.length,0);
     unavailable=true;
     const failed=await app.inject({method:'GET',url:'/collections',cookies});
     assert.equal(failed.statusCode,200);
     assert.match(failed.body,/Начислено тренеру: 12345 ₽/);
-    assert.match(failed.body,/Начисления тренеру и за зал пока недоступны/);
+    assert.match(failed.body,/Не удалось рассчитать начисления/);
     assert.match(failed.body,/Календарь временно недоступен/);
   } finally { await app?.close();mock.restoreAll();await db.close();await pool.end(); }
 });

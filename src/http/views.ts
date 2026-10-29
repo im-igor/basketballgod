@@ -11,6 +11,65 @@ export function esc(s: unknown): string {
 }
 
 const STYLE = `
+.settlement-card { --settlement-border:#c6ccd5; --settlement-panel:#f2f5f9; border:2px solid var(--settlement-border); border-left:5px solid var(--ok); border-radius:16px; background:var(--card); overflow:hidden; margin:24px 0; box-shadow:0 6px 18px rgba(0,0,0,.07); }
+html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settlement-panel:#242a34; box-shadow:0 8px 24px rgba(0,0,0,.28); }
+.settlement-card--draft { border-left-color:var(--accent); }
+.settlement-card--partial { border-left-color:var(--danger); }
+.settlement-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 24px; border-bottom:1px solid var(--settlement-border); }
+.settlement-title { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.settlement-title h2 { margin:0; font-size:22px; letter-spacing:-.03em; }
+.settlement-title h2 a { color:var(--fg); }
+.settlement-open { font-weight:650; white-space:nowrap; }
+.settlement-body { display:grid; grid-template-columns:1.15fr 1fr; }
+.settlement-collection { padding:22px 24px; }
+.settlement-section-label,.settlement-payout-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:650; color:var(--muted); }
+.settlement-section-label>span { color:var(--ok); font-size:17px; }
+.settlement-collected { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:10px 0 12px; }
+.settlement-collected strong { font-size:28px; font-variant-numeric:tabular-nums; letter-spacing:-.04em; }
+.settlement-collected>span { color:var(--muted); }
+.settlement-percent { color:var(--ok); font-size:17px; margin-left:auto; }
+.settlement-progress { height:8px; background:var(--track); border-radius:8px; overflow:hidden; }
+.settlement-progress>span { display:block; height:100%; background:var(--ok); border-radius:8px; }
+.settlement-counts { display:flex; flex-wrap:wrap; gap:16px; margin-top:12px; color:var(--muted); font-size:13px; }
+.settlement-counts b { color:var(--fg); }
+.settlement-debt { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:20px; font-size:12px; color:var(--muted); }
+.settlement-debt b { color:var(--fg); white-space:nowrap; }
+.settlement-debt button { font-size:12px; min-height:34px; padding:6px 10px; }
+.settlement-payouts { padding:22px 24px; background:var(--settlement-panel); border-left:1px solid var(--settlement-border); }
+.settlement-estimate { border:1px solid var(--settlement-border); border-radius:6px; padding:2px 7px; font-size:11px; font-weight:500; }
+.settlement-payout-values { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
+.settlement-metric { display:flex; flex-direction:column; gap:6px; padding:12px; background:var(--card); border:1px solid var(--settlement-border); border-radius:10px; min-width:0; }
+.settlement-metric>span { color:var(--muted); font-size:12px; }
+.settlement-metric strong { font-size:24px; font-variant-numeric:tabular-nums; letter-spacing:-.035em; overflow-wrap:anywhere; }
+.settlement-updated { margin-top:12px; font-size:11px; color:var(--muted); }
+.settlement-details { margin-top:16px; border-top:1px solid var(--settlement-border); }
+.settlement-details>summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; padding:12px 0 0; font-size:13px; font-weight:600; color:var(--link); list-style:none; }
+.settlement-details>summary::-webkit-details-marker { display:none; }
+.settlement-details[open]>summary>span { transform:rotate(180deg); }
+.settlement-details>.card { margin:12px 0 0; padding:14px 0 0; background:transparent; border:0; border-top:1px solid var(--settlement-border); border-radius:0; box-shadow:none; }
+.settlement-details .row { display:block; }
+.settlement-details .row>div { min-width:0!important; width:100%; margin-bottom:16px; }
+.settlement-details table { table-layout:fixed; font-size:12px; }
+.settlement-details th:first-child,.settlement-details td:first-child { width:82px; }
+.settlement-details th:last-child,.settlement-details td:last-child { width:85px; }
+.settlement-details h2 { font-size:16px; }
+.settlement-error { display:flex; flex-direction:column; gap:8px; color:var(--danger); font-size:13px; }
+.settlement-error>span { color:var(--muted); }
+.settlement-error details { font-size:12px; }
+.settlement-error details p { overflow-wrap:anywhere; }
+@media(max-width:760px) {
+ .settlement-header { padding:16px; align-items:flex-start; }
+ .settlement-title { gap:8px; }
+ .settlement-title h2 { font-size:20px; }
+ .settlement-open { font-size:12px; }
+ .settlement-body { grid-template-columns:1fr; }
+ .settlement-collection,.settlement-payouts { padding:18px 16px; }
+ .settlement-payouts { border-left:0; border-top:1px solid var(--settlement-border); }
+ .settlement-collected strong { font-size:26px; }
+ .settlement-metric strong { font-size:22px; }
+ .settlement-details>summary { padding:12px 0 0; }
+}
+
 :root {
   --bg:#f6f7f9; --card:#fff; --fg:#191c20; --muted:#69707d;
   --accent:#e85d2a; --accent-hover:#cf4c1d; --accent-soft:#fff0ea;

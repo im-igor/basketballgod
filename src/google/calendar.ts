@@ -12,6 +12,7 @@ export interface CalendarEvent {
   start: string; // ISO
   startDateTime: boolean; // true если со временем, false если на весь день
   tags: EventTags;
+  importedSource?: string;
 }
 
 function mapEvent(team: Team, ev: {
@@ -20,6 +21,7 @@ function mapEvent(team: Team, ev: {
   location?: string | null;
   description?: string | null;
   start?: { dateTime?: string | null; date?: string | null } | null;
+  extendedProperties?: { private?: Record<string, string> | null } | null;
 }): CalendarEvent | null {
   const start = ev.start?.dateTime ?? ev.start?.date;
   if (!start || !ev.id) return null;
@@ -31,6 +33,7 @@ function mapEvent(team: Team, ev: {
     start,
     startDateTime: Boolean(ev.start?.dateTime),
     tags: parseTags(ev.description),
+    importedSource: ev.extendedProperties?.private?.basketballgodSource,
   };
 }
 
@@ -41,15 +44,21 @@ export async function listEvents(
   timeMax: Date,
 ): Promise<CalendarEvent[]> {
   const calendar = calendarClient();
-  const res = await calendar.events.list({
-    calendarId: env.calendars[team],
-    timeMin: timeMin.toISOString(),
-    timeMax: timeMax.toISOString(),
-    singleEvents: true,
-    orderBy: 'startTime',
-    maxResults: 250,
-  });
-  const items = res.data.items ?? [];
+  const items = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await calendar.events.list({
+      calendarId: env.calendars[team],
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+      pageToken,
+    });
+    items.push(...(res.data.items ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
   return items.map((ev) => mapEvent(team, ev)).filter((e): e is CalendarEvent => e !== null);
 }
 
@@ -93,7 +102,7 @@ function nextIsoDate(date: string): string {
 }
 
 function calendarBody(event: ScheduledCalendarEvent) {
-  const involved = event.team === 'RED' ? 'ALL_RED' : 'ALL_BLACK';
+  const involved = event.team === 'RED' ? 'MIXED' : 'ALL_BLACK';
   const unresolved = event.coachConflict && event.coachPresent === null;
   const coachExpected = event.coachPresent !== false && !unresolved;
   const prefix = unresolved ? '⚠️ КОНФЛИКТ ТРЕНЕРА · ' :

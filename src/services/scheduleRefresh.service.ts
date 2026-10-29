@@ -3,15 +3,16 @@ import {
   listScheduleSources,
   recordScheduleSourceCheck,
 } from '../db/repos/scheduleSources.repo.js';
-import type { ScheduleSource, Team } from '../db/types.js';
+import type { ScheduleSource, ScheduledGameSource, Team } from '../db/types.js';
 import type { Api } from 'grammy';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { importSchedule, type ScheduleImportResult } from './scheduleImport.service.js';
 import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
 import { notifyScheduleDuplicatesToAdmins } from './scheduleDuplicate.service.js';
+import { importCalendarSchedule } from './calendarScheduleImport.service.js';
 
 export interface ScheduleRefreshResult extends ScheduleImportResult {
-  source: ScheduleSource;
+  source: ScheduledGameSource;
   team: Team;
   ok: boolean;
   pollsSent: number;
@@ -119,12 +120,44 @@ export async function refreshScheduleSourceWithPolls(
 
 let refreshRunning = false;
 
+/** Независимая проверка обоих календарей: недоступность сайта лиги ей не мешает. */
+export async function refreshCalendarSchedules(api?: Api): Promise<ScheduleRefreshResult[]> {
+  const results: ScheduleRefreshResult[] = [];
+  const config = await getCronConfig();
+  const from = new Date();
+  from.setUTCDate(from.getUTCDate() - 30);
+  const to = new Date();
+  to.setUTCFullYear(to.getUTCFullYear() + 1);
+  for (const team of ['RED', 'BLACK'] as const) {
+    const result: ScheduleRefreshResult = {
+      source: 'CALENDAR', team, ok: true, found: 0, newGames: 0, saved: 0,
+      calendarSynced: 0, errors: [], pollsSent: 0, pollsAlreadySent: 0, pollsDeferred: 0, pollErrors: [],
+    };
+    try {
+      Object.assign(result, await importCalendarSchedule(team, from, to));
+      result.ok = result.errors.length === 0;
+    } catch (err) {
+      result.ok = false;
+      result.errors.push(`Google Calendar ${team}: ${(err as Error).message}`);
+    }
+    results.push(result);
+  }
+  if (api && config.schedule_import_send_polls) {
+    const polls = await sendPendingScheduledGamePolls(api, 'CALENDAR');
+    results[0]!.pollsSent = polls.sent;
+    results[0]!.pollsAlreadySent = polls.alreadySent;
+    results[0]!.pollsDeferred = polls.deferred;
+    results[0]!.pollErrors = polls.errors;
+  }
+  return results;
+}
+
 /** Последовательно проверить все включённые источники, не создавая параллельную нагрузку на лиги. */
 export async function refreshConfiguredSchedules(api?: Api): Promise<ScheduleRefreshResult[]> {
   if (refreshRunning) return [];
   refreshRunning = true;
   try {
-    const results: ScheduleRefreshResult[] = [];
+    const results: ScheduleRefreshResult[] = await refreshCalendarSchedules(api);
     for (const source of await listScheduleSources(true)) {
       results.push(api
         ? await refreshScheduleSourceWithPolls(api, source.source)

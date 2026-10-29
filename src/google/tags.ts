@@ -15,7 +15,7 @@ export const EventTagsSchema = z.object({
   GYM: z.enum(['PAID', 'FREE']).optional(),
   COACH: z.enum(['PAID', 'FREE']).optional(),
   INVOLVED: z
-    .enum(['ALL_RED', 'ALL_BLACK', 'PLAYED_RED', 'PLAYED_BLACK', 'PLAYED_MIXED'])
+    .enum(['ALL_RED', 'ALL_BLACK', 'MIXED', 'PLAYED_RED', 'PLAYED_BLACK', 'PLAYED_MIXED'])
     .optional(),
   REFEREE_PRICE: z.coerce.number().optional(),
   NOTES: z.string().optional(),

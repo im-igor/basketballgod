@@ -4,6 +4,10 @@ import { after, before, beforeEach, mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import type { Api, Bot } from 'grammy';
 import cron from 'node-cron';
+import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
+import { calendarGameInput, importCalendarSchedule } from './calendarScheduleImport.service.js';
+import { importSchedule } from './scheduleImport.service.js';
+import type { CalendarEvent } from '../google/calendar.js';
 import { pool } from '../db/pool.js';
 import { migrate } from '../db/migrator.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
@@ -505,5 +509,84 @@ test('админка показывает источники и сохраняе
   } finally {
     await app.close();
     scheduleMock.mock.restore();
+  }
+});
+
+function manualEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
+  return {
+    uid: 'manual-red', team: 'RED', summary: 'Игра ЛАНИТ - Yandex Red',
+    location: 'Площадка №2', start: '2026-11-01T15:30:00Z', startDateTime: true,
+    tags: { TYPE: 'GAME', INVOLVED: 'MIXED' }, ...overrides,
+  };
+}
+
+test('календарь импортируется идемпотентно, правки времени и места сохраняются по event id', async () => {
+  const from = new Date('2026-10-01Z'), to = new Date('2027-01-01Z');
+  const first = await importCalendarSchedule('RED', from, to, async () => [manualEvent()]);
+  assert.equal(first.newGames, 1);
+  const original = (await listScheduledGames())[0]!;
+  assert.equal(original.source, 'CALENDAR');
+  assert.equal(String(original.game_time).slice(0, 5), '18:30');
+  await savePollSession({ poll_id: 'manual-poll', event_uid: 'manual-red', team: 'RED',
+    chat_id: -2, message_id: 7, thread_id: null, question: 'Игра', options: ['Да', 'Нет'],
+    event_start: '2026-11-01T15:30:00Z' });
+  const second = await importCalendarSchedule('RED', from, to, async () => [manualEvent({
+    start: '2026-11-02T16:00:00Z', location: 'Новая площадка',
+  })]);
+  assert.equal(second.newGames, 0);
+  const games = await listScheduledGames();
+  assert.equal(games.length, 1);
+  assert.equal(games[0]!.id, original.id);
+  assert.equal(games[0]!.location, 'Новая площадка');
+  assert.equal(String(games[0]!.game_time).slice(0, 5), '19:00');
+  assert.equal(games[0]!.poll_pending, false);
+  assert.ok(games[0]!.poll_sent_at);
+});
+
+test('календарный импорт пропускает тренировки и события лиги, ошибочный матч не блокирует остальные', async () => {
+  const result = await importCalendarSchedule('RED', new Date('2026-10-01Z'), new Date('2027-01-01Z'), async () => [
+    manualEvent({ uid: 'training', tags: { TYPE: 'TRAINING' } }),
+    manualEvent({ uid: 'league', importedSource: 'LCHB' }),
+    manualEvent({ uid: 'bad', summary: 'Игра без пары команд' }),
+    manualEvent(),
+  ]);
+  assert.equal(result.saved, 1);
+  assert.equal(result.errors.length, 1);
+  assert.equal((await listScheduledGames()).length, 1);
+  const allDay = calendarGameInput(manualEvent({ start: '2026-11-01', startDateTime: false }));
+  assert.equal(allDay!.game_time, null);
+  assert.equal(allDay!.game_date, '2026-11-01');
+});
+
+test('восстановившийся сайт лиги принимает ручную игру без второго Google-события и потери истории', async () => {
+  await importCalendarSchedule('RED', new Date('2026-10-01Z'), new Date('2027-01-01Z'), async () => [manualEvent()]);
+  const original = (await listScheduledGames())[0]!;
+  await db.query('update scheduled_games set coach_present = false, coach_override = true, poll_pending = false, poll_sent_at = now() where id = $1', [original.id]);
+  const updates: string[] = [];
+  const update = mock.method(calendar_v3.Resource$Events.prototype, 'update', async (args: { eventId: string }) => {
+    updates.push(args.eventId);
+    return { data: {} };
+  });
+  try {
+    const result = await importSchedule('RED', 'https://basketball.businesschampions.ru/osen-2026/', async () => [{
+      source: 'LCHB', source_url: 'https://basketball.businesschampions.ru/osen-2026/', external_id: 'real-league-id',
+      team: 'RED', team_a: 'YANDEX RED', team_b: 'Ланит', game_date: '2026-11-01', game_time: '18:30',
+      location: 'Площадка №2', details_url: null,
+    }]);
+    assert.deepEqual(result.errors, []);
+    const games = await listScheduledGames();
+    assert.equal(games.length, 1);
+    assert.equal(games[0]!.id, original.id);
+    assert.equal(games[0]!.source, 'LCHB');
+    assert.equal(games[0]!.external_id, 'real-league-id');
+    assert.equal(games[0]!.calendar_event_id, 'manual-red');
+    assert.equal(games[0]!.coach_present, false);
+    assert.ok(games[0]!.poll_sent_at);
+    assert.deepEqual(updates, ['manual-red']);
+    const backward = await importCalendarSchedule('RED', new Date('2026-10-01Z'), new Date('2027-01-01Z'), async () => [manualEvent()]);
+    assert.equal(backward.saved, 0);
+    assert.equal((await listScheduledGames()).length, 1);
+  } finally {
+    update.mock.restore();
   }
 });

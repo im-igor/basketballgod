@@ -1,4 +1,4 @@
-import type { ScheduledGame, ScheduleSource, Team } from '../db/types.js';
+import type { ScheduledGame, ScheduledGameSource, Team } from '../db/types.js';
 
 export type ScheduledFixture = Pick<
   ScheduledGame,
@@ -16,7 +16,9 @@ export function normalizeScheduledTeamName(value: string): string {
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    // В Google Calendar RED также называется Yandex-2.
+    .replace(/^yandex[ -]?2$/, 'yandex red');
 }
 
 /** Порядок «хозяева/гости» не должен мешать распознать тот же матч. */
@@ -38,7 +40,7 @@ export function scheduledFixtureKey(game: ScheduledFixture): string {
 }
 
 export interface ScheduleDuplicateGroup {
-  source: ScheduleSource;
+  source: ScheduledGameSource;
   team: Team;
   fixtureKey: string;
   games: ScheduledGame[];

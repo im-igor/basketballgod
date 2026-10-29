@@ -44,7 +44,7 @@ import {
   type GamePlan,
 } from '../services/gameFee.service.js';
 import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
-import { refreshScheduleSourceWithPolls } from '../services/scheduleRefresh.service.js';
+import { refreshScheduleSourceWithPolls, refreshCalendarSchedules } from '../services/scheduleRefresh.service.js';
 import {
   deleteScheduledGameWithArtifacts,
   notifyScheduleDuplicatesToAdmins,
@@ -1651,16 +1651,31 @@ export async function buildServer(bot: Bot) {
     const body = `<h1>Расписание игр</h1>
       ${calendarLinks}
       <div class="card row" style="align-items:center;justify-content:space-between">
-        <div><b>Периодическое обновление</b><div class="muted">Сохранённые страницы проверяются автоматически; новые матчи добавляются в БД и Google Calendar.</div></div>
+        <div><b>Периодическое обновление</b><div class="muted">Проверяются страницы лиг и ручные игры из Google Calendar. События календаря импортируются в базу за последние 30 дней и на год вперёд.</div></div>
         <div>${autoStatus} · <a href="/cron">настроить крон</a></div>
       </div>
       ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
       ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
+      <div class="card"><b>Ручные игры из Google Calendar</b>
+        <p class="muted">В календаре команды укажи TYPE=GAME или TYPE=FRIENDLY и название «Игра Команда 1 - Команда 2». Автоимпорт работает с интервалом обновления расписаний, даже если сайт лиги недоступен.</p>
+        <form method="post" action="/schedule/calendar/import"><button>Импортировать из календарей</button></form>
+      </div>
       <div class="card table-scroll"><table class="schedule-table">
         <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Дубли</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="12" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg, wide: true }));
+  });
+
+  app.post('/schedule/calendar/import', async (_req, reply) => {
+    try {
+      const results = await refreshCalendarSchedules();
+      const summary = results.map((r) => `${r.team}: найдено ${r.found}, новых ${r.newGames}, сохранено ${r.saved}`).join(' · ');
+      const errors = results.flatMap((r) => r.errors);
+      return redirect(reply, '/schedule', `${summary}${errors.length ? ` · ошибки: ${errors.slice(0, 3).join('; ')}` : ''}`);
+    } catch (err) {
+      return redirect(reply, '/schedule', `Ошибка импорта календаря: ${(err as Error).message}`);
+    }
   });
 
   app.post('/schedule/sources', async (req, reply) => {

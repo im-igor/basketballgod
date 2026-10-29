@@ -1,9 +1,9 @@
 import { query } from '../pool.js';
-import type { ScheduledGame, ScheduleSource, Team } from '../types.js';
+import type { ScheduledGame, ScheduleSource, ScheduledGameSource, Team } from '../types.js';
 import { groupScheduleDuplicates, type ScheduleDuplicateGroup } from '../../domain/schedule.js';
 
 export interface ScheduledGameInput {
-  source: ScheduleSource;
+  source: ScheduledGameSource;
   source_url: string;
   external_id: string;
   team: Team;
@@ -13,14 +13,15 @@ export interface ScheduledGameInput {
   game_time: string | null;
   location: string | null;
   details_url: string | null;
+  calendar_event_id?: string;
 }
 
 /** Повторный импорт обновляет время/место/команды, но сохраняет связь с Google Calendar. */
 export async function upsertScheduledGame(g: ScheduledGameInput): Promise<ScheduledGame> {
   const { rows } = await query<ScheduledGame>(
     `insert into scheduled_games
-       (source, source_url, external_id, team, team_a, team_b, game_date, game_time, location, details_url)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       (source, source_url, external_id, team, team_a, team_b, game_date, game_time, location, details_url, calendar_event_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (source, external_id) do update set
        source_url = excluded.source_url,
        team = excluded.team,
@@ -30,6 +31,7 @@ export async function upsertScheduledGame(g: ScheduledGameInput): Promise<Schedu
        game_time = excluded.game_time,
        location = excluded.location,
        details_url = excluded.details_url,
+       calendar_event_id = coalesce(excluded.calendar_event_id, scheduled_games.calendar_event_id),
        present_in_source = true,
        duplicate_notified_at = case
          when scheduled_games.team = excluded.team
@@ -54,6 +56,7 @@ export async function upsertScheduledGame(g: ScheduledGameInput): Promise<Schedu
       g.game_time,
       g.location,
       g.details_url,
+      g.calendar_event_id ?? null,
     ],
   );
   return rows[0]!;
@@ -92,7 +95,7 @@ export async function markScheduleSourcePresence(
 }
 
 export async function listScheduleDuplicateGroups(
-  source?: ScheduleSource,
+  source?: ScheduledGameSource,
   team?: Team,
 ): Promise<ScheduleDuplicateGroup[]> {
   const { rows } = await query<ScheduledGame>(
@@ -138,7 +141,7 @@ export async function getScheduledGameByExternalId(
 }
 
 /** Новые импортированные игры, для которых ещё нужно отправить голосовалку. */
-export async function listPendingScheduledGamePolls(source?: ScheduleSource): Promise<ScheduledGame[]> {
+export async function listPendingScheduledGamePolls(source?: ScheduledGameSource): Promise<ScheduledGame[]> {
   // Просроченные кандидаты больше не рассылаем и не держим в очереди.
   await query(
     `update scheduled_games set poll_pending = false, updated_at = now()
@@ -154,6 +157,43 @@ export async function listPendingScheduledGamePolls(source?: ScheduleSource): Pr
     [source ?? null],
   );
   return rows;
+}
+
+/** Без лимита страницы админки: все кандидаты для сверки календаря. */
+export async function listScheduledGamesInRange(team: Team, from: string, to: string): Promise<ScheduledGame[]> {
+  const { rows } = await query<ScheduledGame>(
+    'select * from scheduled_games where team = $1 and game_date >= $2 and game_date < $3 order by id',
+    [team, from, to],
+  );
+  return rows;
+}
+
+export async function getScheduledGameByCalendarEvent(team: Team, uid: string): Promise<ScheduledGame | null> {
+  const { rows } = await query<ScheduledGame>(
+    'select * from scheduled_games where team = $1 and calendar_event_id = $2 order by id limit 1',
+    [team, uid],
+  );
+  return rows[0] ?? null;
+}
+
+/** Принять ID лиги, сохранив календарное событие, решения тренера и историю опросов. */
+export async function adoptCalendarScheduledGame(id: string, source: ScheduleSource, externalId: string): Promise<void> {
+  await query(
+    `update scheduled_games set source = $2, external_id = $3, updated_at = now()
+     where id = $1 and source = 'CALENDAR'`,
+    [id, source, externalId],
+  );
+}
+
+/** При обратном импорте не отправлять повторно уже существующий календарный опрос. */
+export async function reconcileScheduledGamePoll(team: Team, uid: string): Promise<void> {
+  await query(
+    `update scheduled_games set poll_pending = false,
+       poll_sent_at = coalesce(poll_sent_at, now()), poll_last_error = null
+     where team = $1 and calendar_event_id = $2
+       and exists (select 1 from poll_sessions where team = $1 and event_uid = $2)`,
+    [team, uid],
+  );
 }
 
 export async function recordScheduledGamePollResult(

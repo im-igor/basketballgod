@@ -1,5 +1,5 @@
 import type { Api } from 'grammy';
-import type { ScheduleSource, ScheduledGame } from '../db/types.js';
+import type { ScheduledGameSource, ScheduledGame } from '../db/types.js';
 import {
   listPendingScheduledGamePolls,
   recordScheduledGamePollResult,
@@ -59,7 +59,7 @@ function isInCompletedActiveWindow(
  */
 export async function sendPendingScheduledGamePolls(
   api: Api,
-  source?: ScheduleSource,
+  source?: ScheduledGameSource,
 ): Promise<SchedulePollDispatchResult> {
   const result: SchedulePollDispatchResult = { sent: 0, alreadySent: 0, deferred: 0, errors: [] };
   const [games, window] = await Promise.all([

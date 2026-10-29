@@ -8,11 +8,14 @@ import {
   setScheduledGameCoachPresent,
   setScheduledGameCalendarEventId,
   upsertScheduledGame,
+  adoptCalendarScheduledGame,
+  listScheduledGamesInRange,
 } from '../db/repos/scheduledGames.repo.js';
 import { upsertScheduledCalendarEvent } from '../google/calendar.js';
 import { fetchSchedulePage } from '../schedule/parser.js';
 import type { ScheduledGame, Team } from '../db/types.js';
 import type { ScheduleDuplicateGroup } from '../domain/schedule.js';
+import { scheduledMatchupKey } from '../domain/schedule.js';
 
 export interface ScheduleImportResult {
   found: number;
@@ -24,6 +27,8 @@ export interface ScheduleImportResult {
 }
 
 export async function syncScheduledGame(row: ScheduledGame): Promise<void> {
+  // Ручными событиями управляет человек; обратная синхронизация не затирает их описание.
+  if (row.source === 'CALENDAR') return;
   const eventId = await upsertScheduledCalendarEvent({
     source: row.source,
     externalId: row.external_id,
@@ -43,8 +48,12 @@ export async function syncScheduledGame(row: ScheduledGame): Promise<void> {
 }
 
 /** Импорт страницы целиком: БД обновляется первой, затем тот же матч синхронизируется в Calendar. */
-export async function importSchedule(team: Team, pageUrl: string): Promise<ScheduleImportResult> {
-  const parsed = await fetchSchedulePage(pageUrl, team);
+export async function importSchedule(
+  team: Team,
+  pageUrl: string,
+  reader: typeof fetchSchedulePage = fetchSchedulePage,
+): Promise<ScheduleImportResult> {
+  const parsed = await reader(pageUrl, team);
   const result: ScheduleImportResult = {
     found: parsed.length,
     newGames: 0,
@@ -55,16 +64,32 @@ export async function importSchedule(team: Team, pageUrl: string): Promise<Sched
   const rowsToSync = new Map<string, ScheduledGame>();
   for (const input of parsed) {
     try {
+      if (input.source === 'CALENDAR') throw new Error('Ожидался источник лиги');
       const existing = await getScheduledGameByExternalId(input.source, input.external_id);
+      let isNew = !existing;
+      if (!existing) {
+        const nextDate = new Date(`${input.game_date}T00:00:00Z`);
+        nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+        const manual = (await listScheduledGamesInRange(team, input.game_date, nextDate.toISOString().slice(0, 10)))
+          .filter((g) => g.source === 'CALENDAR'
+            && scheduledMatchupKey(g.team_a, g.team_b) === scheduledMatchupKey(input.team_a, input.team_b)
+            && (g.game_time ? String(g.game_time).slice(0, 5) : null) === input.game_time);
+        if (manual.length > 1) throw new Error('Несколько ручных событий для матча: сначала устрани дубли');
+        if (manual.length === 1) {
+          await adoptCalendarScheduledGame(manual[0]!.id, input.source, input.external_id);
+          isNew = false;
+        }
+      }
       const row = await upsertScheduledGame(input);
       rowsToSync.set(row.id, row);
-      if (!existing) result.newGames++;
+      if (isNew) result.newGames++;
       result.saved++;
     } catch (err) {
       result.errors.push(`${input.team_a} — ${input.team_b}: БД: ${(err as Error).message}`);
     }
   }
   const source = parsed[0]!.source;
+  if (source === 'CALENDAR') throw new Error('Ожидался источник лиги');
   await markScheduleSourcePresence(source, team, parsed.map((game) => game.external_id));
   const duplicates = await listScheduleDuplicateGroups(source, team);
   result.duplicates = duplicates;

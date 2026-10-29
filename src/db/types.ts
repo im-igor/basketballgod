@@ -214,6 +214,7 @@ export interface Game {
 }
 
 export type ScheduleSource = 'LCHB' | 'MLBL';
+export type ScheduledGameSource = ScheduleSource | 'CALENDAR';
 
 /** Сохранённая страница турнира, которую cron периодически перепроверяет. */
 export interface ScheduleSourceConfig {
@@ -235,7 +236,7 @@ export interface ScheduleSourceConfig {
 /** Матч из расписания лиги; не смешивается с учётом сыгравших и взносов в `games`. */
 export interface ScheduledGame {
   id: string;
-  source: ScheduleSource;
+  source: ScheduledGameSource;
   source_url: string;
   external_id: string;
   team: Team;

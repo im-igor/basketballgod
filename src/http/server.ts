@@ -1,3 +1,4 @@
+import { gameStatsRef } from '../gamefee/parser.js';
 import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
 import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
 import { checkAutomaticGameStats, listAutomaticStatsStatus, STABILITY_MS, sourcePeriod } from '../services/automaticGameStats.service.js';
@@ -1398,7 +1399,15 @@ export async function buildServer(bot: Bot) {
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {
         const stable = s.stable_since && s.checked_at && new Date(s.checked_at).getTime() - new Date(s.stable_since).getTime() >= STABILITY_MS;
-        return `<p>${esc(s.team)} #${esc(s.external_id)} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : stable ? 'Протокол стабилен' : 'Ожидается повторная проверка'))}
+        const label = `${esc(s.team)} #${esc(s.external_id)}`;
+        let statsUrl: string | null = null;
+        if (s.details_url) {
+          try { statsUrl = gameStatsRef(s.details_url).url.toString(); } catch { /* Нет допустимого протокола. */ }
+        }
+        const matchLabel = statsUrl
+          ? `<a href="${esc(statsUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть статистику матча">${label}</a>`
+          : label;
+        return `<p>${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : stable ? 'Протокол стабилен' : 'Ожидается повторная проверка'))}
           ${s.plan ? ` · ${s.plan.playedCount} игроков × ${s.plan.fee} ₽ = ${s.plan.playedCount * s.plan.fee} ₽` : ''}
           ${s.checked_at ? ` · ${esc(fmtDateTime(s.checked_at))}` : ''}</p>`;
       }).join('') : '<p class="muted">В расписании нет матчей прошлого месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}

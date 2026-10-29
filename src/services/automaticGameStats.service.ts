@@ -197,9 +197,9 @@ export async function importAutomaticGameStats(month: number, year: number, even
 /** Сохранённые результаты для админки: открытие страницы не обращается к сайтам. */
 export async function listAutomaticStatsStatus(month: number, year: number) {
   const { from, to } = sourcePeriod(month, year);
-  return (await query<{ team: string; external_id: string; game_date: string | Date;
+  return (await query<{ team: string; external_id: string; details_url: string | null; game_date: string | Date;
     error: string | null; checked_at: string | Date | null; stable_since: string | Date | null; plan: GamePlan | null }>(
-    `select s.team,s.external_id,s.game_date,c.error,c.checked_at,c.stable_since,c.plan
+    `select s.team,s.external_id,s.details_url,s.game_date,c.error,c.checked_at,c.stable_since,c.plan
      from scheduled_games s left join game_stats_checks c on c.scheduled_game_id=s.id
      where s.game_date >= $1 and s.game_date < $2 order by s.game_date,s.id`, [from,to])).rows;
 }

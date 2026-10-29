@@ -889,15 +889,18 @@ export async function buildServer(bot: Bot) {
         </div>
         <div class="settlement-body">
           <div class="settlement-collection">
-            <div class="settlement-section-label">Сбор с игроков <a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a></div>
+            <div class="settlement-collection-content">
+            <div class="settlement-section-label">Сбор с игроков</div>
             <div class="settlement-collected"><strong>${money(paidAmount)}</strong><span>из ${money(total)}</span><b class="settlement-percent">${percent}%</b></div>
             <div class="settlement-progress" role="progressbar" aria-label="Собрано с игроков" aria-valuenow="${Math.min(100,Math.max(0,percent))}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100,Math.max(0,percent))}%"></span></div>
             <div class="settlement-counts"><span><b>${paid.length}</b> сдали</span><span><b>${unpaidCount}</b> не сдали</span><span>${charges.length} участников</span></div>
             <div class="settlement-debt"><span>Осталось собрать <b>${money(outstanding)}</b></span>
               <form class="inline" method="post" action="/collections/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
             </div>
+            </div>
+            <div class="settlement-collection-footer"><a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a></div>
           </div>
-          <div class="settlement-payouts">${payoutSummary}
+          <div class="settlement-payouts"><div>${payoutSummary}</div>
 ${payout ? `<details class="settlement-details"><summary>Расшифровка начислений <span aria-hidden="true">⌄</span></summary>${renderPayoutCard(payout,!!savedPayout,payoutError,`/collections?preview=${seg}#payouts-${seg}`,`payouts-${seg}`)}</details>` : ''}
           </div>
         </div>

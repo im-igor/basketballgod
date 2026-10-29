@@ -20,8 +20,9 @@ html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settle
 .settlement-title h2 { margin:0; font-size:22px; letter-spacing:-.03em; }
 .settlement-title h2 a { color:var(--fg); }
 .settlement-open { font-weight:650; white-space:nowrap; }
-.settlement-body { display:grid; grid-template-columns:1.15fr 1fr; }
-.settlement-collection { padding:22px 24px; }
+.settlement-body { display:grid; grid-template-columns:1.15fr 1fr; grid-template-rows:auto auto; }
+.settlement-collection { padding:22px 24px; display:grid; grid-column:1; grid-row:1 / span 2; grid-template-rows:subgrid; }
+.settlement-collection-footer { margin-top:16px; padding-top:12px; border-top:1px solid var(--settlement-border); font-size:13px; }
 .settlement-section-label,.settlement-payout-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:650; color:var(--muted); }
 .settlement-section-label>span { color:var(--ok); font-size:17px; }
 .settlement-collected { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:10px 0 12px; }
@@ -35,7 +36,7 @@ html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settle
 .settlement-debt { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:20px; font-size:12px; color:var(--muted); }
 .settlement-debt b { color:var(--fg); white-space:nowrap; }
 .settlement-debt button { font-size:12px; min-height:34px; padding:6px 10px; }
-.settlement-payouts { padding:22px 24px; background:var(--settlement-panel); border-left:1px solid var(--settlement-border); }
+.settlement-payouts { display:grid; grid-column:2; grid-row:1 / span 2; grid-template-rows:subgrid; padding:22px 24px; background:var(--settlement-panel); border-left:1px solid var(--settlement-border); }
 .settlement-estimate { border:1px solid var(--settlement-border); border-radius:6px; padding:2px 7px; font-size:11px; font-weight:500; }
 .settlement-payout-values { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
 .settlement-metric { display:flex; flex-direction:column; gap:6px; padding:12px; background:var(--card); border:1px solid var(--settlement-border); border-radius:10px; min-width:0; }
@@ -62,8 +63,8 @@ html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settle
  .settlement-title { gap:8px; }
  .settlement-title h2 { font-size:20px; }
  .settlement-open { font-size:12px; }
- .settlement-body { grid-template-columns:1fr; }
- .settlement-collection,.settlement-payouts { padding:18px 16px; }
+ .settlement-body { display:block; }
+ .settlement-collection,.settlement-payouts { display:block; padding:18px 16px; }
  .settlement-payouts { border-left:0; border-top:1px solid var(--settlement-border); }
  .settlement-collected strong { font-size:26px; }
  .settlement-metric strong { font-size:22px; }

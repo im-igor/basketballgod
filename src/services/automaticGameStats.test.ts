@@ -77,24 +77,21 @@ test('порядок игроков не меняет отпечаток, сос
   assert.equal(planFingerprint(plan), planFingerprint({ ...plan, participants: [...plan.participants].reverse() }));
   assert.notEqual(planFingerprint(plan), planFingerprint({ ...plan, fee: 999 }));
 });
-test('две разнесённые проверки обязательны; сбой и изменение сбрасывают стабильность', async () => {
+test('одна успешная проверка сразу готова к расчёту, сбой не использует старый результат', async () => {
   await seedSchedule();
-  assert.equal((await checkAutomaticGameStats(11, 2026, now, reader))[0]!.ready, false);
-  assert.equal((await checkAutomaticGameStats(11, 2026, new Date(now.getTime() + 1000), reader))[0]!.ready, false);
+  assert.equal((await checkAutomaticGameStats(11, 2026, now, reader))[0]!.ready, true);
+  assert.equal((await checkAutomaticGameStats(11, 2026, new Date(now.getTime() + 1000), reader))[0]!.ready, true);
   assert.equal((await checkAutomaticGameStats(11, 2026, later, reader))[0]!.ready, true);
   const fail: typeof reader = async () => { throw new Error('Источник недоступен'); };
   assert.match((await checkAutomaticGameStats(11, 2026, later, fail))[0]!.error!, /недоступен/);
-  assert.equal((await checkAutomaticGameStats(11, 2026, later, reader))[0]!.ready, false);
+  assert.equal((await checkAutomaticGameStats(11, 2026, later, reader))[0]!.ready, true);
   const changed: typeof reader = async () => ({ ok: true, plan: { ...plan, fee: 900 } });
-  assert.equal((await checkAutomaticGameStats(11, 2026, new Date(later.getTime() + 3600000), changed))[0]!.ready, false);
+  assert.equal((await checkAutomaticGameStats(11, 2026, new Date(later.getTime() + 3600000), changed))[0]!.ready, true);
 });
 test('полный протокол импортируется один раз; повторная сборка не удваивает игры', async () => {
   await seedSchedule();
   mockProtocol();
-  await checkAutomaticGameStats(11, 2026, now);
-  // Следующий запрос импортера делает второе наблюдение в реальном времени.
   await importAutomaticGameStats(11, 2026, []);
-  // Тестовые даты должны предшествовать реальному времени выполнения.
   assert.equal(await countGames(), 1);
   await importAutomaticGameStats(11, 2026, []);
   assert.equal(await countGames(), 1);
@@ -149,6 +146,10 @@ test('изменение протокола после автоматическ�
     await assert.rejects(importAutomaticGameStats(11, 2026, [], true), /протокол или тариф изменился/);
     assert.equal(await countGames(), 1);
     assert.equal(Number((await db.query<{ fee_per_player: string }>('select fee_per_player from games')).rows[0]!.fee_per_player), 1000);
+    await importAutomaticGameStats(11,2026,[]);
+    assert.equal(await countGames(),1);
+    assert.equal(Number((await db.query<{ fee_per_player: string }>('select fee_per_player from games')).rows[0]!.fee_per_player),1200);
+    await importAutomaticGameStats(11,2026,[],true);
   } finally { await db.query('update tariffs set coach_per_game=5000'); }
 });
 
@@ -252,7 +253,8 @@ test('любое положительное время определяет уч
     const check = (await checkAutomaticGameStats(11,2026,now))[0]!;
     assert.equal(check.plan?.playedCount,5);
     assert.equal(check.plan?.fee,1000);
-    assert.match(check.error!, /повторная/);
+    assert.equal(check.error,null);
+    assert.equal(check.ready,true);
   }
   mockProtocol(0);
   assert.equal((await checkAutomaticGameStats(11,2026,now))[0]!.plan,undefined);

@@ -1,7 +1,7 @@
 import { gameStatsRef } from '../gamefee/parser.js';
 import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
 import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
-import { checkAutomaticGameStats, listAutomaticStatsStatus, STABILITY_MS, sourcePeriod } from '../services/automaticGameStats.service.js';
+import { checkAutomaticGameStats, listAutomaticStatsStatus, sourcePeriod } from '../services/automaticGameStats.service.js';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
@@ -1348,7 +1348,7 @@ export async function buildServer(bot: Bot) {
     try {
       const checks = await checkAutomaticGameStats(p.month, p.year);
       return redirect(reply, gamesQuery(p.month, p.year),
-        `Проверено матчей: ${checks.length}, стабильных: ${checks.filter((c) => c.ready).length}. Начисления не менялись`);
+        `Проверено матчей: ${checks.length}, успешно: ${checks.filter((c) => c.ready).length}. Начисления не менялись`);
     } catch (err) { return redirect(reply, gamesQuery(p.month,p.year), `Ошибка: ${(err as Error).message}`); }
   });
 
@@ -1393,12 +1393,11 @@ export async function buildServer(bot: Bot) {
 
     const statuses = await listAutomaticStatsStatus(month, year);
     const statsCard = `<div class="card"><h2>Автоматическая статистика прошлого месяца</h2>
-      <p class="muted">Проверяется каждый час. Два одинаковых проверенных протокола с интервалом от 30 минут включаются при сборке следующего бюджета.
+      <p class="muted">Статистика проверяется при сборке бюджета и повторно перед публикацией. Изменение состава или взносов требует пересборки бюджета. Фоновая проверка выполняется каждый час.
       Ошибки блокируют сборку. Введённые вручную игры проверяет администратор.</p>
       <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {
-        const stable = s.stable_since && s.checked_at && new Date(s.checked_at).getTime() - new Date(s.stable_since).getTime() >= STABILITY_MS;
         const label = `${esc(isoToRu(s.game_date))} ${esc(s.team_a)} vs ${esc(s.team_b)}`;
         let statsUrl: string | null = null;
         if (s.details_url) {
@@ -1407,7 +1406,7 @@ export async function buildServer(bot: Bot) {
         const matchLabel = statsUrl
           ? `<a href="${esc(statsUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть статистику матча">${label}</a>`
           : label;
-        return `<p>${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : stable ? 'Протокол стабилен' : 'Ожидается повторная проверка'))}
+        return `<p>${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : s.plan ? 'Проверен' : 'Не удалось определить сыгравших'))}
           ${s.plan ? ` · ${s.plan.playedCount} игроков × ${s.plan.fee} ₽ = ${s.plan.playedCount * s.plan.fee} ₽` : ''}
           ${s.checked_at ? ` · ${esc(fmtDateTime(s.checked_at))}` : ''}</p>`;
       }).join('') : '<p class="muted">В расписании нет матчей прошлого месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}

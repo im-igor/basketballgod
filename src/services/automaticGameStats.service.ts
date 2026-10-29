@@ -13,7 +13,6 @@ import { validateGame, type GamePlan } from './gameFee.service.js';
 import type { CalendarEvent } from '../google/calendar.js';
 import type { Game, ScheduledGame } from '../db/types.js';
 
-export const STABILITY_MS = 30 * 60_000;
 const dateOf = (value: string | Date) => value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10);
 export function sourcePeriod(month: number, year: number) {
   const from = new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 10);
@@ -92,19 +91,17 @@ async function inspectAutomaticGameStats(
       if (!Number.isSafeInteger(plan.fee) || plan.fee < 0) throw new Error('Некорректная сумма взноса');
     } catch (err) { error = (err as Error).message; plan = undefined; }
     const fingerprint = plan ? planFingerprint(plan) : null;
-    const { rows: saved } = await query<{ stable_since: string | Date | null }>(
+    await query(
       `insert into game_stats_checks (scheduled_game_id, fingerprint, stable_since, checked_at, plan, error)
        values ($1,$2,$3,$3,$4,$5)
        on conflict (scheduled_game_id) do update set
          stable_since = case when game_stats_checks.fingerprint = excluded.fingerprint
            then game_stats_checks.stable_since else excluded.stable_since end,
          fingerprint = excluded.fingerprint, checked_at = excluded.checked_at,
-         plan = excluded.plan, error = excluded.error returning stable_since`,
+         plan = excluded.plan, error = excluded.error`,
       [game.id, fingerprint, now.toISOString(), plan ? JSON.stringify(plan) : null, error],
     );
-    const stable = saved[0]?.stable_since;
-    const ready = !!plan && !!stable && now.getTime() - new Date(stable).getTime() >= STABILITY_MS;
-    results.push({ game, plan, ready, error: error ?? (ready ? null : 'Ожидается повторная одинаковая проверка через 30 минут') });
+    results.push({ game, plan, ready: !!plan && error === null, error });
   }
   return { checks: results, sourceErrors };
 }
@@ -132,6 +129,7 @@ export async function importAutomaticGameStats(month: number, year: number, even
     const existing = (await client.query<Game>('select * from games')).rows;
     const errors: string[] = [];
     const additions: GamePlan[] = [];
+    const updates: { id: number; plan: GamePlan }[] = [];
     for (const failure of sourceErrors) {
       const calendarGames = events.filter((e) => e.team === failure.team &&
         (e.tags.TYPE === 'GAME' || e.tags.TYPE === 'FRIENDLY'));
@@ -166,8 +164,12 @@ export async function importAutomaticGameStats(month: number, year: number, even
         const g = matches[0]!;
         if (g.month !== month || g.year !== year) errors.push(`Матч #${check.game.external_id} уже отнесён к другому бюджету`);
         const fingerprint = (g as Game & { automatic_stats_fingerprint?: string }).automatic_stats_fingerprint;
-        if (fingerprint && (!check.ready || !check.plan || fingerprint !== planFingerprint(check.plan))) {
-          errors.push(`Матч #${check.game.external_id}: протокол или тариф изменился; проверь и исправь игру вручную`);
+        if (fingerprint) {
+          if (!check.ready || !check.plan) errors.push(`Матч #${check.game.external_id}: ${check.error ?? 'не удалось проверить протокол'}`);
+          else if (fingerprint !== planFingerprint(check.plan)) {
+            if (verifyOnly) errors.push(`Матч #${check.game.external_id}: протокол или тариф изменился; пересобери и проверь бюджет`);
+            else updates.push({ id: g.id, plan: check.plan });
+          }
         }
         // Ручной ввод остаётся явным решением администратора; автоматизация его не заменяет.
         continue;
@@ -183,6 +185,14 @@ export async function importAutomaticGameStats(month: number, year: number, even
     }
     if (errors.length) throw new Error(`Статистика игр не готова. ${errors.join('; ')}`);
     if (verifyOnly && additions.length) throw new Error('Появились новые игры. Пересобери и проверь бюджет');
+    for (const { id, plan } of updates) {
+      await client.query(
+        `update games set event_uid=$2,team=$3,opponent=$4,played_on=$5,stat_url=$6,fee_per_player=$7,
+         participants=$8,coach_present=$9,automatic_stats_fingerprint=$10 where id=$1`,
+        [id,plan.calendarEventId,plan.team,plan.opponent,plan.date,plan.url,plan.fee,
+          JSON.stringify(plan.participants),plan.coachPresent,planFingerprint(plan)],
+      );
+    }
     for (const plan of additions) {
       await client.query(
         `insert into games (event_uid,team,opponent,played_on,stat_url,fee_per_player,participants,coach_present,judge,month,year,automatic_stats_fingerprint)

@@ -187,7 +187,7 @@ export async function buildServer(bot: Bot) {
           </form>
         </div>
       </div>
-      <div class="card muted">«Расчёт бюджета» — сборка, черновики и корректировки. «Сборы» — прогресс оплат, отметки переводов и напоминания должникам.</div>`;
+      <div class="card muted">«Расчёт бюджета» — сборка, черновики и корректировки. «Расчеты» — прогресс оплат, начисления тренеру и за зал, отметки переводов и напоминания должникам.</div>`;
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
@@ -617,6 +617,35 @@ export async function buildServer(bot: Bot) {
     }
   };
 
+  const renderPayoutCard = (payout: MonthlyPayout | null, saved: boolean, payoutError: string, previewUrl: string, anchor = 'payouts'): string => {
+    const payoutRows = (items: MonthlyPayoutItem[]) => items.map((item) => `<tr>
+      <td>${item.date ? esc(isoToRu(item.date)) : '—'}</td>
+      <td>${item.team ? `${teamBadge(item.team)} ` : ''}${esc(item.label)}</td>
+      <td class="right"><b>${esc(item.amount)}₽</b></td>
+    </tr>`).join('');
+    return payout ? `<div class="card" id="${esc(anchor)}">
+      <div class="row" style="align-items:baseline;justify-content:space-between">
+        <h2 style="margin:0">Расчёты с тренером и залом</h2>
+        <span class="muted">${saved ? 'Итоговый расчёт' : 'Предварительно по текущему календарю'} · ${esc(fmtDateTime(payout.calculated_at))}</span>
+      </div>
+      <div class="row" style="align-items:flex-start;margin-top:12px">
+        <div style="min-width:300px"><h2>Начислено тренеру — ${esc(payout.coach_amount)}₽</h2>
+          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
+          <tbody>${payoutRows(payout.coach_items)}</tbody></table>
+        </div>
+        <div style="min-width:300px"><h2>Начислено за зал — ${esc(payout.gym_amount)}₽</h2>
+          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
+          <tbody>${payoutRows(payout.gym_items)}</tbody></table>
+        </div>
+      </div>
+      ${payout.corrections?.length ? `<p class="muted">Изменения относительно опубликованного бюджета: ${payout.corrections.map((c) => `${esc(c.note)} (${c.amount > 0 ? '+' : ''}${esc(c.amount)} ₽)`).join('; ')}. Эти изменения уже учтены в начисленных суммах выше.</p>` : ''}
+    </div>` : `<div class="card" id="${esc(anchor)}"><h2>Расчёты с тренером и залом</h2>
+      <p class="muted">Начисления по фактическому календарю можно посмотреть до закрытия месяца. Итог фиксируется в конце месяца.</p>
+      ${payoutError ? `<p class="muted">Не удалось рассчитать: ${esc(payoutError)}</p>` : ''}
+      <a href="${esc(previewUrl)}">Посчитать по текущему календарю →</a>
+    </div>`;
+  };
+
   app.get('/budgets', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
@@ -717,6 +746,7 @@ export async function buildServer(bot: Bot) {
       : '<span class="badge black">нет активных</span>';
 
     const body = `<h1>Расчёт бюджета</h1>
+
       <div class="card"><h2>Собрать черновик</h2>
         <div class="workflow-check">
           <div class="workflow-check-main">${extraFeesStatus}<div class="workflow-check-text">
@@ -818,7 +848,8 @@ export async function buildServer(bot: Bot) {
       const key = periodOf(item.budget.month, item.budget.year);
       (byMonth.get(key) ?? byMonth.set(key, []).get(key)!).push(item);
     }
-    const cards = [...byMonth].map(([seg, items]) => {
+    const cards: string[] = [];
+    for (const [seg, items] of byMonth) {
       const charges = items.flatMap((item) => item.charges);
       const paid = charges.filter((charge) => charge.paid);
       const unpaidCount = charges.length - paid.length;
@@ -828,11 +859,22 @@ export async function buildServer(bot: Bot) {
       const canRemind = items.some((item) => item.budget.message_id != null &&
         item.charges.some((charge) => !charge.paid));
       const first = items[0]!.budget;
+      const savedPayout = await getMonthlyPayout(first.month,first.year);
+      let payout = savedPayout;
+      let payoutError = '';
+      if (!payout) {
+        try { payout = await calculateMonthlyPayoutPreview(first.month,first.year); }
+        catch (err) { payoutError = (err as Error).message; }
+      }
+      const payoutSummary = payout
+        ? `<p><b>Начислено тренеру: ${esc(payout.coach_amount)} ₽</b> · <b>Начислено за зал: ${esc(payout.gym_amount)} ₽</b></p>
+          <p class="muted">${savedPayout ? 'Итоговый расчёт' : 'Предварительно по текущему календарю'} за ${esc(monthLabel(first.month,first.year))} · ${esc(fmtDateTime(payout.calculated_at))}</p>`
+        : `<p role="alert">Начисления тренеру и за зал пока недоступны: ${esc(payoutError)}. Обнови страницу, чтобы повторить расчёт.</p>`;
       const status = published === 2
         ? '<span class="badge yes">опубликован</span>'
         : published > 0 ? '<span class="badge red">частично опубликован</span>'
           : '<span class="badge no">черновик</span>';
-      return `<div class="card">
+      cards.push(`<div class="card">
         <div class="row" style="align-items:center;justify-content:space-between">
           <div><h2 style="margin:0"><a href="/collections/${seg}">${esc(monthLabel(first.month, first.year))}</a></h2>${status}</div>
           <div class="row" style="align-items:center">
@@ -842,11 +884,15 @@ export async function buildServer(bot: Bot) {
         </div>
         <p><b>${charges.length}</b> участников · <b>${paid.length}</b> сдали · <b>${unpaidCount}</b> не сдали</p>
         ${progressBar(paidAmount, total)}
-      </div>`;
-    }).join('');
-    const body = `<h1>Сборы</h1>
-      ${cards || '<div class="card muted">Бюджетов пока нет. Сначала собери черновик в разделе «Расчёт бюджета».</div>'}`;
-    return html(reply, layout('Сборы', body, { flash: msg }));
+        <hr><h3>Начисления тренеру и за зал</h3>
+        <p class="muted">За календарный месяц этой карточки, отдельно от поступлений с игроков. Фактические переводы здесь не отмечаются.</p>
+        ${payoutSummary}
+        ${payout ? `<details><summary>Расшифровка начислений</summary>${renderPayoutCard(payout,!!savedPayout,payoutError,`/collections?preview=${seg}#payouts-${seg}`,`payouts-${seg}`)}</details>` : ''}
+      </div>`);
+    }
+    const body = `<h1>Расчеты</h1>
+      ${cards.join('') || '<div class="card muted">Бюджетов пока нет. Сначала собери черновик в разделе «Расчёт бюджета».</div>'}`;
+    return html(reply, layout('Расчеты', body, { flash: msg }));
   });
 
   const recalcCoachBudgets = async (
@@ -891,7 +937,7 @@ export async function buildServer(bot: Bot) {
     if (monthBudgets.length === 0) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Бюджет не найден');
     let payout: MonthlyPayout | null = savedPayout;
     let payoutError = '';
-    if (!payout && view === 'calculation' && (req.query as Record<string, string>).preview === 'payout') {
+    if (!payout && (view === 'collection' || (req.query as Record<string, string>).preview === 'payout')) {
       try {
         payout = await calculateMonthlyPayoutPreview(period.month, period.year);
       } catch (err) {
@@ -973,32 +1019,7 @@ export async function buildServer(bot: Bot) {
       .reduce((m, c) => Math.max(m, new Date(c.paid_at as string | Date).getTime()), 0);
     const lastCheck = lastPaidMs ? fmtDateTime(new Date(lastPaidMs)) : '';
 
-    const payoutRows = (items: MonthlyPayoutItem[]) => items.map((item) => `<tr>
-      <td>${item.date ? esc(isoToRu(item.date)) : '—'}</td>
-      <td>${item.team ? `${teamBadge(item.team)} ` : ''}${esc(item.label)}</td>
-      <td class="right"><b>${esc(item.amount)}₽</b></td>
-    </tr>`).join('');
-    const payoutCard = payout ? `<div class="card" id="payouts">
-      <div class="row" style="align-items:baseline;justify-content:space-between">
-        <h2 style="margin:0">Расчёты с тренером и залом</h2>
-        <span class="muted">${savedPayout ? 'Итоговый расчёт' : 'Предварительно по текущему календарю'} · ${esc(fmtDateTime(payout.calculated_at))}</span>
-      </div>
-      <div class="row" style="align-items:flex-start;margin-top:12px">
-        <div style="min-width:300px"><h2>Начислено тренеру — ${esc(payout.coach_amount)}₽</h2>
-          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
-          <tbody>${payoutRows(payout.coach_items)}</tbody></table>
-        </div>
-        <div style="min-width:300px"><h2>Начислено за зал — ${esc(payout.gym_amount)}₽</h2>
-          <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
-          <tbody>${payoutRows(payout.gym_items)}</tbody></table>
-        </div>
-      </div>
-      ${payout.corrections?.length ? `<p class="muted">Изменения относительно опубликованного бюджета: ${payout.corrections.map((c) => `${esc(c.note)} (${c.amount > 0 ? '+' : ''}${esc(c.amount)} ₽)`).join('; ')}. Эти изменения уже учтены в начисленных суммах выше.</p>` : ''}
-    </div>` : `<div class="card" id="payouts"><h2>Расчёты с тренером и залом</h2>
-      <p class="muted">Начисления по фактическому календарю можно посмотреть до закрытия месяца. Итог фиксируется в конце месяца.</p>
-      ${payoutError ? `<p class="muted">Не удалось рассчитать: ${esc(payoutError)}</p>` : ''}
-      <a href="/budgets/${seg}?preview=payout#payouts">Посчитать по текущему календарю →</a>
-    </div>`;
+    const payoutCard = renderPayoutCard(payout,!!savedPayout,payoutError,`${view === 'collection' ? '/collections' : '/budgets'}/${seg}?preview=payout#payouts`);
 
     const displayedCharges = view === 'collection' && !showAllCharges
       ? combined.filter((c) => !c.paid)
@@ -1054,13 +1075,14 @@ export async function buildServer(bot: Bot) {
 
     const publishedTeams = new Set(monthBudgets.filter((b) => b.message_id != null).map((b) => b.team));
     const canRemind = combined.some((c) => !c.paid && publishedTeams.has(c.team));
-    const body = `<h1>Сбор ${esc(monthLabel(period.month, period.year))}</h1>
-      <p><a href="/collections">← Все сборы</a> · <a href="/budgets/${seg}">К расчёту бюджета →</a></p>
+    const body = `<h1>Расчеты ${esc(monthLabel(period.month, period.year))}</h1>
+      <p><a href="/collections">← Все расчеты</a> · <a href="/budgets/${seg}">К расчёту бюджета →</a></p>
       <div class="card row" style="align-items:center;justify-content:space-between">
         <span><b>${combined.length}</b> участников · <b>${paidCount}</b> сдали · <b>${combined.length - paidCount}</b> не сдали${lastCheck ? ` · последняя отметка: ${esc(lastCheck)}` : ''}</span>
         <form class="inline" method="post" action="/budgets/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
+      ${payoutCard}
       <div class="card row" style="align-items:center;justify-content:space-between">
         <span class="muted">${showAllCharges ? 'Показаны все участники' : `Показаны должники (${combined.length - paidCount})`}</span>
         <a class="button ghost" href="/collections/${seg}${showAllCharges ? '' : '?all=1'}">${showAllCharges ? 'Скрыть сдавших' : 'Показать весь список'}</a>
@@ -1068,7 +1090,7 @@ export async function buildServer(bot: Bot) {
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="9" class="muted">Нет начислений</td></tr>'}</tbody></table></div>`;
-    return html(reply, layout(`Сбор ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
+    return html(reply, layout(`Расчеты ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
   };
 
   app.get('/budgets/:period', (req, reply) => renderBudgetDetail(req, reply, 'calculation'));

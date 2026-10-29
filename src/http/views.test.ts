@@ -21,13 +21,13 @@ test('верхнее меню ведёт по основному процесс�
   assert.match(html, /<span class="step-number">1<\/span>Расписание/);
   assert.match(html, /<span class="step-number">2<\/span>Игры/);
   assert.match(html, /<span class="step-number">3<\/span>Расчёт бюджета/);
-  assert.match(html, /<span class="step-number">4<\/span>Сборы/);
+  assert.match(html, /<span class="step-number">4<\/span>Расчеты/);
   assert.match(html, /href="\/budgets" aria-current="page"/);
   assert.doesNotMatch(html, /class="nav-menu" open/);
 });
 
 test('страница сбора отмечает четвёртый раздел активным', () => {
-  const html = layout('Сбор октября', '');
+  const html = layout('Расчеты октября', '');
   assert.match(html, /href="\/collections" aria-current="page"/);
   assert.doesNotMatch(html, /href="\/budgets" aria-current="page"/);
 });

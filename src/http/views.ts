@@ -179,7 +179,7 @@ export function layout(
     ['1', 'Расписание', '/schedule'],
     ['2', 'Игры', '/games'],
     ['3', 'Расчёт бюджета', '/budgets'],
-    ['4', 'Сборы', '/collections'],
+    ['4', 'Расчеты', '/collections'],
   ] as const;
   const managementSections = [
     ['Игроки', '/players'],

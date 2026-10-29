@@ -97,17 +97,13 @@ export async function validateGame(
     if (game.teams.length !== 2 || ours.length !== 1) {
       return { ok: false, errors: ['Неоднозначная команда в протоколе'] };
     }
-    // Полный матч: 5 игроков × 40 минут, овертайм добавляет 25 командных минут.
-    const totals = game.teams.map((t) => t.players.reduce((n, p) => n + p.minutes, 0));
-    const periods = totals.map((n) => Math.round((n - 200) / 25));
-    if (game.teams.some((t, i) => new Set(t.players.map((p) => nameTokens(p.name).sort().join(' '))).size !== t.players.length ||
-      t.players.some((p) => p.minutes > 40 + Math.max(0, periods[i]!) * 5))) {
-      return { ok: false, errors: ['Повторные строки или невозможное время игрока в протоколе'] };
+    // Для взноса важен выход на площадку, а не сумма времени команды.
+    const players = ours[0]!.players;
+    if (new Set(players.map((p) => nameTokens(p.name).sort().join(' '))).size !== players.length) {
+      return { ok: false, errors: ['Повторные строки игроков в протоколе'] };
     }
-    if (game.teams.some((t) => t.players.some((p) => !p.name || !Number.isFinite(p.minutes) || p.minutes < 0)) ||
-        totals.some((n, i) => periods[i]! < 0 || Math.abs(n - (200 + periods[i]! * 25)) > 0.2) ||
-        periods[0] !== periods[1]) {
-      return { ok: false, errors: ['Статистика неполная: время команд не соответствует завершённому матчу'] };
+    if (players.some((p) => !p.name || !Number.isFinite(p.minutes) || p.minutes < 0)) {
+      return { ok: false, errors: ['Некорректное время игрока в протоколе'] };
     }
     if (scheduled && game.date && game.date !== String(scheduled.game_date instanceof Date
       ? scheduled.game_date.toISOString() : scheduled.game_date).slice(0, 10)) {

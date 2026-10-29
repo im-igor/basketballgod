@@ -1393,7 +1393,7 @@ export async function buildServer(bot: Bot) {
 
     const statuses = await listAutomaticStatsStatus(month, year);
     const statsCard = `<div class="card"><h2>Автоматическая статистика прошлого месяца</h2>
-      <p class="muted">Проверяется каждый час. Два одинаковых полных протокола с интервалом от 30 минут включаются при сборке следующего бюджета.
+      <p class="muted">Проверяется каждый час. Два одинаковых проверенных протокола с интервалом от 30 минут включаются при сборке следующего бюджета.
       Ошибки блокируют сборку. Введённые вручную игры проверяет администратор.</p>
       <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>

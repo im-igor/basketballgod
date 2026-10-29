@@ -101,10 +101,10 @@ test('полный протокол импортируется один раз; 
   const g = (await db.query<{ fee_per_player: string; participants: unknown[] }>('select * from games')).rows[0]!;
   assert.equal(Number(g.fee_per_player) * g.participants.length, 5000);
 });
-test('неполный протокол, другая дата, отсутствие источника и конфликт тренера блокируют начисления', async () => {
+test('некорректное время, другая дата, отсутствие источника и конфликт тренера блокируют начисления', async () => {
   const scheduled = await seedSchedule();
-  mockProtocol(1200);
-  assert.match((await checkAutomaticGameStats(11, 2026, now))[0]!.error!, /неполная/);
+  mockProtocol(-1);
+  assert.match((await checkAutomaticGameStats(11, 2026, now))[0]!.error!, /Некорректное время/);
   mockProtocol(2400, '21.10.2026');
   assert.match((await checkAutomaticGameStats(11, 2026, now))[0]!.error!, /Дата/);
   await db.query('update scheduled_games set coach_conflict=true where id=$1', [scheduled.id]);
@@ -242,4 +242,18 @@ test('ручной состав с неизвестным игроком или 
   await assert.rejects(registerManualGame({ ...manualOpts,logins:['@p0','@absent'] },11,2026), /Не найдены игроки/);
   await assert.rejects(registerManualGame({ ...manualOpts,logins:['@p0','@p0'] },11,2026), /несколько раз/);
   assert.equal(await countGames(),0);
+});
+
+
+test('любое положительное время определяет участие независимо от суммы минут команды', async () => {
+  await seedSchedule();
+  for (const seconds of [1,1200,2400,3000]) {
+    mockProtocol(seconds);
+    const check = (await checkAutomaticGameStats(11,2026,now))[0]!;
+    assert.equal(check.plan?.playedCount,5);
+    assert.equal(check.plan?.fee,1000);
+    assert.match(check.error!, /повторная/);
+  }
+  mockProtocol(0);
+  assert.equal((await checkAutomaticGameStats(11,2026,now))[0]!.plan,undefined);
 });

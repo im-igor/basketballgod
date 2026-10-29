@@ -113,13 +113,20 @@ export async function checkAutomaticGameStats(
   return result.checks;
 }
 
+export class GameStatsNotReadyError extends Error {
+  constructor(public readonly warnings: string[]) {
+    super(`Статистика игр не готова. ${warnings.join('; ')}`);
+    this.name = 'GameStatsNotReadyError';
+  }
+}
+
 /** Сверяет весь прошлый месяц. При одном пробеле ничего не записывает. */
 export async function importAutomaticGameStats(month: number, year: number, events: CalendarEvent[], verifyOnly = false): Promise<void> {
   const { from, to } = sourcePeriod(month, year);
   for (const team of ['RED', 'BLACK'] as const) {
     const calendar = await importCalendarSchedule(team, new Date(from), new Date(to),
       async () => events.filter((e) => e.team === team));
-    if (calendar.errors.length) throw new Error(`Нет проверенного протокола: ${calendar.errors.join('; ')}`);
+    if (calendar.errors.length) throw new GameStatsNotReadyError(calendar.errors.map((e) => `Нет проверенного протокола: ${e}`));
   }
   const { checks, sourceErrors } = await inspectAutomaticGameStats(month, year);
   await budgetTransaction(async (client) => {
@@ -127,6 +134,7 @@ export async function importAutomaticGameStats(month: number, year: number, even
     if (!verifyOnly && published.rows.length) throw new Error('Опубликованный бюджет нельзя менять');
     const existing = (await client.query<Game>('select * from games')).rows;
     const errors: string[] = [];
+    const pending: string[] = [];
     const additions: GamePlan[] = [];
     const updates: { id: number; plan: GamePlan }[] = [];
     for (const failure of sourceErrors) {
@@ -140,12 +148,12 @@ export async function importAutomaticGameStats(month: number, year: number, even
           (c.game.calendar_event_id && g.event_uid === c.game.calendar_event_id)) &&
           g.month === month && g.year === year &&
           !(g as Game & { automatic_stats_fingerprint?: string }).automatic_stats_fingerprint).length === 1);
-      if (!manualCoverage) errors.push(`${failure.message}. Для ручного расчёта свяжи каждую известную игру с проверенным составом`);
+      if (!manualCoverage) pending.push(`${failure.message}. Для ручного расчёта свяжи каждую известную игру с проверенным составом`);
     }
     for (const g of existing.filter((g) => g.month === month && g.year === year &&
       (g as Game & { automatic_stats_fingerprint?: string }).automatic_stats_fingerprint)) {
       if (!checks.some((c) => sameIdentity(g.stat_url, c.game))) {
-        errors.push(`Игра #${g.id}: исчезла из расписания прошлого месяца; проверь перенос или отмену`);
+        pending.push(`Игра #${g.id}: исчезла из расписания прошлого месяца; проверь перенос или отмену`);
       }
     }
     const matchups = new Set<string>();
@@ -164,7 +172,7 @@ export async function importAutomaticGameStats(month: number, year: number, even
         if (g.month !== month || g.year !== year) errors.push(`Матч #${check.game.external_id} уже отнесён к другому бюджету`);
         const fingerprint = (g as Game & { automatic_stats_fingerprint?: string }).automatic_stats_fingerprint;
         if (fingerprint) {
-          if (!check.ready || !check.plan) errors.push(`Матч #${check.game.external_id}: ${check.error ?? 'не удалось проверить протокол'}`);
+          if (!check.ready || !check.plan) pending.push(`Матч #${check.game.external_id}: ${check.error ?? 'не удалось проверить протокол'}`);
           else if (fingerprint !== planFingerprint(check.plan)) {
             if (verifyOnly) errors.push(`Матч #${check.game.external_id}: протокол или тариф изменился; пересобери и проверь бюджет`);
             else updates.push({ id: g.id, plan: check.plan });
@@ -173,16 +181,17 @@ export async function importAutomaticGameStats(month: number, year: number, even
         // Ручной ввод остаётся явным решением администратора; автоматизация его не заменяет.
         continue;
       }
-      if (!check.ready || !check.plan) errors.push(`${check.game.team} ${dateOf(check.game.game_date)} #${check.game.external_id}: ${check.error}`);
+      if (!check.ready || !check.plan) pending.push(`${dateOf(check.game.game_date)} ${check.game.team_a} vs ${check.game.team_b}: ${check.error}`);
       else additions.push(check.plan);
     }
     for (const event of events.filter((e) => e.tags.TYPE === 'GAME' || e.tags.TYPE === 'FRIENDLY')) {
       if (!checks.some((c) => c.game.calendar_event_id === event.uid) &&
           !existing.some((g) => g.event_uid === event.uid && g.month === month && g.year === year)) {
-        errors.push(`${event.summary}: нет проверенного протокола или связанной ручной игры`);
+        pending.push(`${event.summary}: нет проверенного протокола или связанной ручной игры`);
       }
     }
-    if (errors.length) throw new Error(`Статистика игр не готова. ${errors.join('; ')}`);
+    if (errors.length) throw new Error(`Ошибка учёта игр. ${errors.join('; ')}`);
+    if (pending.length) throw new GameStatsNotReadyError(pending);
     if (verifyOnly && additions.length) throw new Error('Появились новые игры. Пересобери и проверь бюджет');
     for (const { id, plan } of updates) {
       await client.query(

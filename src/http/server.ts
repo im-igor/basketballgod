@@ -639,9 +639,10 @@ export async function buildServer(bot: Bot) {
     const built = [redBudget, blackBudget].filter((b): b is NonNullable<typeof b> => !!b);
     const correction = built.find((b) => b.details?.correction)?.details?.correction;
     const anySent = built.some((b) => b.message_id != null);
+    const statsWarnings = [...new Set(built.flatMap((b) => b.details?.game_stats_warnings ?? []))];
     const sharedCoach = usesSharedCoach(month, year);
     const commonDraftReady = (!usesSharedCoach(month, year) || sharedCoachBudgetsReady(redBudget, blackBudget)) &&
-      built.every((b) => !b.details?.correction || b.details.correction.reviewed);
+      built.every((b) => !b.details?.correction || b.details.correction.reviewed) && statsWarnings.length === 0;
     let draftsCard = '';
     if (built.length > 0) {
       const seg = periodOf(month, year);
@@ -691,8 +692,11 @@ export async function buildServer(bot: Bot) {
             ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
+        ${statsWarnings.length ? `<div class="card"><b>Базовая часть рассчитана. Взносы за новые игры пока не добавлены.</b>
+          <p>Сохранённые ранее игры учтены. Перед публикацией нужно проверить статистику и пересобрать бюджет.</p>
+          <ul>${statsWarnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>` : ''}
         <p class="muted">Порядок работы: собери бюджет, проверь корректировки и тексты, затем опубликуй сбор. Опубликованные суммы не меняются.</p>
-        ${commonDraftReady ? '' : correction && !correction.reviewed ? '<p class="muted">Проверь и подтверди корректировки перед публикацией.</p>' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
+        ${commonDraftReady || statsWarnings.length ? '' : correction && !correction.reviewed ? '<p class="muted">Проверь и подтверди корректировки перед публикацией.</p>' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
         <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
       </div>`;
@@ -1394,7 +1398,7 @@ export async function buildServer(bot: Bot) {
     const statuses = await listAutomaticStatsStatus(month, year);
     const statsCard = `<div class="card"><h2>Автоматическая статистика прошлого месяца</h2>
       <p class="muted">Статистика проверяется при сборке бюджета и повторно перед публикацией. Изменение состава или взносов требует пересборки бюджета. Фоновая проверка выполняется каждый час.
-      Ошибки блокируют сборку. Введённые вручную игры проверяет администратор.</p>
+      Отсутствие статистики не мешает собрать базовую часть бюджета. Публикация требует проверки игр. Введённые вручную игры проверяет администратор.</p>
       <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
         <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {

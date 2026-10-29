@@ -1,4 +1,4 @@
-import { importAutomaticGameStats } from './automaticGameStats.service.js';
+import { importAutomaticGameStats, GameStatsNotReadyError } from './automaticGameStats.service.js';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { listEvents } from '../google/calendar.js';
@@ -70,7 +70,13 @@ export async function buildAndSaveBudgets(
     getBudget('RED', sourceMonth, sourceYear),
     getBudget('BLACK', sourceMonth, sourceYear),
   ]);
-  await importAutomaticGameStats(month, year, [...sourceRedEvents, ...sourceBlackEvents]);
+  let gameStatsWarnings: string[] = [];
+  try {
+    await importAutomaticGameStats(month, year, [...sourceRedEvents, ...sourceBlackEvents]);
+  } catch (err) {
+    if (!(err instanceof GameStatsNotReadyError)) throw err;
+    gameStatsWarnings = err.warnings;
+  }
   const snapshot = snapshotEvents([...redEvents, ...blackEvents], tariffs);
   const suggested = proposeCorrection(sourceMonth, sourceYear, sourceRedBudget, sourceBlackBudget,
     [...sourceRedEvents, ...sourceBlackEvents], tariffs);
@@ -164,6 +170,7 @@ export async function buildAndSaveBudgets(
     const details: BudgetDetails = {
       ...result.details,
       automatic_stats_verified: true,
+      game_stats_warnings: gameStatsWarnings,
       gym_per_person: gymPer,
       coach_per_person: coachPer,
       base_per_person: base,

@@ -61,6 +61,7 @@ export interface Budget {
 
 export interface BudgetDetails {
   automatic_stats_verified?: boolean;
+  game_stats_warnings?: string[];
   total_players: number;
   players_team: number;
   players_other: number;

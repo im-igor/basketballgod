@@ -259,3 +259,37 @@ test('любое положительное время определяет уч
   mockProtocol(0);
   assert.equal((await checkAutomaticGameStats(11,2026,now))[0]!.plan,undefined);
 });
+
+test('декабрьский бюджет собирает базовую часть до ноябрьских матчей, но не публикует непроверенные взносы', async () => {
+  const scheduled = await seedSchedule();
+  await db.query("update scheduled_games set game_date='2026-11-01' where id=$1",[scheduled.id]);
+  const built = await buildAndSaveBudgets(12,2026);
+  assert.equal(built.length,2);
+  assert.equal(await countGames(),0);
+  const saved = (await db.query<{ details: { game_stats_warnings: string[] } }>('select details from budgets')).rows;
+  assert.ok(saved.every((b) => b.details.game_stats_warnings.some((w) => w.includes('Матч ещё не завершился'))));
+  const charges = (await db.query<{ base_amount: string; game_amount: string; amount: string }>('select * from charges')).rows;
+  assert.equal(charges.length,5);
+  assert.ok(charges.every((c) => Number(c.base_amount)>0 && Number(c.game_amount)===0 && Number(c.amount)===Number(c.base_amount)));
+  await db.exec("update budgets set details=jsonb_set(details,'{correction,reviewed}','true')");
+  let sends = 0;
+  const api = { sendMessage: async () => { sends++; return { message_id:99 }; } } as never;
+  await assert.rejects(sendBudgetToChat(api,built.find((b) => b.team==='BLACK')!.budgetId),/Статистика игр не готова/);
+  assert.equal(sends,0);
+});
+
+test('после ручного заполнения состава пересборка добавляет взносы и снимает предупреждение', async () => {
+  const scheduled = await upsertScheduledGame({ source:'CALENDAR',source_url:'https://calendar.google.com/',
+    external_id:'BLACK:calendar-only',team:'BLACK',team_a:'Yandex Black',team_b:'Opponent',game_date:'2026-10-20',
+    game_time:'20:00',location:null,details_url:null,calendar_event_id:'calendar-only' });
+  await buildAndSaveBudgets(11,2026);
+  const before = (await db.query<{ base_amount: string }>('select base_amount from charges order by id')).rows;
+  assert.equal(await countGames(),0);
+  await registerManualGame({ ...manualOpts,scheduledGameId:scheduled.id },11,2026);
+  await buildAndSaveBudgets(11,2026);
+  const saved = (await db.query<{ details: { game_stats_warnings: string[] } }>('select details from budgets')).rows;
+  assert.ok(saved.every((b) => b.details.game_stats_warnings.length===0));
+  const after = (await db.query<{ base_amount: string; game_amount: string }>('select base_amount,game_amount from charges order by id')).rows;
+  assert.deepEqual(after.map((c) => c.base_amount),before.map((c) => c.base_amount));
+  assert.equal(after.reduce((n,c)=>n+Number(c.game_amount),0),5000);
+});

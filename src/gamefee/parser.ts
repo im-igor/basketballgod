@@ -57,9 +57,9 @@ function textOf(el: HTMLElement | null | undefined): string {
 function parseMinutes(s: string): number {
   const t = s.trim();
   const mmss = t.match(/^(\d{1,3})\s*:\s*(\d{1,2})$/);
-  if (mmss) return Number(mmss[1]) + Number(mmss[2]) / 60;
-  const n = Number.parseFloat(t.replace(',', '.').replace(/[^\d.]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+  if (mmss) return Number(mmss[2]) < 60 ? Number(mmss[1]) + Number(mmss[2]) / 60 : NaN;
+  if (!t || /^(?:-|—|dnp)$/i.test(t)) return 0;
+  return /^\d+(?:[.,]\d+)?$/.test(t) ? Number(t.replace(',', '.')) : NaN;
 }
 
 function isoFromRuDate(value: unknown): string | null {
@@ -276,9 +276,9 @@ export function parseMlblOnlineJson(raw: unknown): ParsedGame {
         const last = String(player.LastNameRu ?? '').trim();
         const full = String(player.PersonNameRu ?? '').trim();
         const playerName = [first, last].filter(Boolean).join(' ') || full;
-        const seconds = Number(player.Seconds);
-        const minutes = Number.isFinite(seconds) && seconds >= 0
-          ? seconds / 60
+        const seconds = player.Seconds == null ? NaN : Number(player.Seconds);
+        const minutes = player.Seconds != null
+          ? Number.isFinite(seconds) && seconds >= 0 ? seconds / 60 : NaN
           : parseMinutes(String(player.PlayedTime ?? ''));
         return { name: playerName, minutes };
       })
@@ -330,9 +330,11 @@ export function selectTeamPlayers(
   team: 'RED' | 'BLACK',
 ): { teamName: string; opponent: string | null; played: ParsedPlayer[] } | null {
   const color = team === 'RED' ? 'red' : 'black';
-  const our =
-    game.teams.find((t) => t.name.toLowerCase().includes(color)) ??
-    game.teams.find((t) => t.name.toLowerCase().includes('yandex'));
+  const yandex = game.teams.filter((t) => /(?:yandex|яндекс)/i.test(t.name));
+  const colored = yandex.filter((t) => new RegExp(`\\b${color}\\b`, 'i').test(t.name));
+  const uncolored = yandex.filter((t) => !/\b(red|black)\b/i.test(t.name));
+  const our = colored.length === 1 ? colored[0]
+    : colored.length === 0 && uncolored.length === 1 ? uncolored[0] : null;
   if (!our) return null;
   const opponent = game.teams.find((t) => t !== our)?.name ?? null;
   const played = our.players.filter((p) => p.minutes > 0);

@@ -1,3 +1,4 @@
+import { importAutomaticGameStats } from './automaticGameStats.service.js';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { listEvents } from '../google/calendar.js';
@@ -69,6 +70,7 @@ export async function buildAndSaveBudgets(
     getBudget('RED', sourceMonth, sourceYear),
     getBudget('BLACK', sourceMonth, sourceYear),
   ]);
+  await importAutomaticGameStats(month, year, [...sourceRedEvents, ...sourceBlackEvents]);
   const snapshot = snapshotEvents([...redEvents, ...blackEvents], tariffs);
   const suggested = proposeCorrection(sourceMonth, sourceYear, sourceRedBudget, sourceBlackBudget,
     [...sourceRedEvents, ...sourceBlackEvents], tariffs);
@@ -86,6 +88,13 @@ export async function buildAndSaveBudgets(
 
   // Единый пул игр месяца: взнос атрибутируется по участнику, а не по команде игры.
   const allGames = await listAllGamesForMonth(month, year);
+  const chargeable = new Set([...active.RED, ...active.BLACK].map((p) => p.id));
+  for (const game of allGames) {
+    if (!game.participants?.length || new Set(game.participants.map((p) => p.matched_player_id)).size !== game.participants.length ||
+        game.participants.some((p) => !p.matched_player_id || !chargeable.has(p.matched_player_id))) {
+      throw new Error(`Игра #${game.id}: участники не попадут в бюджет или задвоены. Проверь состав и активность`);
+    }
+  }
   const games: GameForBudget[] = allGames.map((g) => ({
     team: g.team,
     fee_per_player: g.fee_per_player,
@@ -154,6 +163,7 @@ export async function buildAndSaveBudgets(
 
     const details: BudgetDetails = {
       ...result.details,
+      automatic_stats_verified: true,
       gym_per_person: gymPer,
       coach_per_person: coachPer,
       base_per_person: base,

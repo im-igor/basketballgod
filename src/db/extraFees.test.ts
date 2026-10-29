@@ -289,7 +289,9 @@ test('текст бюджета RED и BLACK: игры участников за
     team: 'RED', opponent: 'Старый протокол', played_on: '2026-09-29',
     stat_url: 'invalid', fee_per_player: 0,
   });
-  await addGame([], { team: 'RED', opponent: 'Без участников бюджета' });
+  const emptyGame = await addGame([], { team: 'RED', opponent: 'Без участников бюджета' });
+  await assert.rejects(buildAndSaveBudgets(10, 2026), /участники не попадут в бюджет/);
+  await sql('delete from games where id=$1', [emptyGame.id]);
   await addGame([1, 4], { opponent: 'Другой месяц начисления', month: 9 });
   await addGame([1, 4], { opponent: 'Другой год начисления', year: 2025 });
 

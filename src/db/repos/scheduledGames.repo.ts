@@ -237,9 +237,10 @@ export async function findScheduledGameForManualEntry(
          lower(trim(team_a)) = lower(trim($3)) or
          lower(trim(team_b)) = lower(trim($3))
        )
-     order by id desc limit 1`,
+     order by id desc limit 2`,
     [team, gameDate, opponent],
   );
+  if (rows.length > 1) throw new Error('Несколько матчей с этой датой и соперником. Выбери конкретную игру расписания');
   return rows[0] ?? null;
 }
 

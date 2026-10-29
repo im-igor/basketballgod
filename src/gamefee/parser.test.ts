@@ -67,3 +67,16 @@ test('не принимает чужую игру за матч Yandex Black', (
   });
   assert.equal(selectTeamPlayers(game, 'BLACK'), null);
 });
+
+test('не выбирает соперника по цвету и не подменяет Black командой Red', () => {
+  const t = (name: string) => ({ name, players: [{ name: 'Игрок Один', minutes: 40 }] });
+  assert.equal(selectTeamPlayers({ teams: [t('Red Opponent'), t('Yandex Black')] }, 'BLACK')?.teamName, 'Yandex Black');
+  assert.equal(selectTeamPlayers({ teams: [t('Yandex Red'), t('Opponent')] }, 'BLACK'), null);
+  assert.equal(selectTeamPlayers({ teams: [t('Yandex Black'), t('Yandex Black')] }, 'BLACK'), null);
+});
+
+test('не превращает отрицательное время МЛБЛ в нулевое или положительное', () => {
+  const game = parseMlblOnlineJson({ GameTeams: [{ TeamName: { CompTeamNameRu: 'Yandex Black' },
+    Players: [{ FirstNameRu: 'Иван', LastNameRu: 'Игроков', Seconds: -1 }] }] });
+  assert.ok(Number.isNaN(game.teams[0]!.players[0]!.minutes));
+});

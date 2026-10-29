@@ -184,6 +184,7 @@ export function parseMlblGames(
   pageUrl: string,
   team: Team,
   apiUrl: string,
+  includeCompleted = false,
 ): ScheduledGameInput[] {
   if (!Array.isArray(rawGames)) return [];
   const page = new URL(pageUrl);
@@ -194,7 +195,7 @@ export function parseMlblGames(
     const teamB = clean(raw.ShortTeamNameBru);
     const dm = clean(raw.GameDate).match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
     // GameStatus=0 — матч запланирован. Завершённые результаты в календарь не импортируем.
-    if (!externalId || !teamA || !teamB || !dm || raw.GameStatus !== 0) continue;
+    if (!externalId || !teamA || !teamB || !dm || (includeCompleted ? ![0, 1].includes(raw.GameStatus ?? -1) : raw.GameStatus !== 0)) continue;
     if (!isOurMatch(team, teamA, teamB)) continue;
     const gameDate = isoDate(Number(dm[3]), Number(dm[2]), Number(dm[1]));
     if (!gameDate) continue;
@@ -215,8 +216,9 @@ export function parseMlblGames(
   return games;
 }
 
-async function fetchLchb(url: URL, team: Team): Promise<ScheduledGameInput[]> {
+async function fetchLchb(url: URL, team: Team, statistics = false): Promise<ScheduledGameInput[]> {
   const games = parseLchbScheduleHtml(await fetchText(url), url.toString(), team);
+  if (statistics) return games;
   await Promise.all(
     games.map(async (game) => {
       if (!game.details_url) return;
@@ -226,7 +228,17 @@ async function fetchLchb(url: URL, team: Team): Promise<ScheduledGameInput[]> {
   return games;
 }
 
-async function fetchMlbl(url: URL, team: Team): Promise<ScheduledGameInput[]> {
+export interface StatsScheduleRange { from: string; to: string }
+
+/** API календаря МЛБЛ принимает ДД.ММ.ГГГГ. ISO и today-365 могут вернуть урезанную карусель. */
+export function mlblCalendarRange(range: StatsScheduleRange): { from: string; to: string } {
+  const format = (iso: string) => iso.slice(0,10).split('-').reverse().join('.');
+  const last = new Date(`${range.to}T00:00:00Z`);
+  last.setUTCDate(last.getUTCDate() - 1);
+  return { from: format(range.from), to: format(last.toISOString()) };
+}
+
+async function fetchMlbl(url: URL, team: Team, range?: StatsScheduleRange): Promise<ScheduledGameInput[]> {
   const comps = parseMlblCompetitionsHtml(await fetchText(url));
   if (comps.length === 0) throw new Error('На странице МЛБЛ не найдено соревнований');
   const responses = await Promise.allSettled(
@@ -235,15 +247,20 @@ async function fetchMlbl(url: URL, team: Team): Promise<ScheduledGameInput[]> {
       const endpoint = new URL('/Comp/GetCalendarCarousel/', api);
       endpoint.searchParams.set('comps', String(comp.id));
       endpoint.searchParams.set('format', 'json');
-      endpoint.searchParams.set('from', 'today-365');
+      if (range) {
+        const dates = mlblCalendarRange(range);
+        endpoint.searchParams.set('from', dates.from);
+        endpoint.searchParams.set('to', dates.to);
+      } else endpoint.searchParams.set('from', 'today-365');
       endpoint.searchParams.set('max', '500');
       const raw: unknown = JSON.parse(await fetchText(endpoint));
-      return parseMlblGames(raw, url.toString(), team, api.origin);
+      return parseMlblGames(raw, url.toString(), team, api.origin, !!range);
     }),
   );
   const successful = responses.filter(
     (r): r is PromiseFulfilledResult<ScheduledGameInput[]> => r.status === 'fulfilled',
   );
+  if (range && successful.length !== responses.length) throw new Error('Не все соревнования МЛБЛ удалось проверить; полнота статистики не подтверждена');
   if (successful.length === 0) throw new Error('Все запросы к API МЛБЛ завершились ошибкой');
   const unique = new Map<string, ScheduledGameInput>();
   for (const result of successful) {
@@ -254,10 +271,11 @@ async function fetchMlbl(url: URL, team: Team): Promise<ScheduledGameInput[]> {
   );
 }
 
-export async function fetchSchedulePage(rawUrl: string, team: Team): Promise<ScheduledGameInput[]> {
+export async function fetchSchedulePage(rawUrl: string, team: Team, range?: StatsScheduleRange): Promise<ScheduledGameInput[]> {
   const { url, source } = assertSourceUrl(rawUrl.trim());
-  const games = source === 'LCHB' ? await fetchLchb(url, team) : await fetchMlbl(url, team);
-  if (games.length === 0) {
+  const allGames = source === 'LCHB' ? await fetchLchb(url, team, !!range) : await fetchMlbl(url, team, range);
+  const games = range ? allGames.filter((g) => g.game_date >= range.from && g.game_date < range.to) : allGames;
+  if (!range && games.length === 0) {
     throw new Error(`Не найдено матчей ${MLBL_TEAM[team]} на этой странице`);
   }
   return games;

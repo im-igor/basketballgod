@@ -1,3 +1,5 @@
+import { importAutomaticGameStats, sourcePeriod } from './automaticGameStats.service.js';
+import { gameFeeForPlayer } from '../domain/gamefee.js';
 import { InlineKeyboard, type Api } from 'grammy';
 import { env, TEAMS } from '../config/env.js';
 import {
@@ -130,6 +132,28 @@ export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void
     const black = budget.team === 'BLACK' ? budget : other;
     if (!sharedCoachBudgetsReady(red, black)) {
       throw new Error('Общий черновик устарел. Пересобери бюджеты обеих команд и проверь суммы перед публикацией');
+    }
+  }
+  if (budget.details?.automatic_stats_verified) {
+    const { from, to } = sourcePeriod(budget.month, budget.year);
+    const events = (await Promise.all(['RED', 'BLACK'].map((team) =>
+      listEvents(team as Team, new Date(from), new Date(to))))).flat();
+    await importAutomaticGameStats(budget.month, budget.year, events, true);
+    const games = await listAllGamesForMonth(budget.month, budget.year);
+    const charges = await getCharges(budget.id);
+    for (const c of charges) {
+      if (!c.player_id || Number(c.game_amount) !== gameFeeForPlayer(c.player_id, games)) {
+        throw new Error('Начисления за игры изменились. Пересобери бюджет');
+      }
+    }
+    const allCharges = (await Promise.all((['RED', 'BLACK'] as Team[]).map(async (team) => {
+      const b = await getBudget(team, budget!.month, budget!.year);
+      return b ? getCharges(b.id) : [];
+    }))).flat();
+    for (const game of games) {
+      if (game.participants.some((p) => allCharges.filter((c) => c.player_id === p.matched_player_id).length !== 1)) {
+        throw new Error('Не все участники игр включены в бюджет ровно один раз. Пересобери бюджет');
+      }
     }
   }
   const rendered = await renderBudgetFromDb(budgetId);

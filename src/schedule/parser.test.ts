@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { mock, test } from 'node:test';
 import {
   parseLchbLocationHtml,
   parseLchbScheduleHtml,
   parseMlblCompetitionsHtml,
   parseMlblGames,
   scheduleSourceForUrl,
+  fetchSchedulePage,
+  mlblCalendarRange,
 } from './parser.js';
 
 test('определяет турнир только по разрешённым HTTPS-доменам', () => {
@@ -103,4 +105,47 @@ test('парсит список соревнований и только зап�
     location: 'Дружба. Зал 3',
     details_url: 'https://moscow.ilovebasket.ru/games/1090210?apiUrl=https%3A%2F%2Freg.infobasket.su',
   });
+});
+
+
+test('исторический диапазон МЛБЛ использует календарные даты и включительный последний день', () => {
+  assert.deepEqual(mlblCalendarRange({ from: '2026-10-01', to: '2026-11-01' }),
+    { from: '01.10.2026', to: '31.10.2026' });
+  assert.deepEqual(mlblCalendarRange({ from: '2028-02-01', to: '2028-03-01' }),
+    { from: '01.02.2028', to: '29.02.2028' });
+});
+
+test('история МЛБЛ находит завершённые октябрьские матчи, обычный импорт сохраняет фильтр будущих', async () => {
+  const games = [
+    { GameID: 1090220, GameDate: '04.10.2026', GameStatus: 1, ShortTeamNameAru: 'Yandex Black', ShortTeamNameBru: 'Сберлизинг' },
+    { GameID: 1090227, GameDate: '11.10.2026', GameStatus: 1, ShortTeamNameAru: 'Yandex Black', ShortTeamNameBru: 'Men In Basketball' },
+    { GameID: 1090234, GameDate: '18.10.2026', GameStatus: 1, ShortTeamNameAru: 'Moscow Ghosts', ShortTeamNameBru: 'Yandex Black' },
+  ];
+  const page = 'https://moscow.ilovebasket.ru/schedule';
+  assert.equal(parseMlblGames(games,page,'BLACK','https://reg.infobasket.su').length, 0);
+  const stub = mock.method(globalThis, 'fetch', async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'moscow.ilovebasket.ru') return new Response(
+      'window.comps = [{"id":142708,"apiUrl":"https://reg.infobasket.su"}];');
+    assert.equal(url.searchParams.get('from'), '01.10.2026');
+    assert.equal(url.searchParams.get('to'), '31.10.2026');
+    return new Response(JSON.stringify(games));
+  });
+  try {
+    const result = await fetchSchedulePage(page,'BLACK',{ from: '2026-10-01', to: '2026-11-01' });
+    assert.deepEqual(result.map((g) => g.external_id), ['1090220','1090227','1090234']);
+  } finally { stub.mock.restore(); }
+});
+
+test('ошибка одного соревнования блокирует подтверждение полноты истории МЛБЛ', async () => {
+  const stub = mock.method(globalThis, 'fetch', async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'moscow.ilovebasket.ru') return new Response(
+      'window.comps = [{"id":1,"apiUrl":"https://reg.infobasket.su"},{"id":2,"apiUrl":"https://reg.infobasket.su"}];');
+    return url.searchParams.get('comps') === '1' ? new Response('[]') : new Response('unavailable', { status: 503 });
+  });
+  try {
+    await assert.rejects(fetchSchedulePage('https://moscow.ilovebasket.ru/schedule','BLACK',
+      { from: '2026-10-01', to: '2026-11-01' }), /Не все соревнования/);
+  } finally { stub.mock.restore(); }
 });

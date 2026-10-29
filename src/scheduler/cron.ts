@@ -1,3 +1,4 @@
+import { checkAutomaticGameStats } from '../services/automaticGameStats.service.js';
 import cron from 'node-cron';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
@@ -194,6 +195,13 @@ function applySchedule(api: Api, sch: Schedule): void {
       await finalizeMonthlyPayout(api, period.month, period.year);
     }), { timezone: sch.tz }),
   ];
+  tasks.push(cron.schedule('17 * * * *', job('game-stats', async () => {
+    const current = monthInTimeZone(new Date(), sch.tz);
+    for (const period of [current, { month: current.month === 12 ? 1 : current.month + 1,
+      year: current.month === 12 ? current.year + 1 : current.year }]) {
+      await checkAutomaticGameStats(period.month, period.year);
+    }
+  }), { timezone: sch.tz }));
   if (sch.scheduleImportCron) {
     tasks.push(cron.schedule(sch.scheduleImportCron, job('schedule-import', async () => {
       const results = await refreshConfiguredSchedules(api);

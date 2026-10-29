@@ -60,6 +60,7 @@ export interface Budget {
 }
 
 export interface BudgetDetails {
+  automatic_stats_verified?: boolean;
   total_players: number;
   players_team: number;
   players_other: number;

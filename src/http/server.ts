@@ -1,3 +1,4 @@
+import { checkAutomaticGameStats, listAutomaticStatsStatus, STABILITY_MS, sourcePeriod } from '../services/automaticGameStats.service.js';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
@@ -31,7 +32,7 @@ import { listAllGamesForMonth, deleteGameById, deleteLastManualFriendly } from '
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { getMonthlyPayout } from '../db/repos/monthlyPayouts.repo.js';
 import { calculateMonthlyPayoutPreview } from '../services/monthlyPayout.service.js';
-import { listScheduledGames, listScheduleDuplicateGroups } from '../db/repos/scheduledGames.repo.js';
+import { listScheduledGames, listScheduleDuplicateGroups, listScheduledGamesInRange } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
 import { buildAndSaveBudgets, recalcBudget, updateBudgetCorrection } from '../services/budget.service.js';
 import { correctionNote, isLegacyAutoCorrectionNote } from '../domain/budgetCorrections.js';
@@ -1338,6 +1339,16 @@ export async function buildServer(bot: Bot) {
 
   const gamesQuery = (month: number, year: number) => `/games?month=${month}&year=${year}`;
 
+  app.post('/games/check-stats', async (req, reply) => {
+    const p = readPeriod(req.body);
+    if (!p) return redirect(reply, '/games', 'Неверный месяц/год');
+    try {
+      const checks = await checkAutomaticGameStats(p.month, p.year);
+      return redirect(reply, gamesQuery(p.month, p.year),
+        `Проверено матчей: ${checks.length}, стабильных: ${checks.filter((c) => c.ready).length}. Начисления не менялись`);
+    } catch (err) { return redirect(reply, gamesQuery(p.month,p.year), `Ошибка: ${(err as Error).message}`); }
+  });
+
   app.get('/games', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
@@ -1377,6 +1388,20 @@ export async function buildServer(bot: Bot) {
       })
       .join('');
 
+    const statuses = await listAutomaticStatsStatus(month, year);
+    const statsCard = `<div class="card"><h2>Автоматическая статистика прошлого месяца</h2>
+      <p class="muted">Проверяется каждый час. Два одинаковых полных протокола с интервалом от 30 минут включаются при сборке следующего бюджета.
+      Ошибки блокируют сборку. Введённые вручную игры проверяет администратор.</p>
+      <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
+        <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
+      ${statuses.length ? statuses.map((s) => {
+        const stable = s.stable_since && s.checked_at && new Date(s.checked_at).getTime() - new Date(s.stable_since).getTime() >= STABILITY_MS;
+        return `<p>${esc(s.team)} #${esc(s.external_id)} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : stable ? 'Протокол стабилен' : 'Ожидается повторная проверка'))}
+          ${s.plan ? ` · ${s.plan.playedCount} игроков × ${s.plan.fee} ₽ = ${s.plan.playedCount * s.plan.fee} ₽` : ''}
+          ${s.checked_at ? ` · ${esc(fmtDateTime(s.checked_at))}` : ''}</p>`;
+      }).join('') : '<p class="muted">В расписании нет матчей прошлого месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}
+      <p class="muted">Взнос округляется вверх до рубля. Начисление каждому сыгравшему — в бюджет его команды.</p>
+      </div>`;
     const importForm = `<div class="card"><h2>Добавить по ссылке на протокол</h2>
       <div class="muted" style="margin-bottom:8px">
         Сыгравшие определяются по времени на площадке &gt; 0, сопоставляются с ростером, а взнос добавляется в выбранный месяц бюджета.
@@ -1398,10 +1423,19 @@ export async function buildServer(bot: Bot) {
         <div style="margin-top:8px"><button>Проверить и добавить</button></div>
       </form></div>`;
 
+    const statsPeriod = sourcePeriod(month,year);
+    const manualCandidates = (await Promise.all((['RED','BLACK'] as const).map((team) =>
+      listScheduledGamesInRange(team,statsPeriod.from,statsPeriod.to)))).flat();
     const addForm = `<div class="card"><h2>Добавить игру вручную</h2>
       <div class="muted" style="margin-bottom:8px">Ручной ввод для товарищеских игр и исключений.
         Состав — список tg-логинов сыгравших (через пробел или запятую), кросс-командно; взнос падает каждому в бюджет его команды.</div>
       <form method="post" action="/games/add" ${published ? 'onsubmit="return confirm(\'Сбор опубликован и останется неизменным. Добавить игру?\')"' : ''}>
+        <input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">
+        <p class="muted">Взнос будет включён в бюджет ${esc(monthLabel(month,year))}. Для игры без протокола выбери её из расписания: связь сохранится при появлении статистики.</p>
+        <div><label>Игра расписания (для исключений без протокола)</label><select name="scheduled_game_id">
+          <option value="">Без привязки к расписанию</option>
+          ${manualCandidates.map((g) => `<option value="${esc(g.id)}">${esc(g.team)} · ${esc(isoToRu(g.game_date))} · ${esc(g.team_a)} — ${esc(g.team_b)}</option>`).join('')}
+        </select></div>
         <div class="row">
           <div style="flex:0"><label>Команда (метка)</label>
             <select name="team"><option value="BLACK">BLACK</option><option value="RED">RED</option><option value="MIXED">MIXED</option></select></div>
@@ -1424,6 +1458,7 @@ export async function buildServer(bot: Bot) {
           <div style="flex:0"><label>&nbsp;</label><button class="ghost">Показать</button></div>
         </form></div>
       ${published ? '<div class="card muted">Сбор за этот месяц опубликован. Изменение игр не меняет отправленные суммы, но может изменить начисления тренеру.</div>' : ''}
+      ${statsCard}
       ${importForm}
       ${addForm}
       <div class="card"><table class="games-table">
@@ -1491,14 +1526,14 @@ export async function buildServer(bot: Bot) {
     const logins = (b.logins ?? '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
     if (logins.length === 0) return redirect(reply, '/games', 'Укажи хотя бы одного сыгравшего');
     const date = (b.date ?? '').trim() || null;
-    // Месяц бюджета берём из даты игры; без даты — период по умолчанию (как в /budgets).
-    const my = date
-      ? { month: new Date(date).getMonth() + 1, year: new Date(date).getFullYear() }
-      : defaultBudgetPeriod();
+    const my = readPeriod(b) ?? (date
+      ? { month: new Date(date).getMonth() === 11 ? 1 : new Date(date).getMonth() + 2,
+          year: new Date(date).getFullYear() + (new Date(date).getMonth() === 11 ? 1 : 0) }
+      : defaultBudgetPeriod());
     let res;
     try {
       res = await registerManualGame(
-        { team, opponent: (b.opponent ?? '').trim() || null, date, logins, coach: b.coach === 'yes', judge: b.judge === 'yes' },
+        { team, scheduledGameId: b.scheduled_game_id?.trim() || undefined, opponent: (b.opponent ?? '').trim() || null, date, logins, coach: b.coach === 'yes', judge: b.judge === 'yes' },
         my.month,
         my.year,
       );

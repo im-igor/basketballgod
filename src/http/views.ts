@@ -1,3 +1,4 @@
+import { FORM_BUSY_SCRIPT } from './formBusy.js';
 /** SSR-вьюхи админ-панели: адаптивная вёрстка без фронтенд-фреймворков. */
 
 export function esc(s: unknown): string {
@@ -103,6 +104,7 @@ button.danger:hover { filter:brightness(.92); }
 .inline { display:inline; }
 .muted { color:var(--muted); }
 .right { text-align:right; }
+.flash-error { background:var(--danger-soft)!important; border-color:var(--danger)!important; color:var(--danger)!important; }
 .flash { background:var(--ok-soft); border:1px solid var(--flash-line); color:var(--flash-fg); padding:11px 14px; border-radius:10px; margin:0 0 16px; font-weight:550; }
 .workflow-check { display:flex; align-items:center; gap:12px; justify-content:space-between; padding:13px 15px; margin:0 0 14px; border:1px solid var(--line); border-radius:11px; background:var(--field); }
 .workflow-check-main { display:flex; align-items:flex-start; gap:10px; min-width:0; }
@@ -211,7 +213,8 @@ export function layout(
         <form class="inline" method="post" action="/logout"><button class="ghost">Выйти</button></form>
       </div>
     </header>`;
-  const flash = opts.flash ? `<div class="flash">${esc(opts.flash)}</div>` : '';
+  const isError = !!opts.flash && /^(Ошибка|Отправка сбора заблокирована|Не удалось)/i.test(opts.flash);
+  const flash = opts.flash ? `<div class="flash${isError ? ' flash-error' : ''}" role="${isError ? 'alert' : 'status'}">${esc(opts.flash)}</div>` : '';
   return `<!doctype html><html lang="ru"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — basketballgod</title>
@@ -220,7 +223,7 @@ export function layout(
 <body>${nav}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
 <script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})();
 (function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})();
-(function(){document.querySelectorAll('.budget-build-form').forEach(function(form){var button=form.querySelector('button[type="submit"]');if(!button)return;var label=button.textContent;form.addEventListener('submit',function(event){if(event.defaultPrevented)return;if(form.getAttribute('aria-busy')==='true'){event.preventDefault();return}form.setAttribute('aria-busy','true');button.disabled=true;button.classList.add('loading');button.textContent=form.getAttribute('data-loading-label')||'Собираю бюджет…'});window.addEventListener('pageshow',function(){form.removeAttribute('aria-busy');button.disabled=false;button.classList.remove('loading');button.textContent=label})})})()</script>
+${FORM_BUSY_SCRIPT}</script>
 </body></html>`;
 }
 

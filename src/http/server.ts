@@ -1,3 +1,4 @@
+import { publicationBlockReasons, publicationErrorMessage } from './publicationError.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
 import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
@@ -641,6 +642,7 @@ export async function buildServer(bot: Bot) {
     const anySent = built.some((b) => b.message_id != null);
     const statsWarnings = [...new Set(built.flatMap((b) => b.details?.game_stats_warnings ?? []))];
     const sharedCoach = usesSharedCoach(month, year);
+    const publishReasons = publicationBlockReasons(built, usesSharedCoach(month,year));
     const commonDraftReady = (!usesSharedCoach(month, year) || sharedCoachBudgetsReady(redBudget, blackBudget)) &&
       built.every((b) => !b.details?.correction || b.details.correction.reviewed) && statsWarnings.length === 0;
     let draftsCard = '';
@@ -695,6 +697,7 @@ export async function buildServer(bot: Bot) {
         ${statsWarnings.length ? `<div class="card"><b>Базовая часть рассчитана. Взносы за новые игры пока не добавлены.</b>
           <p>Сохранённые ранее игры учтены. Перед публикацией нужно проверить статистику и пересобрать бюджет.</p>
           <ul>${statsWarnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>` : ''}
+        ${publishReasons.length ? `<div class="flash flash-error" role="alert"><b>Отправка сбора заблокирована</b><ul>${publishReasons.map((r)=>`<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
         <p class="muted">Порядок работы: собери бюджет, проверь корректировки и тексты, затем опубликуй сбор. Опубликованные суммы не меняются.</p>
         ${commonDraftReady || statsWarnings.length ? '' : correction && !correction.reviewed ? '<p class="muted">Проверь и подтверди корректировки перед публикацией.</p>' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
         <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
@@ -792,7 +795,7 @@ export async function buildServer(bot: Bot) {
         sent ? `Сборы отправлены в чаты (команд: ${sent})` : 'Нет неопубликованных бюджетов за период',
       );
     } catch (err) {
-      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
+      return redirect(reply, back, publicationErrorMessage(err));
     }
   });
 
@@ -907,10 +910,11 @@ export async function buildServer(bot: Bot) {
     const paidCount = combined.filter((c) => c.paid).length;
     const anySent = monthBudgets.some((b) => b.message_id != null);
     const sharedCoach = usesSharedCoach(period.month, period.year);
+    const publishReasons = publicationBlockReasons(monthBudgets,sharedCoach);
     const commonDraftReady = (!sharedCoach || sharedCoachBudgetsReady(
       monthBudgets.find((b) => b.team === 'RED') ?? null,
       monthBudgets.find((b) => b.team === 'BLACK') ?? null,
-    )) && monthBudgets.every((b) => !b.details?.correction || b.details.correction.reviewed);
+    )) && monthBudgets.every((b) => !b.details?.correction || b.details.correction.reviewed) && publishReasons.length === 0;
     const editableBudgets = monthBudgets.filter((b) => b.message_id == null);
     const confirmation = monthLabel(period.month, period.year);
     const coachControls = monthBudgets.map((b) => {
@@ -1036,7 +1040,7 @@ export async function buildServer(bot: Bot) {
           ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button ${commonDraftReady ? '' : 'disabled'}>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
           <span class="muted">${monthBudgets.length} команд · ${combined.length} участников</span>
         </div>
-        ${commonDraftReady ? '' : '<div class="card muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд перед публикацией.</div>'}
+        ${publishReasons.length ? `<div class="flash flash-error" role="alert"><b>Отправка сбора заблокирована</b><ul>${publishReasons.map((r)=>`<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
         ${payoutCard}
         ${coachControls}
         ${friendlyControls}
@@ -1295,7 +1299,7 @@ export async function buildServer(bot: Bot) {
       }
       return redirect(reply, `/budgets/${seg}`, `Сбор отправлен в чаты (команд: ${sent})`);
     } catch (err) {
-      return redirect(reply, `/budgets/${seg}`, `Ошибка: ${(err as Error).message}`);
+      return redirect(reply, `/budgets/${seg}`, publicationErrorMessage(err));
     }
   });
 

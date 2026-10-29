@@ -1,3 +1,5 @@
+import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
+import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
 import { checkAutomaticGameStats, listAutomaticStatsStatus, STABILITY_MS, sourcePeriod } from '../services/automaticGameStats.service.js';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
@@ -1577,11 +1579,12 @@ export async function buildServer(bot: Bot) {
   // ── Импорт расписания лиг → БД + Google Calendar ─────────
   app.get('/schedule', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
-    const [games, sources, cronConfig, duplicateGroups] = await Promise.all([
+    const [games, sources, cronConfig, duplicateGroups, pollWindow] = await Promise.all([
       listScheduledGames(),
       listScheduleSources(),
       getCronConfig(),
       listScheduleDuplicateGroups(),
+      getCronJobWindow('game-polls'),
     ]);
     const duplicateIds = new Set(duplicateGroups.flatMap((group) => group.games.map((game) => game.id)));
     const googleCalendarUrl = (team: Team) =>
@@ -1625,6 +1628,8 @@ export async function buildServer(bot: Bot) {
       ? `<span class="badge yes">автопроверка включена · интервал ${esc(scheduleIntervalLabel(cronConfig.schedule_import_interval_minutes))}` +
         `${cronConfig.schedule_import_send_polls ? ' · голосовалки новых игр включены' : ''}</span>`
       : '<span class="badge black">автопроверка выключена</span>';
+    const pollContext = pollScheduleContext(cronConfig,pollWindow,new Date(),
+      { timezone: env.TZ, cron: env.POLL_GAME_CRON, horizonDays: env.POLL_GAME_HORIZON_DAYS });
     const rows = games.map((g) => {
       const isDuplicate = duplicateIds.has(g.id);
       const date = g.game_date instanceof Date
@@ -1651,13 +1656,9 @@ export async function buildServer(bot: Bot) {
       const coachControl = `${coachState}<form method="post" action="/schedule/${esc(g.id)}/coach" style="margin-top:6px;display:flex;gap:5px">
         <select name="coach" style="min-width:115px"><option value="auto" ${selected('auto')}>не задано</option><option value="yes" ${selected('yes')}>тренер будет</option><option value="no" ${selected('no')}>без тренера</option></select>
         <button class="ghost">OK</button></form>`;
-      const pollState = g.poll_sent_at
-        ? '<span class="badge yes">отправлен</span>'
-        : g.poll_last_error
-          ? `<span class="badge no" title="${esc(g.poll_last_error)}">ошибка</span>`
-          : g.poll_pending
-            ? '<span class="badge black">ожидает</span>'
-            : '<span class="muted">—</span>';
+      const pollStatus = scheduledPollStatus(g,pollContext);
+      const pollState = `<span class="badge ${pollStatus.kind}" title="${esc(pollStatus.detail)}">${esc(pollStatus.text)}</span>` +
+        (pollStatus.detail ? `<div class="muted" style="margin-top:4px">${esc(pollStatus.detail)}</div>` : '');
       const duplicateState = isDuplicate
         ? '<span class="badge no">возможный дубль</span>'
         : '<span class="muted">—</span>';

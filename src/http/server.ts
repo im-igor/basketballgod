@@ -1459,8 +1459,13 @@ export async function buildServer(bot: Bot) {
   app.get('/games', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
-    const month = Number(q.month);
-    const year = Number(q.year);
+    const def = defaultBudgetPeriod();
+    const month = q.month === undefined ? def.month : Number(q.month);
+    const year = q.year === undefined ? def.year : Number(q.year);
+    if (!Number.isInteger(month) || month < 1 || month > 12 ||
+        !Number.isInteger(year) || year < 2024 || year > 2100) {
+      return redirect(reply, gamesQuery(def.month, def.year), 'Неверный месяц или год. Выбран следующий месяц бюджета.');
+    }
 
     const [games, redBudget, blackBudget] = await Promise.all([
       listAllGamesForMonth(month, year), getBudget('RED', month, year), getBudget('BLACK', month, year),

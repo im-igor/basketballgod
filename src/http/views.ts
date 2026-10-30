@@ -244,7 +244,7 @@ export function layout(
   const primarySections = [
     ['1', 'Расписание', '/schedule'],
     ['2', 'Игры', '/games'],
-    ['4', 'Расчеты', '/collections'],
+    ['3', 'Расчеты', '/collections'],
   ] as const;
   const managementSections = [
     ['Игроки', '/players'],

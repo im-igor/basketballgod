@@ -20,12 +20,12 @@ test('верхнее меню ведёт по основному процесс�
   assert.match(html, /<span class="step-number">1<\/span>Расписание/);
   assert.match(html, /<span class="step-number">2<\/span>Игры/);
   assert.doesNotMatch(html, /href="\/budgets"/);
-  assert.match(html, /<span class="step-number">4<\/span>Расчеты/);
+  assert.match(html, /<span class="step-number">3<\/span>Расчеты/);
   assert.match(html, /href="\/collections" aria-current="page"/);
   assert.doesNotMatch(html, /class="nav-menu" open/);
 });
 
-test('страница сбора отмечает четвёртый раздел активным', () => {
+test('страница сбора отмечает третий раздел активным', () => {
   const html = layout('Расчеты октября', '');
   assert.match(html, /href="\/collections" aria-current="page"/);
   assert.doesNotMatch(html, /href="\/budgets" aria-current="page"/);

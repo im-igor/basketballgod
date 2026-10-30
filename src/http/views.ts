@@ -43,11 +43,11 @@ html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settle
 .settlement-metric>span { color:var(--muted); font-size:12px; }
 .settlement-metric strong { font-size:24px; font-variant-numeric:tabular-nums; letter-spacing:-.035em; overflow-wrap:anywhere; }
 .settlement-updated { margin-top:12px; font-size:11px; color:var(--muted); }
-.settlement-details { margin-top:16px; border-top:1px solid var(--settlement-border); }
-.settlement-details>summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; padding:12px 0 0; font-size:13px; font-weight:600; color:var(--link); list-style:none; }
+.settlement-details { margin:0; }
+.settlement-details>summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; padding:0; font-size:14px; font-weight:650; color:var(--link); list-style:none; }
 .settlement-details>summary::-webkit-details-marker { display:none; }
 .settlement-details[open]>summary>span { transform:rotate(180deg); }
-.settlement-details>.card { margin:12px 0 0; padding:14px 0 0; background:transparent; border:0; border-top:1px solid var(--settlement-border); border-radius:0; box-shadow:none; }
+.settlement-details [data-payout-content]>.card { margin:12px 0 0; padding:14px 0 0; background:transparent; border:0; border-top:1px solid var(--settlement-border); border-radius:0; box-shadow:none; }
 .settlement-details .row { display:block; }
 .settlement-details .row>div { min-width:0!important; width:100%; margin-bottom:16px; }
 .settlement-details table { table-layout:fixed; font-size:12px; }
@@ -147,15 +147,19 @@ input:focus,select:focus,textarea:focus { background:var(--card); border-color:v
 input[type="checkbox"] { accent-color:var(--accent); min-height:auto; }
 .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
 .row > div { flex:1; min-width:120px; }
+a.button { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; font-size:13px; }
+.settlement-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; flex-shrink:0; }
+.budget-months { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
 label { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:6px; }
-button { background:var(--accent); color:#fff; border:1px solid var(--accent); border-radius:9px; min-height:40px; padding:8px 14px; cursor:pointer; font-weight:650; transition:background .15s,border-color .15s,transform .08s; }
-button:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
+button,a.button { background:var(--accent); color:#fff; border:1px solid var(--accent); border-radius:9px; min-height:40px; padding:8px 14px; cursor:pointer; font-weight:650; transition:background .15s,border-color .15s,transform .08s; }
+button:hover,a.button:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
+button:disabled { opacity:.45; cursor:not-allowed; }
 button:active { transform:translateY(1px); }
 button.loading { opacity:.8; cursor:wait; }
 button.loading::before { content:""; display:inline-block; width:13px; height:13px; margin-right:8px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:button-spin .7s linear infinite; }
 @keyframes button-spin { to { transform:rotate(360deg); } }
-button.ghost { background:var(--card); border-color:var(--field-line); color:var(--ghost-fg); }
-button.ghost:hover { background:var(--hover); border-color:var(--muted); color:var(--fg); }
+button.ghost,a.button.ghost { background:var(--card); border-color:var(--field-line); color:var(--ghost-fg); }
+button.ghost:hover,a.button.ghost:hover { background:var(--hover); border-color:var(--muted); color:var(--fg); }
 .theme-toggle { width:40px; padding:0; display:grid; place-items:center; font-size:17px; }
 button.ok { background:var(--ok); border-color:var(--ok); }
 button.ok:hover { background:var(--ok-hover); border-color:var(--ok-hover); }
@@ -238,7 +242,6 @@ export function layout(
   const primarySections = [
     ['1', 'Расписание', '/schedule'],
     ['2', 'Игры', '/games'],
-    ['3', 'Расчёт бюджета', '/budgets'],
     ['4', 'Расчеты', '/collections'],
   ] as const;
   const managementSections = [
@@ -249,7 +252,8 @@ export function layout(
     ['Крон', '/cron'],
     ['Резервные копии', '/backups'],
   ] as const;
-  const isCurrent = (label: string) => title === label || title.startsWith(label.slice(0, -1));
+  const isCurrent = (label: string) => title === label || title.startsWith(label.slice(0, -1)) ||
+    (label === 'Расчеты' && title.startsWith('Расчёт бюджета'));
   const primaryLinks = primarySections
     .map(([step, label, href]) => `<a href="${href}"${isCurrent(label) ? ' aria-current="page"' : ''}><span class="step-number">${step}</span>${label}</a>`)
     .join('');

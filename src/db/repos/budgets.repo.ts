@@ -1,4 +1,4 @@
-import { budgetTransaction, query } from '../pool.js';
+import { budgetTransaction, query, withBudgetOperation } from '../pool.js';
 import type { Budget, BudgetDetails, Charge, ExtraFee, ExtraFeeAllocation, Game, Team } from '../types.js';
 import { extraFeesForPlayer, sumMoney } from '../../domain/extraFees.js';
 
@@ -103,13 +103,25 @@ export async function deleteBudget(
   month: number,
   year: number,
 ): Promise<Budget | null> {
-  return budgetTransaction(async (client) => {
+  return withBudgetOperation(() => budgetTransaction(async (client) => {
     const { rows } = await client.query<Budget>(
       'delete from budgets where team = $1 and month = $2 and year = $3 and message_id is null returning *',
       [team, month, year],
     );
     return rows[0] ?? null;
-  });
+  }));
+}
+
+/** Physically remove both drafts and their cascading charges/fee allocations atomically. */
+export async function deleteDraftMonth(month: number, year: number): Promise<number> {
+  return withBudgetOperation(() => budgetTransaction(async client => {
+    const { rows } = await client.query<Budget>(
+      'select * from budgets where month=$1 and year=$2 for update', [month, year],
+    );
+    if (rows.some(b => b.message_id != null)) throw new Error('Опубликованный бюджет нельзя удалить');
+    const result = await client.query('delete from budgets where month=$1 and year=$2 returning id', [month, year]);
+    return result.rows.length;
+  }));
 }
 
 export async function setBudgetMessage(
@@ -128,6 +140,16 @@ export async function getCharges(budgetId: number): Promise<Charge[]> {
   const { rows } = await query<Charge>(
     'select * from charges where budget_id = $1 order by name',
     [budgetId],
+  );
+  return rows;
+}
+
+/** Начисления для списка месяцев одним запросом, без запроса на каждый бюджет. */
+export async function getChargesForBudgets(budgetIds: number[]): Promise<Charge[]> {
+  if (!budgetIds.length) return [];
+  const { rows } = await query<Charge>(
+    'select * from charges where budget_id = any($1::int[]) order by budget_id, name',
+    [budgetIds],
   );
   return rows;
 }

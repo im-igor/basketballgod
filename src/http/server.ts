@@ -1,3 +1,4 @@
+import { PAYOUT_LOADER_SCRIPT } from './payoutLoader.js';
 import { publicationBlockReasons, publicationErrorMessage } from './publicationError.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
@@ -29,12 +30,14 @@ import {
   getBudget,
   getBudgetById,
   getCharges,
+  getChargesForBudgets,
   setChargePaid,
   deleteBudget,
+  deleteDraftMonth,
 } from '../db/repos/budgets.repo.js';
 import { listAllGamesForMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
-import { getMonthlyPayout } from '../db/repos/monthlyPayouts.repo.js';
+import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
 import { calculateMonthlyPayoutPreview } from '../services/monthlyPayout.service.js';
 import { listScheduledGames, listScheduleDuplicateGroups, listScheduledGamesInRange } from '../db/repos/scheduledGames.repo.js';
 import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleSources.repo.js';
@@ -180,14 +183,10 @@ export async function buildServer(bot: Bot) {
         <div class="row">
           <form method="post" action="/polls/run/training"><button>Разослать опросы на тренировки</button></form>
           <form method="post" action="/polls/run/game"><button>Разослать опросы на игры</button></form>
-          <form method="post" action="/budgets/build" class="row">
-            <div><label>Месяц</label><input name="month" type="number" min="1" max="12" required></div>
-            <div><label>Год</label><input name="year" type="number" min="2024" max="2100" required></div>
-            <div><button class="ghost">Собрать бюджет</button></div>
-          </form>
+          <a class="button ghost" href="/budgets/new">Собрать бюджет</a>
         </div>
       </div>
-      <div class="card muted">«Расчёт бюджета» — сборка, черновики и корректировки. «Расчеты» — прогресс оплат, начисления тренеру и за зал, отметки переводов и напоминания должникам.</div>`;
+      <div class="card muted">«Расчеты» — создание и редактирование черновиков, публикация сборов, оплаты игроков и начисления тренеру и за зал.</div>`;
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
@@ -593,7 +592,7 @@ export async function buildServer(bot: Bot) {
     if (!m) return null;
     const month = Number(m[1]);
     const year = Number(m[2]);
-    if (!(month >= 1 && month <= 12) || !(year >= 2024)) return null;
+    if (!Number.isInteger(month) || !Number.isInteger(year) || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return null;
     return { month, year };
   };
 
@@ -646,12 +645,32 @@ export async function buildServer(bot: Bot) {
     </div>`;
   };
 
+  app.get('/budgets/new', async (req, reply) => {
+    const q = req.query as Record<string, string>;
+    const year = Number.isInteger(Number(q.year)) && Number(q.year) >= 2024 && Number(q.year) <= 2100
+      ? Number(q.year) : defaultBudgetPeriod().year;
+    const budgets = await listBudgets();
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const month = i + 1;
+      const existing = budgets.filter(b => b.month === month && b.year === year);
+      const label = monthLabel(month, year);
+      return existing.length
+        ? `<button disabled aria-label="${esc(label)}: уже есть бюджет">${esc(label)} · ${existing.some(b => b.message_id != null) ? 'опубликован' : 'черновик'}</button>`
+        : `<a class="button ghost" href="/budgets?mode=create&month=${month}&year=${year}">${esc(label)}</a>`;
+    }).join('');
+    return html(reply, layout('Расчеты — новый бюджет', `<p><a href="/collections">← Все расчеты</a></p><h1>Собрать бюджет</h1>
+      <form method="get" action="/budgets/new" class="row"><div><label for="budget-year">Год</label><input id="budget-year" name="year" type="number" min="2024" max="2100" value="${year}" required></div><button>Показать</button></form>
+      <p class="muted">Месяцы с черновиком или опубликованным бюджетом недоступны. Для изменения черновика открой его карточку в расчётах.</p>
+      <div class="card budget-months">${months}</div>`, { flash: q.msg }));
+  });
+
   app.get('/budgets', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
-    const def = defaultBudgetPeriod();
-    const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
-    const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
+    if (!q.month || !q.year) return redirect(reply, '/budgets/new', msg);
+    if (!Number.isInteger(Number(q.month)) || !Number.isInteger(Number(q.year)) || Number(q.month) < 1 || Number(q.month) > 12 || Number(q.year) < 2024 || Number(q.year) > 2100) return redirect(reply, '/budgets/new', 'Неверный месяц/год');
+    const month = Number(q.month);
+    const year = Number(q.year);
 
     const extraFees = await listExtraFees();
     const selectedPeriod = year * 100 + month;
@@ -667,6 +686,12 @@ export async function buildServer(bot: Bot) {
       getBudget('BLACK', month, year),
     ]);
     const built = [redBudget, blackBudget].filter((b): b is NonNullable<typeof b> => !!b);
+    const mode = q.mode ?? (built.length ? 'edit' : 'create');
+    if (built.some(b => b.message_id != null)) return redirect(reply, `/budgets/${periodOf(month, year)}`, msg ?? 'Опубликованный бюджет нельзя редактировать');
+    if (mode === 'create' && built.length) return redirect(reply, '/budgets/new', 'За этот месяц уже есть бюджет. Открой его для редактирования.');
+    if (mode === 'edit' && !built.length) return redirect(reply, '/budgets/new', 'Черновик не найден');
+    if (mode !== 'create' && mode !== 'edit') return redirect(reply, '/budgets/new', 'Неверный режим');
+
     const correction = built.find((b) => b.details?.correction)?.details?.correction;
     const anySent = built.some((b) => b.message_id != null);
     const statsWarnings = [...new Set(built.flatMap((b) => b.details?.game_stats_warnings ?? []))];
@@ -745,7 +770,7 @@ export async function buildServer(bot: Bot) {
       ? `<span class="badge yes">активно: ${relevantExtraFees.length}</span>`
       : '<span class="badge black">нет активных</span>';
 
-    const body = `<h1>Расчёт бюджета</h1>
+    const body = `<p><a href="/collections">← Все расчеты</a></p><h1>${mode === 'edit' ? 'Редактировать бюджет' : 'Собрать бюджет'} · ${esc(monthLabel(month, year))}</h1>
 
       <div class="card"><h2>Собрать черновик</h2>
         <div class="workflow-check">
@@ -756,12 +781,11 @@ export async function buildServer(bot: Bot) {
           <a href="/extra-fees">Проверить</a>
         </div>
         <form method="post" action="/budgets/build" class="row budget-build-form" id="budget-build-form" data-loading-label="Собираю бюджет…">
-          <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
-          <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
-          <div style="flex:0"><label>&nbsp;</label><button type="submit">Собрать</button></div>
+          <input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}"><input type="hidden" name="mode" value="${mode}">
+          <div style="flex:0"><label>&nbsp;</label><button type="submit">${mode === 'edit' ? 'Пересчитать черновик' : 'Собрать'}</button></div>
         </form></div>
       ${draftsCard}`;
-    return html(reply, layout('Расчёт бюджета', body, { flash: msg }));
+    return html(reply, layout('Расчеты — бюджет', body, { flash: msg }));
   });
 
   /** Прочитать и провалидировать месяц/год из тела формы. */
@@ -769,19 +793,18 @@ export async function buildServer(bot: Bot) {
     const b = body as { month?: string; year?: string };
     const month = Number(b.month);
     const year = Number(b.year);
-    if (!(month >= 1 && month <= 12) || !(year >= 2024)) return null;
+    if (!Number.isInteger(month) || !Number.isInteger(year) || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return null;
     return { month, year };
   };
 
   app.post('/budgets/build', async (req, reply) => {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
+    const mode = (req.body as { mode?: string }).mode ?? 'create';
     const back = `/budgets?month=${p.month}&year=${p.year}`;
+    if (mode !== 'create' && mode !== 'edit') return redirect(reply, '/collections', 'Неверный режим');
     try {
-      const existing = await Promise.all((['RED', 'BLACK'] as Team[]).map((team) => getBudget(team, p.month, p.year)));
-      const published = existing.some((budget) => budget?.message_id != null);
-      if (published) return redirect(reply, back, 'Опубликованный бюджет нельзя пересобрать');
-      await buildAndSaveBudgets(p.month, p.year, undefined, api);
+      await buildAndSaveBudgets(p.month, p.year, undefined, api, mode);
       return redirect(reply, back, `Черновики за ${monthLabel(p.month, p.year)} собраны для обеих команд`);
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
@@ -837,12 +860,45 @@ export async function buildServer(bot: Bot) {
     return found.filter((b): b is NonNullable<typeof b> => !!b);
   };
 
+  const payoutLoaderScript = `<script>${PAYOUT_LOADER_SCRIPT}</script>`;
+  const lazyPayout = (seg: string) => `<details class="card" id="payouts" data-payout-url="/collections/${seg}/payout"><summary>Расчёты с тренером и залом</summary><div data-payout-content></div></details>${payoutLoaderScript}`;
+
+  app.post('/collections/:period/delete', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/collections', 'Неверный период бюджета');
+    const expected = monthLabel(period.month, period.year);
+    if ((req.body as { confirmation?: string })?.confirmation !== expected) return redirect(reply, '/collections', 'Подтверди удаление черновика на карточке месяца');
+    try {
+      const deleted = await deleteDraftMonth(period.month, period.year);
+      return redirect(reply, '/collections', deleted ? `Черновик за ${expected} удалён со всеми начислениями и отметками оплат` : 'Черновик уже удалён');
+    } catch (err) {
+      return redirect(reply, '/collections', `Ошибка: ${(err as Error).message}`);
+    }
+  });
+
+  app.get('/collections/:period/payout', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period || !(await monthBudgetsOf(period.month, period.year)).length) return reply.code(404).send('Бюджет не найден');
+    reply.header('Cache-Control', 'no-store');
+    try {
+      const saved = await getMonthlyPayout(period.month, period.year);
+      const payout = saved ?? await calculateMonthlyPayoutPreview(period.month, period.year);
+      return html(reply, renderPayoutCard(payout, !!saved, '', '', 'payout-breakdown'));
+    } catch (err) {
+      return reply.code(503).type('text/plain').send('Не удалось рассчитать начисления: ' + (err as Error).message);
+    }
+  });
+
   app.get('/collections', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
-    const budgets = await listBudgets();
-    const withCharges = await Promise.all(budgets.map(async (budget) => ({
-      budget, charges: await getCharges(budget.id),
-    })));
+    const [budgets, savedPayouts] = await Promise.all([listBudgets(), listMonthlyPayouts()]);
+    const chargesByBudget = new Map<number, Charge[]>();
+    for (const charge of await getChargesForBudgets(budgets.map(b => b.id))) {
+      const charges = chargesByBudget.get(charge.budget_id) ?? [];
+      charges.push(charge);
+      chargesByBudget.set(charge.budget_id, charges);
+    }
+    const withCharges = budgets.map(budget => ({ budget, charges: chargesByBudget.get(budget.id) ?? [] }));
     const byMonth = new Map<string, typeof withCharges>();
     for (const item of withCharges) {
       const key = periodOf(item.budget.month, item.budget.year);
@@ -859,13 +915,9 @@ export async function buildServer(bot: Bot) {
       const canRemind = items.some((item) => item.budget.message_id != null &&
         item.charges.some((charge) => !charge.paid));
       const first = items[0]!.budget;
-      const savedPayout = await getMonthlyPayout(first.month,first.year);
-      let payout = savedPayout;
-      let payoutError = '';
-      if (!payout) {
-        try { payout = await calculateMonthlyPayoutPreview(first.month,first.year); }
-        catch (err) { payoutError = (err as Error).message; }
-      }
+      const savedPayout = savedPayouts.find(p => p.month === first.month && p.year === first.year) ?? null;
+      const payout = savedPayout;
+      const payoutError = '';
       const money = (value: number) => esc(new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value)) + ' ₽';
       const payoutSummary = payout
         ? `<div class="settlement-payout-heading"><span>К оплате за месяц</span><span class="settlement-estimate">${savedPayout ? 'Итог' : 'Предварительно'}</span></div>
@@ -874,8 +926,7 @@ export async function buildServer(bot: Bot) {
             <div class="settlement-metric"><span>Зал и шкафчик</span><strong aria-label="Начислено за зал: ${esc(payout.gym_amount)} ₽">${money(payout.gym_amount)}</strong></div>
           </div>
           <div class="settlement-updated">${savedPayout ? 'Зафиксировано' : 'Обновлено'} ${esc(fmtDateTime(payout.calculated_at))}</div>`
-        : `<div class="settlement-error" role="alert"><b>Не удалось рассчитать начисления</b><span>Обнови страницу, чтобы повторить попытку.</span>
-          <details><summary>Причина ошибки</summary><p>${esc(payoutError)}</p></details></div>`;
+        : '<p class="muted">Текущие начисления загрузятся при раскрытии блока.</p>' ;
       const status = published === 2
         ? '<span class="badge yes">опубликован</span>'
         : published > 0 ? '<span class="badge red">частично опубликован</span>'
@@ -885,7 +936,11 @@ export async function buildServer(bot: Bot) {
       const state = published===2 ? 'published' : published>0 ? 'partial' : 'draft';
       cards.push(`<section class="settlement-card settlement-card--${state}" aria-label="Расчеты за ${esc(monthLabel(first.month,first.year))}">
         <div class="settlement-header">
-          <div class="settlement-title"><h2><a href="/collections/${seg}">${esc(monthLabel(first.month,first.year))}</a></h2>${status}</div>
+          <div class="settlement-title"><h2><a href="/collections/${seg}">${esc(monthLabel(first.month,first.year))}</a></h2>${status}</div>${published === 0 ? `<div class="settlement-actions">
+            <a class="button ghost" href="/budgets?mode=edit&month=${first.month}&year=${first.year}">Редактировать</a>
+            <form class="inline" method="post" action="/collections/${seg}/delete" onsubmit="return confirm('Удалить черновик за ${esc(monthLabel(first.month,first.year))} для обеих команд со всеми начислениями и отметками оплат? Это действие нельзя отменить.')">
+              <input type="hidden" name="confirmation" value="${esc(monthLabel(first.month,first.year))}"><button class="danger">Удалить</button>
+            </form></div>` : ''}
         </div>
         <div class="settlement-body">
           <div class="settlement-collection">
@@ -898,17 +953,18 @@ export async function buildServer(bot: Bot) {
               <form class="inline" method="post" action="/collections/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
             </div>
             </div>
-            <div class="settlement-collection-footer"><a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a></div>
+            <div class="settlement-collection-footer">${published > 0 ? `<a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a>` : '<span class="muted">Оплаты доступны после публикации</span>'}</div>
           </div>
-          <div class="settlement-payouts"><div>${payoutSummary}</div>
-${payout ? `<details class="settlement-details"><summary>Расшифровка начислений <span aria-hidden="true">⌄</span></summary>${renderPayoutCard(payout,!!savedPayout,payoutError,`/collections?preview=${seg}#payouts-${seg}`,`payouts-${seg}`)}</details>` : ''}
-          </div>
+          <div class="settlement-payouts"><details class="settlement-details" ${payout ? '' : `data-payout-url="/collections/${seg}/payout"`}>
+            <summary>Расчёты с тренером и залом <span aria-hidden="true">⌄</span></summary>
+            <div data-payout-content>${payoutSummary}${payout ? renderPayoutCard(payout,true,payoutError,'',`payouts-${seg}`) : ''}</div>
+          </details></div>
         </div>
       </section>`);
     }
-    const body = `<h1>Расчеты</h1>
+    const body = `<div class="row" style="justify-content:space-between;align-items:center"><h1>Расчеты</h1><a class="button" href="/budgets/new">Собрать бюджет</a></div>
       <p class="muted settlement-intro">Сборы с игроков и начисления за каждый месяц. Начисления не означают, что перевод тренеру или за зал уже выполнен.</p>
-      ${cards.join('') || '<div class="card muted">Бюджетов пока нет. Сначала собери черновик в разделе «Расчёт бюджета».</div>'}`;
+      ${cards.join('') || '<div class="card muted">Бюджетов пока нет. Нажми «Собрать бюджет» и выбери свободный месяц.</div>'}${payoutLoaderScript}`;
     return html(reply, layout('Расчеты', body, { flash: msg }));
   });
 
@@ -946,21 +1002,11 @@ ${payout ? `<details class="settlement-details"><summary>Расшифровка 
     const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
-    const [monthBudgets, savedPayout, monthGames] = await Promise.all([
+    const [monthBudgets, monthGames] = await Promise.all([
       monthBudgetsOf(period.month, period.year),
-      getMonthlyPayout(period.month, period.year),
       listAllGamesForMonth(period.month, period.year),
     ]);
     if (monthBudgets.length === 0) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Бюджет не найден');
-    let payout: MonthlyPayout | null = savedPayout;
-    let payoutError = '';
-    if (!payout && (view === 'collection' || (req.query as Record<string, string>).preview === 'payout')) {
-      try {
-        payout = await calculateMonthlyPayoutPreview(period.month, period.year);
-      } catch (err) {
-        payoutError = (err as Error).message;
-      }
-    }
     const combined: (Charge & { team: Team })[] = [];
     for (const b of monthBudgets) {
       for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team });
@@ -1036,7 +1082,7 @@ ${payout ? `<details class="settlement-details"><summary>Расшифровка 
       .reduce((m, c) => Math.max(m, new Date(c.paid_at as string | Date).getTime()), 0);
     const lastCheck = lastPaidMs ? fmtDateTime(new Date(lastPaidMs)) : '';
 
-    const payoutCard = renderPayoutCard(payout,!!savedPayout,payoutError,`${view === 'collection' ? '/collections' : '/budgets'}/${seg}?preview=payout#payouts`);
+    const payoutCard = lazyPayout(seg);
 
     const displayedCharges = view === 'collection' && !showAllCharges
       ? combined.filter((c) => !c.paid)
@@ -1402,9 +1448,8 @@ ${payout ? `<details class="settlement-details"><summary>Расшифровка 
   app.get('/games', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
-    const def = defaultBudgetPeriod();
-    const month = Number(q.month) >= 1 && Number(q.month) <= 12 ? Number(q.month) : def.month;
-    const year = Number(q.year) >= 2024 ? Number(q.year) : def.year;
+    const month = Number(q.month);
+    const year = Number(q.year);
 
     const [games, redBudget, blackBudget] = await Promise.all([
       listAllGamesForMonth(month, year), getBudget('RED', month, year), getBudget('BLACK', month, year),

@@ -66,8 +66,16 @@ before(async () => {
     try { return await sql(text, params); } finally { release(); }
   });
   mock.method(pool, 'connect', async () => {
-    const release = await acquire();
-    return { query: sql, release };
+    // Advisory-operation sessions don't hold the single PGlite transaction connection.
+    let release: (() => void) | undefined;
+    return {
+      query: async (text: string, params?: unknown[]) => {
+        if (text.includes('3802027')) return sql(text, params);
+        release ??= await acquire();
+        return sql(text, params);
+      },
+      release: () => release?.(),
+    };
   });
   mock.method(calendar_v3.Resource$Events.prototype, 'list', async (args: { calendarId: string; timeMin: string }) => {
     const month = new Date(args.timeMin).getMonth() + 1;
@@ -367,10 +375,13 @@ test('админка: авторизация, валидация, создани
     const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
     assert.equal(budgetPage.statusCode, 200);
     assert.match(budgetPage.body, /Расчёты с тренером и залом/);
-    assert.match(budgetPage.body, /Начислено тренеру — 5000₽/);
-    assert.match(budgetPage.body, /Начислено за зал — 3000₽/);
-    assert.match(budgetPage.body, /Игра с Тестом/);
-    assert.match(budgetPage.body, /Аренда шкафчика/);
+    assert.match(budgetPage.body, /data-payout-url="\/collections\/10-2026\/payout"/);
+    const payoutPage = await app.inject({ method: 'GET', url: '/collections/10-2026/payout', cookies });
+    assert.equal(payoutPage.statusCode, 200);
+    assert.match(payoutPage.body, /Начислено тренеру — 5000₽/);
+    assert.match(payoutPage.body, /Начислено за зал — 3000₽/);
+    assert.match(payoutPage.body, /Игра с Тестом/);
+    assert.match(payoutPage.body, /Аренда шкафчика/);
     assert.match(budgetPage.body, /Разовые/);
     assert.match(budgetPage.body, /Меддопуск &lt;МЛБЛ&gt;: \+380₽/);
     const stop = await app.inject({ method: 'POST', url: '/extra-fees/1/status', cookies, payload: { active: 'no' } });

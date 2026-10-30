@@ -44,3 +44,23 @@ export async function budgetTransaction<T>(work: (client: pg.PoolClient) => Prom
     client.release();
   }
 }
+
+/** Serialize build, publish and removal without letting waiting requests exhaust the pool. */
+export async function withBudgetOperation<T>(work: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    const result = await client.query<{ locked: boolean }>('select pg_try_advisory_lock(3802027) as locked');
+    locked = result.rows[0]?.locked === true;
+    if (!locked) throw new Error('Уже выполняется операция с бюджетом. Дождись завершения и повтори действие.');
+    return await work();
+  } finally {
+    try {
+      if (locked) await client.query('select pg_advisory_unlock(3802027)');
+    } catch (err) {
+      client.release(err as Error);
+      throw err;
+    }
+    client.release();
+  }
+}

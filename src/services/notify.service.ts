@@ -1,3 +1,4 @@
+import { withBudgetOperation } from '../db/pool.js';
 import { importAutomaticGameStats, sourcePeriod } from './automaticGameStats.service.js';
 import { gameFeeForPlayer } from '../domain/gamefee.js';
 import { InlineKeyboard, type Api } from 'grammy';
@@ -83,6 +84,10 @@ export async function renderBudgetFromDb(
 
 /** Отправить сообщение сбора в чат команды и запомнить message_id. */
 export async function sendBudgetToChat(api: Api, budgetId: number): Promise<void> {
+  return withBudgetOperation(() => publishBudgetToChat(api, budgetId));
+}
+
+async function publishBudgetToChat(api: Api, budgetId: number): Promise<void> {
   let budget = await getBudgetById(budgetId);
   if (!budget) throw new Error(`Бюджет #${budgetId} не найден`);
   if (budget.message_id != null) throw new Error('Сбор уже опубликован в чате команды');

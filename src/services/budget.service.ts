@@ -1,3 +1,4 @@
+import { withBudgetOperation } from '../db/pool.js';
 import { importAutomaticGameStats, GameStatsNotReadyError } from './automaticGameStats.service.js';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
@@ -53,7 +54,18 @@ export async function buildAndSaveBudgets(
   year: number,
   teamsToProcess: Team[] = TEAMS,
   api?: Api,
+  mode?: 'create' | 'edit',
 ): Promise<BuiltBudget[]> {
+  return withBudgetOperation(async () => {
+    const existing = await Promise.all(TEAMS.map(team => getBudget(team, month, year)));
+    if (existing.some(b => b?.message_id != null)) throw new Error('Опубликованный бюджет нельзя редактировать');
+    if (mode === 'create' && existing.some(Boolean)) throw new Error('За этот месяц уже есть бюджет. Используй кнопку «Редактировать».');
+    if (mode === 'edit' && !existing.some(Boolean)) throw new Error('Черновик не найден');
+    return buildBudgets(month, year, teamsToProcess, api);
+  });
+}
+
+async function buildBudgets(month: number, year: number, teamsToProcess: Team[], api?: Api): Promise<BuiltBudget[]> {
   const { from, to } = monthRange(month, year);
   const sourceMonth = month === 1 ? 12 : month - 1;
   const sourceYear = month === 1 ? year - 1 : year;

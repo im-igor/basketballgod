@@ -1,11 +1,13 @@
 import '../test/env.js';
 import assert from 'node:assert/strict';
+import { parse } from 'node-html-parser';
+import { runInNewContext } from 'node:vm';
 import { mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
 import type { Bot } from 'grammy';
 
-test('кнопки корректировки и комментарий меняют оба черновика до подтверждения', async () => {
+test('единая кнопка применяет комментарий, пересчитывает оба черновика и доступна только после изменений', async () => {
   const [{ pool }, { migrate }, { buildServer }, { renderBudgetFromDb }] = await Promise.all([
     import('../db/pool.js'), import('../db/migrator.js'), import('./server.js'),
     import('../services/notify.service.js'),
@@ -69,6 +71,10 @@ test('кнопки корректировки и комментарий меня
     assert.doesNotMatch(page.body, /Тарифы исходного месяца/);
     assert.match(page.body, /Зал/);
     assert.match(page.body, /Подтвердить корректировки/);
+    assert.doesNotMatch(page.body, /Сохранить комментарий|action="[^"]+correction-note"/);
+    const initialForm = parse(page.body).querySelector('form[action$="correction-review"]')!;
+    assert.ok(initialForm.querySelector('textarea[name="note"]'));
+    assert.equal(initialForm.querySelector('button')!.hasAttribute('disabled'), false);
     assert.match(page.body, /disabled>Опубликовать готовые сборы/);
     const detail = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
     assert.doesNotMatch(detail.body, /<h2>Корректировки<\/h2>/);
@@ -78,7 +84,14 @@ test('кнопки корректировки и комментарий меня
     assert.equal(payoutPreview.statusCode, 200);
     assert.match(payoutPreview.body, /Предварительно по текущему календарю/);
     assert.match(payoutPreview.body, /Начислено за зал — 3000₽/);
-    await post('/budgets/11-2026/correction-note', { note: 'Зачёт <октября>' });
+    const autoConfirmed = await post('/budgets/11-2026/correction-review', { note: '-1 сессия тренера, -1 аренда зала - за отмену 22.10.2026' });
+    assert.match(decodeURIComponent(autoConfirmed.headers.location!), /оба черновика пересчитаны/);
+    for (const id of budgetIds) {
+      const saved = (await db.query<{details:{correction:typeof correction}}>('select details from budgets where id=$1',[id])).rows[0]!;
+      assert.equal(saved.details.correction.reviewed, true);
+      assert.equal(saved.details.correction.note_edited, false);
+    }
+    await post('/budgets/11-2026/correction-review', { note: 'Зачёт <октября>' });
     for (const id of budgetIds) {
       assert.match((await renderBudgetFromDb(id))!.text, /Зачёт &lt;октября&gt;/);
     }
@@ -98,16 +111,57 @@ test('кнопки корректировки и комментарий меня
       assert.equal(budget.details.correction.note, 'Зачёт <октября>');
       assert.equal(budget.details.correction.reviewed, false);
     }
-    await post('/budgets/11-2026/correction-review');
+    const invalid = await post('/budgets/11-2026/correction-review', { note: 'x'.repeat(501) });
+    assert.match(decodeURIComponent(invalid.headers.location!), /не длиннее 500 символов/);
+    for (const id of budgetIds) {
+      const saved = (await db.query<{details:{correction:typeof correction}}>('select details from budgets where id=$1',[id])).rows[0]!;
+      assert.equal(saved.details.correction.reviewed, false);
+      assert.equal(saved.details.correction.note, 'Зачёт <октября>');
+    }
+    const unconfirmedPage = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
+    assert.equal(parse(unconfirmedPage.body).querySelector('[data-correction-confirm]')!.hasAttribute('disabled'), false);
+    await post('/budgets/11-2026/correction-review', { note: '  Уточнённый зачёт <октября>  ' });
     for (const id of budgetIds) {
       const details = (await db.query<{ details: { correction: typeof correction } }>(
         'select details from budgets where id=$1', [id],
       )).rows[0]!.details;
       assert.equal(details.correction.reviewed, true);
+      assert.equal(details.correction.note, 'Уточнённый зачёт <октября>');
+      const savedCharges = (await db.query<{amount:number}>('select amount from charges where budget_id=$1',[id])).rows;
+      assert.equal(Number(savedCharges[0]!.amount),72500);
     }
     const preview = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
-    assert.match(preview.body, /Зачёт &lt;октября&gt;/);
+    assert.match(preview.body, /Уточнённый зачёт &lt;октября&gt;/);
     assert.match(preview.body, /Подтверждено/);
+    const confirmedForm = parse(preview.body).querySelector('form[action$="correction-review"]')!;
+    assert.equal(confirmedForm.querySelector('button')!.hasAttribute('disabled'), true);
+    // Editing enables confirmation and blocks publication; reverting restores both states.
+    const handler = confirmedForm.querySelector('textarea')!.getAttribute('oninput')!;
+    const confirmButton = { disabled: true };
+    const status = { textContent: '' };
+    const publishButton = { disabled: false, dataset: { ready: 'true' } };
+    const field = { value: 'Новый комментарий', defaultValue: 'Уточнённый зачёт <октября>',
+      form: { dataset: { reviewed: 'true' }, querySelector: (selector:string) => selector === '[data-correction-confirm]' ? confirmButton : status } };
+    const input = () => runInNewContext('(function(){' + handler + '}).call(field)', {
+      field, document: { querySelectorAll: () => [publishButton] },
+    });
+    input();
+    assert.equal(confirmButton.disabled, false);
+    assert.equal(publishButton.disabled, true);
+    field.value = field.defaultValue;
+    input();
+    assert.equal(confirmButton.disabled, true);
+    assert.equal(publishButton.disabled, false);
+    field.form.dataset.reviewed = 'false';
+    publishButton.dataset.ready = 'false';
+    input();
+    assert.equal(confirmButton.disabled, false);
+    assert.equal(publishButton.disabled, true);
+    // Published months remain immutable through the combined action.
+    await db.query('update budgets set message_id=100 where id=$1',[budgetIds[0]]);
+    const locked = await post('/budgets/11-2026/correction-review', { note: 'Не применять' });
+    assert.match(decodeURIComponent(locked.headers.location!), /Опубликованный бюджет нельзя изменить/);
+    for (const id of budgetIds) assert.match((await renderBudgetFromDb(id))!.text, /Уточнённый зачёт &lt;октября&gt;/);
   } finally {
     await app?.close();
     mock.restoreAll();

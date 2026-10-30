@@ -155,6 +155,7 @@ label { display:block; font-size:12px; font-weight:600; color:var(--muted); marg
 button,a.button { background:var(--accent); color:#fff; border:1px solid var(--accent); border-radius:9px; min-height:40px; padding:8px 14px; cursor:pointer; font-weight:650; transition:background .15s,border-color .15s,transform .08s; }
 button:hover,a.button:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
 button:disabled { opacity:.45; cursor:not-allowed; }
+button[data-correction-confirm]:disabled { background:var(--track); border-color:var(--field-line); color:var(--muted); opacity:1; }
 button:active { transform:translateY(1px); }
 button.loading { opacity:.8; cursor:wait; }
 button.loading::before { content:""; display:inline-block; width:13px; height:13px; margin-right:8px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; vertical-align:-2px; animation:button-spin .7s linear infinite; }

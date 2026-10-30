@@ -719,13 +719,11 @@ export async function buildServer(bot: Bot) {
           ? adjustmentRow('Тренер', correction.coach_delta.RED + correction.coach_delta.BLACK, 'coach')
           : adjustmentRow('Тренер RED', correction.coach_delta.RED, 'coach', 'RED') + adjustmentRow('Тренер BLACK', correction.coach_delta.BLACK, 'coach', 'BLACK')}
         ${adjustmentRow('Зал', correction.gym_delta, 'gym')}
-        <form method="post" action="/budgets/${seg}/correction-note">
+        <form method="post" action="/budgets/${seg}/correction-review" data-reviewed="${correction.reviewed}" data-loading-label="Применяю корректировки…">
           <label for="correction-note">Комментарий в текстах бюджетов</label>
-          <textarea id="correction-note" name="note" maxlength="500" rows="3" ${anySent ? 'disabled' : ''}>${esc(correction.note_edited && !isLegacyAutoCorrectionNote(correction) ? correction.note : correctionNote(correction))}</textarea>
-          <button class="ghost" style="margin-top:8px" ${anySent ? 'disabled' : ''}>Сохранить комментарий</button>
-        </form>
-        <form method="post" action="/budgets/${seg}/correction-review" style="margin-top:12px">
-          <button ${anySent || correction.reviewed ? 'disabled' : ''}>${correction.reviewed ? 'Подтверждено' : 'Подтвердить корректировки'}</button>
+          <textarea id="correction-note" name="note" maxlength="500" rows="3" ${anySent ? 'disabled' : ''} oninput="var changed=this.value.trim()!==this.defaultValue.trim();var reviewed=this.form.dataset.reviewed==='true';this.form.querySelector('[data-correction-confirm]').disabled=reviewed&amp;&amp;!changed;this.form.querySelector('[data-correction-status]').textContent=changed?'Комментарий изменён — подтверди корректировки':reviewed?'Корректировки подтверждены':'Проверь и подтверди корректировки';document.querySelectorAll('[data-budget-publish]').forEach(function(button){button.disabled=changed||button.dataset.ready!=='true'})">${esc(correction.note_edited && !isLegacyAutoCorrectionNote(correction) ? correction.note : correctionNote(correction))}</textarea>
+          <p class="muted" data-correction-status role="status">${correction.reviewed ? 'Подтверждено. Изменение комментария или сумм потребует повторного подтверждения.' : 'Кнопка сохранит комментарий, пересчитает оба черновика и подтвердит корректировки.'}</p>
+          <button data-correction-confirm style="margin-top:8px" ${anySent || correction.reviewed ? 'disabled' : ''}>Подтвердить корректировки</button>
         </form>
       </aside>` : '';
       const previews = await Promise.all(built.map(async (b, index) => {
@@ -745,7 +743,7 @@ export async function buildServer(bot: Bot) {
           <h2 style="margin:0">Черновики за ${esc(monthLabel(month, year))}</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <form class="inline" method="post" action="/budgets/draft">${hidden}<button class="ghost">Отправить черновики в личку</button></form>
-            ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
+            ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сборы в чаты команд. Продолжить?')">${hidden}<button data-budget-publish data-ready="${commonDraftReady}" ${commonDraftReady ? '' : 'disabled'}>Опубликовать готовые сборы</button></form>` : ''}
           </div>
         </div>
         ${statsWarnings.length ? `<div class="card"><b>Базовая часть рассчитана. Взносы за новые игры пока не добавлены.</b>
@@ -1256,8 +1254,17 @@ export async function buildServer(bot: Bot) {
     try {
       const current = await correctionForPeriod(period.month, period.year);
       if (!current) return redirect(reply, back, 'Сначала собери черновик');
-      await updateBudgetCorrection(period.month, period.year, { ...current, reviewed: true });
-      return redirect(reply, back, 'Корректировки подтверждены');
+      const submittedNote = (req.body as { note?: unknown })?.note;
+      if (submittedNote !== undefined && (typeof submittedNote !== 'string' || submittedNote.trim().length > 500)) {
+        return redirect(reply, back, 'Комментарий должен быть текстом не длиннее 500 символов');
+      }
+      const autoNote = correctionNote(current);
+      const wasEdited = current.note_edited && !isLegacyAutoCorrectionNote(current);
+      const note = typeof submittedNote === 'string' ? submittedNote.trim() : wasEdited ? current.note : autoNote;
+      await updateBudgetCorrection(period.month, period.year, {
+        ...current, note, note_edited: !!wasEdited || note !== autoNote, reviewed: true,
+      });
+      return redirect(reply, back, 'Комментарий применён, оба черновика пересчитаны, корректировки подтверждены');
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }

@@ -860,6 +860,18 @@ export async function buildServer(bot: Bot) {
     return found.filter((b): b is NonNullable<typeof b> => !!b);
   };
 
+  const renderPayoutSummary = (payout: MonthlyPayout, saved: boolean): string => {
+    const money = (value: number) => esc(new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)) + ' ₽';
+    return `<div><div class="settlement-payout-heading"><span>К оплате за месяц</span><span class="settlement-estimate">${saved ? 'Итог' : 'Предварительно'}</span></div>
+      <div class="settlement-payout-values">
+        <div class="settlement-metric"><span>Тренер</span><strong aria-label="Начислено тренеру: ${esc(payout.coach_amount)} ₽">${money(payout.coach_amount)}</strong></div>
+        <div class="settlement-metric"><span>Зал и шкафчик</span><strong aria-label="Начислено за зал: ${esc(payout.gym_amount)} ₽">${money(payout.gym_amount)}</strong></div>
+      </div>
+      <div class="settlement-updated">${saved ? 'Зафиксировано' : 'Обновлено'} ${esc(fmtDateTime(payout.calculated_at))}</div></div>`;
+  };
+  const renderPayoutPanel = (payout: MonthlyPayout, saved: boolean, seg: string): string =>
+    `${renderPayoutSummary(payout, saved)}<details class="settlement-details"><summary>Расшифровка начислений <span aria-hidden="true">⌄</span></summary><div data-payout-content>${renderPayoutCard(payout, saved, '', '', `payouts-${seg}`)}</div></details>`;
+
   const payoutLoaderScript = `<script>${PAYOUT_LOADER_SCRIPT}</script>`;
   const lazyPayout = (seg: string) => `<details class="card" id="payouts" data-payout-url="/collections/${seg}/payout"><summary>Расчёты с тренером и залом</summary><div data-payout-content></div></details>${payoutLoaderScript}`;
 
@@ -883,7 +895,9 @@ export async function buildServer(bot: Bot) {
     try {
       const saved = await getMonthlyPayout(period.month, period.year);
       const payout = saved ?? await calculateMonthlyPayoutPreview(period.month, period.year);
-      return html(reply, renderPayoutCard(payout, !!saved, '', '', 'payout-breakdown'));
+      return html(reply, (req.query as { card?: string }).card === '1'
+        ? renderPayoutPanel(payout, !!saved, periodOf(period.month, period.year))
+        : renderPayoutCard(payout, !!saved, '', '', 'payout-breakdown'));
     } catch (err) {
       return reply.code(503).type('text/plain').send('Не удалось рассчитать начисления: ' + (err as Error).message);
     }
@@ -917,16 +931,9 @@ export async function buildServer(bot: Bot) {
       const first = items[0]!.budget;
       const savedPayout = savedPayouts.find(p => p.month === first.month && p.year === first.year) ?? null;
       const payout = savedPayout;
-      const payoutError = '';
       const money = (value: number) => esc(new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value)) + ' ₽';
-      const payoutSummary = payout
-        ? `<div class="settlement-payout-heading"><span>К оплате за месяц</span><span class="settlement-estimate">${savedPayout ? 'Итог' : 'Предварительно'}</span></div>
-          <div class="settlement-payout-values">
-            <div class="settlement-metric"><span>Тренер</span><strong aria-label="Начислено тренеру: ${esc(payout.coach_amount)} ₽">${money(payout.coach_amount)}</strong></div>
-            <div class="settlement-metric"><span>Зал и шкафчик</span><strong aria-label="Начислено за зал: ${esc(payout.gym_amount)} ₽">${money(payout.gym_amount)}</strong></div>
-          </div>
-          <div class="settlement-updated">${savedPayout ? 'Зафиксировано' : 'Обновлено'} ${esc(fmtDateTime(payout.calculated_at))}</div>`
-        : '<p class="muted">Текущие начисления загрузятся при раскрытии блока.</p>' ;
+      const payoutPanel = payout ? renderPayoutPanel(payout, true, seg)
+        : `<div class="settlement-payout-load" data-payout-auto data-payout-url="/collections/${seg}/payout?card=1"><p class="muted" role="status">Загружаю начисления…</p></div>`;
       const status = published === 2
         ? '<span class="badge yes">опубликован</span>'
         : published > 0 ? '<span class="badge red">частично опубликован</span>'
@@ -955,10 +962,7 @@ export async function buildServer(bot: Bot) {
             </div>
             <div class="settlement-collection-footer">${published > 0 ? `<a class="settlement-open" href="/collections/${seg}">Оплаты игроков →</a>` : '<span class="muted">Оплаты доступны после публикации</span>'}</div>
           </div>
-          <div class="settlement-payouts"><details class="settlement-details" ${payout ? '' : `data-payout-url="/collections/${seg}/payout"`}>
-            <summary>Расчёты с тренером и залом <span aria-hidden="true">⌄</span></summary>
-            <div data-payout-content>${payoutSummary}${payout ? renderPayoutCard(payout,true,payoutError,'',`payouts-${seg}`) : ''}</div>
-          </details></div>
+          <div class="settlement-payouts">${payoutPanel}</div>
         </div>
       </section>`);
     }

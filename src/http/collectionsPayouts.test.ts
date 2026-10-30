@@ -1,5 +1,6 @@
 import '../test/env.js';
 import assert from 'node:assert/strict';
+import { parse } from 'node-html-parser';
 import { mock,test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
@@ -10,7 +11,7 @@ import { buildServer } from './server.js';
 import { monthLabel } from '../domain/dates.js';
 import { sendBudgetToChat } from '../services/notify.service.js';
 
-test('Расчеты не ждут календарь: начисления загружаются при раскрытии, создание и редактирование защищены', async () => {
+test('Расчеты: суммы видны, детали свернуты, календарь не блокирует список и черновики защищены', async () => {
   const db=new PGlite();
   const sql=async(text:string,params?:unknown[])=>params?db.query(text,params):(await db.exec(text)).at(-1)!;
   let queryCalls=0;
@@ -62,14 +63,22 @@ test('Расчеты не ждут календарь: начисления за
     assert.match(page.body,/Начислено тренеру: 12345 ₽/);
     assert.match(page.body,/Начислено за зал: 67890 ₽/);
     assert.doesNotMatch(page.body,/Начислено тренеру: 5000 ₽/);
-    assert.match(page.body,/data-payout-url="\/collections\/11-2026\/payout"/);
-    const preview=await app.inject({method:'GET',url:'/collections/11-2026/payout',cookies});
+    assert.match(page.body,/data-payout-auto data-payout-url="\/collections\/11-2026\/payout\?card=1"/);
+    const preview=await app.inject({method:'GET',url:'/collections/11-2026/payout?card=1',cookies});
     assert.equal(preview.statusCode,200);
     assert.equal(calendarCalls,2);
     assert.match(preview.body,/Начислено тренеру — 5000₽/);
     assert.match(preview.body,/Начислено за зал — 28500₽/);
     assert.match(preview.body,/Предварительно по текущему календарю/);
     assert.equal(preview.headers['cache-control'],'no-store');
+    const panel = parse(preview.body);
+    assert.ok(panel.querySelector('.settlement-payout-values'));
+    assert.equal(panel.querySelector('.settlement-details')!.hasAttribute('open'), false);
+    assert.equal(panel.querySelector('.settlement-details .settlement-payout-values'), null);
+    assert.match(panel.querySelector('.settlement-details summary')!.textContent, /Расшифровка начислений/);
+    const savedPanel = parse(page.body).querySelector('.settlement-card--partial .settlement-payouts')!;
+    assert.ok(savedPanel.querySelector('.settlement-payout-values'));
+    assert.equal(savedPanel.querySelector('.settlement-details .settlement-payout-values'), null);
     assert.match(page.body,/Итоговый расчёт/);
     assert.match(page.body,/Октябрьская тренировка/);
     assert.match(page.body,/Октябрьский зал/);

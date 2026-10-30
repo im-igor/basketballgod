@@ -1,11 +1,13 @@
-/** Load current calendar amounts only when their section is expanded. */
+/** Show card totals in the background; keep detailed pages lazy. */
 export const PAYOUT_LOADER_SCRIPT = `
-    document.querySelectorAll('details[data-payout-url]').forEach(function(details) {
+    var queue = Promise.resolve();
+    document.querySelectorAll('[data-payout-auto], details[data-payout-url]').forEach(function(details) {
+      var automatic = details.dataset.payoutAuto !== undefined;
       var loaded = false, loading = false;
       async function load() {
-        if (loaded || loading || !details.open) return;
+        if (loaded || loading || (!automatic && !details.open)) return;
         loading = true;
-        var content = details.querySelector('[data-payout-content]');
+        var content = automatic ? details : details.querySelector('[data-payout-content]');
         content.innerHTML = '<p role="status">Загружаю начисления…</p>';
         try {
           var response = await fetch(details.dataset.payoutUrl, { headers: { Accept: 'text/html' } });
@@ -20,6 +22,7 @@ export const PAYOUT_LOADER_SCRIPT = `
           content.appendChild(retry);
         } finally { loading = false; }
       }
-      details.addEventListener('toggle', load);
+      if (automatic) queue = queue.then(load);
+      else details.addEventListener('toggle', load);
     });
 `;

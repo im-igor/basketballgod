@@ -3,18 +3,18 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { PAYOUT_LOADER_SCRIPT } from './payoutLoader.js';
 
-function setup(fetch: (url: string) => Promise<unknown>) {
+function setup(fetch: (url: string) => Promise<unknown>, automatic = false) {
   let toggle!: () => Promise<void>;
   let retry!: () => Promise<void>;
   const content = { innerHTML: '', textContent: '', appendChild() {} };
-  const details = { open: false, dataset: { payoutUrl: '/collections/11-2026/payout' },
+  const details = { ...content, open: false, dataset: { payoutUrl: '/collections/11-2026/payout', ...(automatic ? { payoutAuto: '' } : {}) },
     querySelector: () => content,
     addEventListener: (_event: string, listener: typeof toggle) => { toggle = listener; } };
   runInNewContext(PAYOUT_LOADER_SCRIPT, { fetch, document: {
     querySelectorAll: () => [details],
     createElement: () => ({ type: '', textContent: '', addEventListener: (_event: string, listener: typeof retry) => { retry = listener; } }),
   } });
-  return { details, content, toggle: () => toggle(), retry: () => retry() };
+  return { details, content: automatic ? details : content, toggle: () => toggle(), retry: () => retry() };
 }
 
 test('начисления загружаются только при раскрытии и один раз при повторных нажатиях', async () => {
@@ -49,4 +49,18 @@ test('ошибка календаря показывает причину тек
   await s.retry();
   assert.equal(s.content.innerHTML, '<p>Готово</p>');
   assert.equal(requests, 2);
+});
+
+
+test('суммы на карточке загружаются автоматически без раскрытия деталей', async () => {
+  let requests = 0;
+  const s = setup(async () => {
+    requests++;
+    return { ok: true, redirected: false, text: async () => '<div>Тренер 5000 ₽</div><details><summary>Расшифровка</summary></details>' };
+  }, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 1);
+  assert.equal(s.details.open, false);
+  assert.match(s.content.innerHTML, /Тренер 5000 ₽/);
+  assert.doesNotMatch(s.content.innerHTML, /<details open/);
 });

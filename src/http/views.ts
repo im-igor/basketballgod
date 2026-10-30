@@ -43,7 +43,8 @@ html[data-theme="dark"] .settlement-card { --settlement-border:#4b5361; --settle
 .settlement-metric>span { color:var(--muted); font-size:12px; }
 .settlement-metric strong { font-size:24px; font-variant-numeric:tabular-nums; letter-spacing:-.035em; overflow-wrap:anywhere; }
 .settlement-updated { margin-top:12px; font-size:11px; color:var(--muted); }
-.settlement-details { margin:0; }
+.settlement-payout-load { display:contents; }
+.settlement-details { margin-top:16px; padding-top:12px; border-top:1px solid var(--settlement-border); }
 .settlement-details>summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; padding:0; font-size:14px; font-weight:650; color:var(--link); list-style:none; }
 .settlement-details>summary::-webkit-details-marker { display:none; }
 .settlement-details[open]>summary>span { transform:rotate(180deg); }

@@ -111,7 +111,7 @@ test('октябрьская отмена уменьшает начислени�
   assert.equal(Number(novemberRed.total_per_player), 28625);
   assert.equal(Number(novemberBlack.total_per_player), 28625);
   assert.match((await renderBudgetFromDb(novemberBlack.id))!.text,
-    /-1 сессия тренера, -1 аренда зала - за 15\.10\.2026/);
+    /-1 сессия тренера, -1 аренда зала - за отмену 15\.10\.2026/);
   const telegram = { sendMessage: async () => ({ message_id: 999 }) } as never;
   await assert.rejects(sendBudgetToChat(telegram, novemberRed.id), /Подтверди корректировки/);
   await updateBudgetCorrection(11, 2026, { ...novemberRed.details!.correction!, reviewed: true });

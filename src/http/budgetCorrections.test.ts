@@ -62,7 +62,7 @@ test('кнопки корректировки и комментарий меня
     const page = await app.inject({ method: 'GET', url: '/budgets?month=11&year=2026', headers: { cookie } });
     assert.match(page.body, /Корректировки/);
     assert.match(page.body, /budget-preview-grid/);
-    assert.match(page.body, /-1 сессия тренера, -1 аренда зала - за 22\.10\.2026/);
+    assert.match(page.body, /-1 сессия тренера, -1 аренда зала - за отмену 22\.10\.2026/);
     assert.match(page.body, /Тренер: <b>-1<\/b>/);
     assert.doesNotMatch(page.body, /Тренер RED:/);
     assert.doesNotMatch(page.body, />открыть<\/a>/);
@@ -73,8 +73,9 @@ test('кнопки корректировки и комментарий меня
     const detail = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
     assert.doesNotMatch(detail.body, /<h2>Корректировки<\/h2>/);
     const payoutPreview = await app.inject({
-      method: 'GET', url: '/budgets/11-2026?preview=payout', headers: { cookie },
+      method: 'GET', url: '/collections/11-2026/payout', headers: { cookie },
     });
+    assert.equal(payoutPreview.statusCode, 200);
     assert.match(payoutPreview.body, /Предварительно по текущему календарю/);
     assert.match(payoutPreview.body, /Начислено за зал — 3000₽/);
     await post('/budgets/11-2026/correction-note', { note: 'Зачёт <октября>' });

@@ -1419,7 +1419,7 @@ export async function buildServer(bot: Bot) {
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
     const back = budget ? `/collections/${periodOf(budget.month, budget.year)}${value ? '?all=1' : ''}` : '/collections';
-    return reply.redirect(`${back}?msg=${encodeURIComponent('Оплата обновлена')}${budget ? `#charge-${id}` : ''}`);
+    return redirect(reply, `${back}${budget ? `#charge-${id}` : ''}`, 'Оплата обновлена');
   });
 
   // ── Игры (учёт взносов; кросс-командно по участникам) ─────

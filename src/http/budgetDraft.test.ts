@@ -1,5 +1,6 @@
 import '../test/env.js';
 import assert from 'node:assert/strict';
+import { parse } from 'node-html-parser';
 import { mock, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import type { Bot } from 'grammy';
@@ -101,7 +102,8 @@ test('админка показывает тот же черновик и вып
 
     const collections = await app.inject({ method: 'GET', url: '/collections', headers: { cookie } });
     assert.equal(collections.statusCode, 200);
-    assert.match(collections.body, /2<\/b> участников · <b>1<\/b> сдали · <b>1<\/b> не сдали/);
+    const counts = (html: string) => parse(html).querySelector('.settlement-counts')!.querySelectorAll('span').map(span => span.textContent.trim());
+    assert.deepEqual(counts(collections.body), ['1 сдали', '1 не сдали', '2 участников']);
     assert.match(collections.body, /href="\/collections\/11-2026"/);
     assert.match(collections.body, /action="\/collections\/11-2026\/debtors"/);
     const collection = await app.inject({ method: 'GET', url: '/collections/11-2026', headers: { cookie } });
@@ -113,10 +115,21 @@ test('админка показывает тот же черновик и вып
       'select id from charges where budget_id=$1', [blackBudget],
     )).rows[0]!.id;
     const paidResponse = await post(`/charges/${blackChargeId}/pay`, { value: 'yes' });
-    assert.match(String(paidResponse.headers.location), new RegExp(`/collections/11-2026\\?msg=.*#charge-${blackChargeId}$`));
-    assert.match((await app.inject({ method: 'GET', url: '/collections', headers: { cookie } })).body,
-      /2<\/b> участников · <b>2<\/b> сдали · <b>0<\/b> не сдали/);
-    await post(`/charges/${blackChargeId}/pay`, { value: 'no' });
+    const paidLocation = new URL(String(paidResponse.headers.location), 'http://localhost');
+    assert.equal(paidLocation.pathname, '/collections/11-2026');
+    assert.equal(paidLocation.searchParams.get('all'), '1');
+    assert.equal(paidLocation.searchParams.get('msg'), 'Оплата обновлена');
+    assert.equal(paidLocation.hash, `#charge-${blackChargeId}`);
+    const afterPayment = await app.inject({ method: 'GET', url: paidLocation.pathname + paidLocation.search, headers: { cookie } });
+    assert.match(afterPayment.body, /Оплата обновлена/);
+    assert.match(afterPayment.body, /Показаны все участники/);
+    assert.deepEqual(counts((await app.inject({ method: 'GET', url: '/collections', headers: { cookie } })).body),
+      ['2 сдали', '0 не сдали', '2 участников']);
+    const unpaidResponse = await post(`/charges/${blackChargeId}/pay`, { value: 'no' });
+    const unpaidLocation = new URL(String(unpaidResponse.headers.location), 'http://localhost');
+    assert.equal(unpaidLocation.searchParams.has('all'), false);
+    assert.equal(unpaidLocation.searchParams.get('msg'), 'Оплата обновлена');
+    assert.equal(unpaidLocation.hash, `#charge-${blackChargeId}`);
 
     const coachUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(coachUpdate.headers.location)), /Поправка/);

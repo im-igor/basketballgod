@@ -44,7 +44,7 @@ test('отмена октябрьской тренировки предлага�
   assert.equal(suggested.gym_rate, 25500);
   assert.equal(suggested.reviewed, false);
   assert.deepEqual(suggested.source_snapshot, snapshotEvents(current, tariffs).events);
-  assert.equal(suggested.note, '-1 сессия тренера, -1 аренда зала - за 22.10.2026');
+  assert.equal(suggested.note, '-1 сессия тренера, -1 аренда зала - за отмену 22.10.2026');
 
   const payout = payoutCorrections(red, black, current, tariffs);
   assert.deepEqual(payout.map((c) => c.amount), [-5000, -25500]);
@@ -63,10 +63,10 @@ test('перенос тренировки показывает старую и �
 test('автокомментарий складывает тренировки обеих команд без названий команд', () => {
   assert.equal(correctionNote({ source_month: 10, source_year: 2026,
     coach_delta: { RED: -1, BLACK: -1 }, gym_delta: -1 }),
-  '-2 сессии тренера, -1 аренда зала - за Октябрь 2026');
+  '-2 сессии тренера, -1 аренда зала - за отмену в октябре 2026');
   assert.equal(correctionNote({ source_month: 10, source_year: 2026,
     coach_delta: { RED: 1, BLACK: -1 }, gym_delta: -1 }),
-  '-1 аренда зала - за Октябрь 2026');
+  '-1 аренда зала - за отмену в октябре 2026');
 });
 
 test('автокомментарий показывает даты отменённых тренировок по возрастанию', () => {
@@ -77,22 +77,22 @@ test('автокомментарий показывает даты отменё�
   const red = budget('RED', snapshot);
   const black = budget('BLACK', snapshot);
   assert.equal(proposeCorrection(10, 2026, red, black, [thursday], tariffs).note,
-    '-1 сессия тренера - за 20.10.2026');
+    '-1 сессия тренера - за отмену 20.10.2026');
   assert.equal(proposeCorrection(10, 2026, red, black, [tuesday], tariffs).note,
-    '-1 сессия тренера, -1 аренда зала - за 22.10.2026');
+    '-1 сессия тренера, -1 аренда зала - за отмену 22.10.2026');
   const both = proposeCorrection(10, 2026, red, black, [], tariffs);
   assert.deepEqual(both.source_removed_dates, ['2026-10-20', '2026-10-22']);
-  assert.equal(both.note, '-2 сессии тренера, -1 аренда зала - за 20.10.2026, 22.10.2026');
+  assert.equal(both.note, '-2 сессии тренера, -1 аренда зала - за отмену 20.10.2026, 22.10.2026');
 });
 
 test('старый черновик получает даты из сохранённого списка изменений', () => {
   assert.equal(correctionNote({ source_month: 10, source_year: 2026,
     coach_delta: { RED: -1, BLACK: 0 }, gym_delta: -1,
     source_changes: ['2026-10-22 RED: отменено или изменено'],
-  }), '-1 сессия тренера, -1 аренда зала - за 22.10.2026');
+  }), '-1 сессия тренера, -1 аренда зала - за отмену 22.10.2026');
   assert.equal(correctionNote({ source_month: 10, source_year: 2026,
     coach_delta: { RED: 0, BLACK: -5 }, gym_delta: 0,
-  }), '-5 сессий тренера - за Октябрь 2026');
+  }), '-5 сессий тренера - за отмену в октябре 2026');
 });
 
 test('старый опубликованный бюджет без снимка сравнивается по сохранённым количествам', () => {

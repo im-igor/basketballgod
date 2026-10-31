@@ -124,6 +124,14 @@ main.wide { max-width:1600px; }
 h1 { margin:0 0 20px; font-size:26px; line-height:1.2; letter-spacing:-.025em; }
 h2 { margin:0 0 14px; font-size:16px; line-height:1.35; letter-spacing:-.01em; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; margin:14px 0; box-shadow:var(--shadow); }
+.collection-filter { display:flex; align-items:center; justify-content:space-between; gap:8px 16px; flex-wrap:wrap; margin:10px 0; font-size:13px; }
+.paid-switch { position:relative; display:inline-flex; align-items:center; gap:8px; margin:0; cursor:pointer; }
+.paid-switch input { position:absolute; width:38px; height:22px; min-height:0; padding:0; opacity:0; }
+.paid-switch-track { width:38px; height:22px; border-radius:11px; background:var(--track); border:1px solid var(--field-line); transition:background .15s; }
+.paid-switch-track:after { content:''; display:block; width:16px; height:16px; margin:2px; border-radius:50%; background:var(--fg); transition:transform .15s; }
+.paid-switch input:checked + .paid-switch-track { background:var(--ok); }
+.paid-switch input:checked + .paid-switch-track:after { transform:translateX(16px); background:#fff; }
+.paid-switch input:focus-visible + .paid-switch-track { outline:2px solid var(--fg); outline-offset:3px; }
 .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 details.card > summary { list-style:none; }
 details.card > summary::-webkit-details-marker { display:none; }

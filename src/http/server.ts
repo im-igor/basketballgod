@@ -1102,6 +1102,7 @@ export async function buildServer(bot: Bot) {
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
         ${view === 'collection' ? `<td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
           <input type="hidden" name="value" value="${c.paid ? 'no' : 'yes'}">
+          <input type="hidden" name="all" value="${showAllCharges ? '1' : '0'}">
           <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Перевёл'}</button>
         </form></td>` : ''}</tr>`,
       )
@@ -1148,9 +1149,9 @@ export async function buildServer(bot: Bot) {
       </div>
       <div class="card">${progressBar(paidSum, total)}</div>
       ${payoutCard}
-      <div class="card row" style="align-items:center;justify-content:space-between">
-        <span class="muted">${showAllCharges ? 'Показаны все участники' : `Показаны должники (${combined.length - paidCount})`}</span>
-        <a class="button ghost" href="/collections/${seg}${showAllCharges ? '' : '?all=1'}">${showAllCharges ? 'Скрыть сдавших' : 'Показать весь список'}</a>
+      <div class="collection-filter">
+        <span class="muted">${showAllCharges ? `Все участники (${combined.length})` : `Не сдали (${combined.length - paidCount})`}</span>
+        <label class="paid-switch"><input type="checkbox" role="switch" ${showAllCharges ? '' : 'checked'} onchange="window.location.href=this.checked ? '/collections/${seg}' : '/collections/${seg}?all=1'"><span class="paid-switch-track" aria-hidden="true"></span>Скрыть сдавших</label>
       </div>
       <div class="card"><table class="pay-table">
         <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th><th></th></tr></thead>
@@ -1424,13 +1425,14 @@ export async function buildServer(bot: Bot) {
 
   app.post('/charges/:id/pay', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const value = (req.body as { value?: string }).value === 'yes';
+    const body = req.body as { value?: string; all?: string };
+    const value = body.value === 'yes';
     const charge = await setChargePaid(id, value);
     if (!charge) return redirect(reply, '/collections', 'Оплата не найдена');
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
-    const back = budget ? `/collections/${periodOf(budget.month, budget.year)}${value ? '?all=1' : ''}` : '/collections';
-    return redirect(reply, `${back}${budget ? `#charge-${id}` : ''}`, 'Оплата обновлена');
+    const back = budget ? `/collections/${periodOf(budget.month, budget.year)}${body.all === '1' ? '?all=1' : ''}` : '/collections';
+    return redirect(reply, `${back}${budget && (body.all === '1' || !value) ? `#charge-${id}` : ''}`, 'Оплата обновлена');
   });
 
   // ── Игры (учёт взносов; кросс-командно по участникам) ─────

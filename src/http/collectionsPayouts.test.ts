@@ -156,6 +156,27 @@ test('Расчеты: суммы видны, детали свернуты, ка
     assert.match(decodeURIComponent(rebuilt.headers.location!),/собраны для обеих команд/);
     assert.deepEqual((await db.query('select id,paid from charges where budget_id in (select id from budgets where month=12) order by id')).rows,beforeEdit.rows);
     assert.equal(buildLocked,false);
+    // Payment actions preserve the selected filter; paid players stay hidden by default.
+    const chargeId = (beforeEdit.rows[0] as {id:number}).id;
+    const payment = (value:string, all?:string) => app!.inject({method:'POST',url:`/charges/${chargeId}/pay`,cookies,payload:{value,...(all ? {all} : {})}});
+    const hidden = parse((await app.inject({method:'GET',url:'/collections/12-2026',cookies})).body);
+    assert.equal(hidden.querySelector(`#charge-${chargeId}`),null);
+    assert.ok(hidden.querySelector('input[role="switch"]')?.hasAttribute('checked'));
+    const allPlayers = parse((await app.inject({method:'GET',url:'/collections/12-2026?all=1',cookies})).body);
+    assert.equal(allPlayers.querySelector('input[role="switch"]')?.hasAttribute('checked'),false);
+    assert.equal(allPlayers.querySelector(`#charge-${chargeId} input[name="all"]`)?.getAttribute('value'),'1');
+    const paidDefault = await payment('yes');
+    assert.doesNotMatch(paidDefault.headers.location!,/all=1|#charge-/);
+    const paidFiltered = await payment('yes','0');
+    const afterPaid = parse((await app.inject({method:'GET',url:paidFiltered.headers.location!,cookies})).body);
+    assert.equal(afterPaid.querySelector(`#charge-${chargeId}`),null);
+    assert.ok(afterPaid.querySelector('input[role="switch"]')?.hasAttribute('checked'));
+    assert.match((await payment('yes','1')).headers.location!,/all=1/);
+    assert.match((await payment('no','1')).headers.location!,/all=1/);
+    const unpaid = parse((await app.inject({method:'GET',url:'/collections/12-2026',cookies})).body);
+    assert.ok(unpaid.querySelector(`#charge-${chargeId}`));
+    assert.equal(unpaid.querySelector(`#charge-${chargeId} input[name="all"]`)?.getAttribute('value'),'0');
+
     const remove=(month:number,confirmation=monthLabel(month,2026))=>app!.inject({method:'POST',url:`/collections/${String(month).padStart(2,'0')}-2026/delete`,cookies,payload:{confirmation}});
     const unconfirmed=await remove(12,'');
     assert.match(decodeURIComponent(unconfirmed.headers.location!),/Подтверди удаление/);

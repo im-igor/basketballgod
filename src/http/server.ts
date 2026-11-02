@@ -1,4 +1,5 @@
 import { PAYOUT_LOADER_SCRIPT } from './payoutLoader.js';
+import { createTelegramHealthCheck } from '../services/telegramHealth.service.js';
 import { publicationBlockReasons, publicationErrorMessage } from './publicationError.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { pollScheduleContext, scheduledPollStatus } from '../domain/pollSchedule.js';
@@ -140,6 +141,12 @@ export async function buildServer(bot: Bot) {
   });
 
   // ── Login ────────────────────────────────────────────────
+  const checkTelegramHealth = createTelegramHealthCheck(api);
+  app.get('/api/telegram-status', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return checkTelegramHealth();
+  });
+
   registerExtraFeeRoutes(app);
   registerBackupRoutes(app);
 

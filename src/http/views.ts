@@ -1,4 +1,5 @@
 import { FORM_BUSY_SCRIPT } from './formBusy.js';
+import { TELEGRAM_STATUS_HTML, TELEGRAM_STATUS_SCRIPT, TELEGRAM_STATUS_STYLE } from './telegramStatus.js';
 /** SSR-вьюхи админ-панели: адаптивная вёрстка без фронтенд-фреймворков. */
 
 export function esc(s: unknown): string {
@@ -293,11 +294,12 @@ export function layout(
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — basketballgod</title>
 <script>(function(){try{var saved=localStorage.getItem('bbg_theme');var theme=saved||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch(e){}})()</script>
-<style>${STYLE}</style></head>
-<body>${nav}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
+<style>${STYLE}${TELEGRAM_STATUS_STYLE}</style></head>
+<body>${nav}${opts.nav === false ? '' : TELEGRAM_STATUS_HTML}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
 <script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})();
 (function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})();
-${FORM_BUSY_SCRIPT}</script>
+${FORM_BUSY_SCRIPT}
+${opts.nav === false ? '' : TELEGRAM_STATUS_SCRIPT}</script>
 </body></html>`;
 }
 

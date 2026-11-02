@@ -22,6 +22,10 @@ test('проверка Telegram доступна только администр
     assert.equal(response.headers['cache-control'], 'no-store');
     assert.equal(response.json().available, true);
     assert.equal(calls, 1);
+    await app.inject({ url: '/api/telegram-status', headers: { cookie } });
+    assert.equal(calls, 1);
+    await app.inject({ url: '/api/telegram-status?refresh=1', headers: { cookie } });
+    assert.equal(calls, 2);
   } finally {
     await app.close();
   }
@@ -32,31 +36,42 @@ test('индикатор есть в общем layout, но отсутству�
   assert.doesNotMatch(layout('Вход', '', { nav: false }), /id="telegram-status"|fetch\('\/api\/telegram-status'/);
 });
 
-test('индикатор обновляет доступность и сбрасывает зелёный статус при сбое админки', async () => {
-  const title = { textContent: '' };
-  const detail = { textContent: '' };
-  const indicator = { dataset: { state: 'unknown' }, querySelector: (selector: string) => selector === '[data-telegram-title]' ? title : detail };
-  const timers = new Map<number, () => Promise<void>>();
+test('индикатор проверяет при открытии и повторно только по нажатию', async () => {
+  let click!: () => void;
+  const attributes = new Map<string, string>();
+  const indicator = {
+    dataset: { state: 'unknown' },
+    title: '',
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    removeAttribute: (name: string) => attributes.delete(name),
+    addEventListener: (name: string, handler: () => void) => { if (name === 'click') click = handler; },
+  };
+  const urls: string[] = [];
   let result: unknown = { available: true, checkedAt: new Date().toISOString(), latencyMs: 42 };
   runInNewContext(TELEGRAM_STATUS_SCRIPT, {
     AbortController,
-    document: { hidden: false, getElementById: () => indicator, addEventListener: () => {} },
-    setTimeout: (fn: () => Promise<void>, ms: number) => { timers.set(ms, fn); return ms; },
-    clearTimeout: (id: number) => timers.delete(id),
+    document: { getElementById: () => indicator },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
     fetch: async (url: string) => {
-      assert.equal(url, '/api/telegram-status');
+      urls.push(url);
       if (result instanceof Error) throw result;
       return { ok: true, json: async () => result };
     },
   });
   await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(urls, ['/api/telegram-status']);
   assert.equal(indicator.dataset.state, 'available');
-  assert.match(detail.textContent, /42 мс/);
+  assert.match(indicator.title, /42 мс/);
   result = { available: false, checkedAt: new Date().toISOString(), latencyMs: 5000 };
-  await timers.get(30000)!();
+  click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(urls, ['/api/telegram-status', '/api/telegram-status?refresh=1']);
   assert.equal(indicator.dataset.state, 'unavailable');
   result = new Error('Admin server offline');
-  await timers.get(30000)!();
+  click();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(indicator.dataset.state, 'unknown');
-  assert.match(title.textContent, /статус неизвестен/);
+  assert.match(attributes.get('aria-label') ?? '', /статус неизвестен/);
+  assert.doesNotMatch(TELEGRAM_STATUS_SCRIPT, /setTimeout\(check|visibilitychange/);
 });

@@ -1,63 +1,59 @@
 export const TELEGRAM_STATUS_STYLE = `
-.telegram-status { max-width:1120px; margin:16px auto 0; padding:12px 18px; display:flex; align-items:center; gap:12px; border:2px solid #f59e0b; border-radius:12px; background:#fef3c7; color:#78350f; box-shadow:0 3px 14px #f59e0b26; }
-.telegram-status[data-state="available"] { background:#dcfce7; border-color:#22c55e; color:#14532d; box-shadow:0 3px 14px #22c55e30; }
-.telegram-status[data-state="unavailable"] { background:#fee2e2; border-color:#ef4444; color:#7f1d1d; box-shadow:0 3px 14px #ef444430; }
-.telegram-status-dot { width:12px; height:12px; flex:none; border-radius:50%; background:#f59e0b; box-shadow:0 0 0 5px #f59e0b26; }
-[data-state="available"] > .telegram-status-dot { background:#16a34a; box-shadow:0 0 0 5px #22c55e30; }
-[data-state="unavailable"] > .telegram-status-dot { background:#dc2626; box-shadow:0 0 0 5px #ef444430; }
-.telegram-status strong { display:block; font-size:14px; }
-.telegram-status small { display:block; font-size:12px; margin-top:2px; }
-@media(max-width:1168px) { .telegram-status { margin:16px 24px 0; } }
-@media(max-width:600px) { .telegram-status { margin:12px 12px 0; padding:10px 14px; } }
+.header-actions { --header-control-width:118px; }
+.nav-menu > summary { width:var(--header-control-width); display:flex; align-items:center; justify-content:center; }
+.telegram-status { width:var(--header-control-width); min-height:0; padding:8px 11px; display:flex; align-items:center; justify-content:center; gap:7px; border:1px solid var(--field-line); border-radius:8px; background:var(--card); color:var(--muted); font-weight:650; line-height:1.5; box-shadow:none; white-space:nowrap; }
+.telegram-status:hover { background:var(--hover); border-color:var(--muted); color:var(--fg); }
+.telegram-status[data-state="available"] { background:var(--ok-soft); border-color:var(--ok); color:var(--ok); }
+.telegram-status[data-state="unavailable"] { background:var(--danger-soft); border-color:var(--danger); color:var(--danger); }
+.telegram-status-dot { width:8px; height:8px; flex:none; border-radius:50%; background:#f59e0b; }
+[data-state="available"] > .telegram-status-dot { background:var(--ok); }
+[data-state="unavailable"] > .telegram-status-dot { background:var(--danger); }
+@media(max-width:600px) {
+  .header-actions { --header-control-width:42px; }
+  .telegram-status-label { display:none; }
+}
 `;
 
-export const TELEGRAM_STATUS_HTML = `<div id="telegram-status" class="telegram-status" data-state="unknown" role="status" aria-live="polite" aria-atomic="true">
+export const TELEGRAM_STATUS_HTML = `<button id="telegram-status" class="telegram-status" type="button" data-state="unknown" aria-live="polite" aria-label="Telegram API: статус не проверен" title="Проверить доступность Telegram API">
   <span class="telegram-status-dot" aria-hidden="true"></span>
-  <div><strong data-telegram-title>Telegram API · статус не проверен</strong><small data-telegram-detail>Для автоматической проверки нужен JavaScript.</small></div>
-</div>`;
+  <span class="telegram-status-label">Telegram</span>
+</button>`;
 
 export const TELEGRAM_STATUS_SCRIPT = `
 (function () {
   var indicator = document.getElementById('telegram-status');
   if (!indicator) return;
-  var title = indicator.querySelector('[data-telegram-title]');
-  var detail = indicator.querySelector('[data-telegram-detail]');
   var pending = false;
-  var timer;
-  function render(state, label, text) {
+  function render(state, text) {
     indicator.dataset.state = state;
-    title.textContent = 'Telegram API · ' + label;
-    detail.textContent = text;
+    indicator.setAttribute('aria-label', 'Telegram API: ' + text);
+    indicator.title = text + ' Нажмите, чтобы проверить ещё раз.';
   }
-  async function check() {
-    clearTimeout(timer);
-    if (pending || document.hidden) return;
+  async function check(force) {
+    if (pending) return;
     pending = true;
-    render('unknown', 'проверка…', 'Проверяем соединение сервера с Telegram.');
+    indicator.setAttribute('aria-busy', 'true');
+    render('unknown', 'проверяем соединение…');
     var controller = new AbortController();
     var timeout = setTimeout(function () { controller.abort(); }, 8000);
     try {
-      var response = await fetch('/api/telegram-status', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal });
+      var url = '/api/telegram-status' + (force ? '?refresh=1' : '');
+      var response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal });
       if (!response.ok) throw new Error('Status unavailable');
       var status = await response.json();
       if (typeof status.available !== 'boolean' || !Number.isFinite(Date.parse(status.checkedAt)) || !Number.isFinite(status.latencyMs)) throw new Error('Invalid status');
       var checked = new Date(status.checkedAt).toLocaleTimeString('ru-RU');
-      render(status.available ? 'available' : 'unavailable', status.available ? 'доступен' : 'недоступен',
-        (status.available ? 'Ответ за ' + status.latencyMs + ' мс.' : 'Сервер не получил успешный ответ от Telegram.') + ' Проверено в ' + checked + ' · обновление каждые 30 с.');
+      render(status.available ? 'available' : 'unavailable',
+        (status.available ? 'доступен, ответ за ' + status.latencyMs + ' мс.' : 'недоступен.') + ' Проверено в ' + checked + '.');
     } catch (_) {
-      render('unknown', 'статус неизвестен', 'Не удалось получить статус. Повторная проверка через 30 с.');
+      render('unknown', 'статус неизвестен.');
     } finally {
       clearTimeout(timeout);
       pending = false;
-      timer = setTimeout(check, 30000);
+      indicator.removeAttribute('aria-busy');
     }
   }
-  document.addEventListener('visibilitychange', function () {
-    if (document.hidden) {
-      clearTimeout(timer);
-      render('unknown', 'проверка приостановлена', 'Статус обновится при возвращении на страницу.');
-    } else { check(); }
-  });
-  check();
+  indicator.addEventListener('click', function () { check(true); });
+  check(false);
 })();
 `;

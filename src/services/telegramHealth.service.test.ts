@@ -5,11 +5,12 @@ import { createTelegramHealthCheck } from './telegramHealth.service.js';
 
 const apiWith = (getMe: (signal?: AbortSignal) => Promise<unknown>) => ({ getMe }) as Pick<Api, 'getMe'>;
 
-test('параллельные проверки и свежий кэш используют один запрос к API', async () => {
+test('параллельные проверки и свежий кэш используют один запрос, а force обновляет статус', async () => {
   let calls = 0;
   let resolve!: (result: unknown) => void;
   const check = createTelegramHealthCheck(apiWith(async () => {
     calls++;
+    if (calls > 1) return { id: 1, is_bot: true };
     return new Promise(r => { resolve = r; });
   }));
   const first = check();
@@ -23,6 +24,8 @@ test('параллельные проверки и свежий кэш испо�
   assert.deepEqual(await second, result);
   assert.deepEqual(await check(), result);
   assert.equal(calls, 1);
+  assert.equal((await check(true)).available, true);
+  assert.equal(calls, 2);
 });
 
 test('ошибка не раскрывает детали подключения, следующая проверка видит восстановление', async () => {

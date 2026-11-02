@@ -142,9 +142,10 @@ export async function buildServer(bot: Bot) {
 
   // ── Login ────────────────────────────────────────────────
   const checkTelegramHealth = createTelegramHealthCheck(api);
-  app.get('/api/telegram-status', async (_req, reply) => {
+  app.get('/api/telegram-status', async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return checkTelegramHealth();
+    const force = (req.query as { refresh?: string }).refresh === '1';
+    return checkTelegramHealth(force);
   });
 
   registerExtraFeeRoutes(app);

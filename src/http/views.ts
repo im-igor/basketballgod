@@ -277,6 +277,7 @@ export function layout(
       <a class="brand" href="/"><span class="brand-mark">🏀</span><span>basketballgod</span></a>
       <nav class="primary-nav" aria-label="Основной рабочий процесс">${primaryLinks}</nav>
       <div class="header-actions">
+        ${TELEGRAM_STATUS_HTML}
         <details class="nav-menu"${managementActive ? ' open' : ''}>
           <summary aria-label="Управление"${managementActive ? ' aria-current="page"' : ''}><span class="management-label">Управление</span><span class="management-compact" aria-hidden="true">•••</span><span class="nav-menu-caret">▾</span></summary>
           <div class="nav-menu-panel">
@@ -295,7 +296,7 @@ export function layout(
 <title>${esc(title)} — basketballgod</title>
 <script>(function(){try{var saved=localStorage.getItem('bbg_theme');var theme=saved||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch(e){}})()</script>
 <style>${STYLE}${TELEGRAM_STATUS_STYLE}</style></head>
-<body>${nav}${opts.nav === false ? '' : TELEGRAM_STATUS_HTML}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
+<body>${nav}<main${opts.wide ? ' class="wide"' : ''}>${flash}${body}</main>
 <script>(function(){var button=document.getElementById('theme-toggle');if(!button)return;function render(){var dark=document.documentElement.dataset.theme==='dark';button.textContent=dark?'☀':'☾';button.setAttribute('aria-label',dark?'Включить светлую тему':'Включить тёмную тему');button.title=button.getAttribute('aria-label')||''}button.addEventListener('click',function(){var theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('bbg_theme',theme)}catch(e){}render()});render()})();
 (function(){var menu=document.querySelector('.nav-menu');if(!menu)return;document.addEventListener('click',function(event){if(menu.open&&!menu.contains(event.target))menu.removeAttribute('open')});document.addEventListener('keydown',function(event){if(event.key==='Escape')menu.removeAttribute('open')})})();
 ${FORM_BUSY_SCRIPT}

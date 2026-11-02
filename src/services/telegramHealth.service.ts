@@ -10,7 +10,7 @@ export interface TelegramHealth {
 export function createTelegramHealthCheck(
   api: Pick<Api, 'getMe'>,
   { timeoutMs = 5_000, cacheMs = 15_000 } = {},
-): () => Promise<TelegramHealth> {
+): (force?: boolean) => Promise<TelegramHealth> {
   let cached: TelegramHealth | undefined;
   let expiresAt = 0;
   let pending: Promise<TelegramHealth> | undefined;
@@ -42,8 +42,8 @@ export function createTelegramHealthCheck(
     return cached;
   }
 
-  return () => {
-    if (cached && Date.now() < expiresAt) return Promise.resolve(cached);
+  return (force = false) => {
+    if (!force && cached && Date.now() < expiresAt) return Promise.resolve(cached);
     // All open admin pages share one probe per server instance.
     if (!pending) pending = check().finally(() => { pending = undefined; });
     return pending;

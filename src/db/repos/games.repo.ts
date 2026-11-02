@@ -100,6 +100,21 @@ export async function listAllGamesForMonth(month: number, year: number): Promise
   return rows;
 }
 
+/** Выплаты тренеру относятся к месяцу игры, а не к месяцу сбора взносов.
+ * Для старых ручных записей без даты сохраняем явно указанный месяц.
+ */
+export async function listGamesByPlayedMonth(month: number, year: number): Promise<Game[]> {
+  const { rows } = await query<Game>(
+    `select * from games
+     where (played_on >= make_date($2, $1, 1)
+            and played_on < make_date($2, $1, 1) + interval '1 month')
+        or (played_on is null and month = $1 and year = $2)
+     order by played_on nulls last, id`,
+    [month, year],
+  );
+  return rows;
+}
+
 export async function listGames(limit = 50): Promise<Game[]> {
   const { rows } = await query<Game>('select * from games order by played_on desc nulls last limit $1', [
     limit,

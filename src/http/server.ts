@@ -35,7 +35,7 @@ import {
   deleteBudget,
   deleteDraftMonth,
 } from '../db/repos/budgets.repo.js';
-import { listAllGamesForMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth, listGamesByPlayedMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
 import { calculateMonthlyPayoutPreview } from '../services/monthlyPayout.service.js';
@@ -860,7 +860,7 @@ export async function buildServer(bot: Bot) {
 
   const renderPayoutSummary = (payout: MonthlyPayout, saved: boolean): string => {
     const money = (value: number) => esc(new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)) + ' ₽';
-    return `<div><div class="settlement-payout-heading"><span>К оплате за месяц</span><span class="settlement-estimate">${saved ? 'Итог' : 'Предварительно'}</span></div>
+    return `<div><div class="settlement-payout-heading"><span>К оплате за ${esc(monthLabel(payout.month, payout.year))}</span><span class="settlement-estimate">${saved ? 'Итог' : 'Предварительно'}</span></div>
       <div class="settlement-payout-values">
         <div class="settlement-metric"><span>Тренер</span><strong aria-label="Начислено тренеру: ${esc(payout.coach_amount)} ₽">${money(payout.coach_amount)}</strong></div>
         <div class="settlement-metric"><span>Зал и шкафчик</span><strong aria-label="Начислено за зал: ${esc(payout.gym_amount)} ₽">${money(payout.gym_amount)}</strong></div>
@@ -1448,44 +1448,57 @@ export async function buildServer(bot: Bot) {
 
   const gamesQuery = (month: number, year: number) => `/games?month=${month}&year=${year}`;
 
+  // Формы записывают взносы в бюджет, но возвращают к выбранному месяцу игр.
+  const gamesBack = (body: unknown, budget: { month: number; year: number }): string => {
+    const fields = (body ?? {}) as Record<string, string>;
+    const view = readPeriod({ month: fields.view_month, year: fields.view_year });
+    const fallback = budget.month === 1
+      ? { month: 12, year: budget.year - 1 } : { month: budget.month - 1, year: budget.year };
+    return gamesQuery(view?.month ?? fallback.month, view?.year ?? fallback.year);
+  };
+
   app.post('/games/check-stats', async (req, reply) => {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/games', 'Неверный месяц/год');
     try {
       const checks = await checkAutomaticGameStats(p.month, p.year);
-      return redirect(reply, gamesQuery(p.month, p.year),
+      return redirect(reply, gamesBack(req.body, p),
         `Проверено матчей: ${checks.length}, успешно: ${checks.filter((c) => c.ready).length}. Начисления не менялись`);
-    } catch (err) { return redirect(reply, gamesQuery(p.month,p.year), `Ошибка: ${(err as Error).message}`); }
+    } catch (err) { return redirect(reply, gamesBack(req.body, p), `Ошибка: ${(err as Error).message}`); }
   });
 
   app.get('/games', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
-    const def = defaultBudgetPeriod();
+    const now = new Date();
+    const def = { month: now.getMonth() + 1, year: now.getFullYear() };
     const month = q.month === undefined ? def.month : Number(q.month);
     const year = q.year === undefined ? def.year : Number(q.year);
     if (!Number.isInteger(month) || month < 1 || month > 12 ||
         !Number.isInteger(year) || year < 2024 || year > 2100) {
-      return redirect(reply, gamesQuery(def.month, def.year), 'Неверный месяц или год. Выбран следующий месяц бюджета.');
+      return redirect(reply, gamesQuery(def.month, def.year), 'Неверный месяц или год. Выбран текущий месяц игр.');
     }
 
-    const [games, redBudget, blackBudget] = await Promise.all([
-      listAllGamesForMonth(month, year), getBudget('RED', month, year), getBudget('BLACK', month, year),
-    ]);
-    const published = redBudget?.message_id != null || blackBudget?.message_id != null;
+    const budgetPeriod = { month: month === 12 ? 1 : month + 1, year: year + (month === 12 ? 1 : 0) };
+    const viewFields = `<input type="hidden" name="view_month" value="${month}"><input type="hidden" name="view_year" value="${year}">`;
+    const [games, budgets] = await Promise.all([listGamesByPlayedMonth(month, year), listBudgets()]);
+    const isPublished = (m: number | null, y: number | null) => budgets.some(b => b.month === m && b.year === y && b.message_id != null);
+    const published = isPublished(budgetPeriod.month, budgetPeriod.year);
     const flagBtn = (g: (typeof games)[number], flag: 'coach' | 'judge') => {
+      const published = isPublished(g.month, g.year);
       const on = flag === 'coach' ? g.coach_present : g.judge;
       const nextCoach = flag === 'coach' ? !g.coach_present : g.coach_present;
       const nextJudge = flag === 'judge' ? !g.judge : g.judge;
       const label = flag === 'coach' ? (on ? 'тренер был' : 'без тренера') : on ? 'судья был' : 'без судьи';
       return `<form class="inline" method="post" action="/games/${g.id}/flags" ${published ? 'onsubmit="return confirm(\'Сбор опубликован. Его суммы не изменятся; отметка тренера повлияет на начисления за месяц. Продолжить?\')"' : ''}>
-        <input type="hidden" name="coach_present" value="${nextCoach ? 'yes' : 'no'}">
+        ${viewFields}<input type="hidden" name="coach_present" value="${nextCoach ? 'yes' : 'no'}">
         <input type="hidden" name="judge" value="${nextJudge ? 'yes' : 'no'}">
         <button class="${on ? 'ok' : 'ghost'}">${label}</button></form>`;
     };
     const rows = games
       .map((g) => {
         const played = g.participants?.length ?? 0;
+        const published = isPublished(g.month, g.year);
         return `<tr>
           <td>${esc(isoToRu(g.played_on))}</td>
           <td>${g.team === 'MIXED' ? '<span class="badge black">MIXED</span>' : teamBadge(g.team)}</td>
@@ -1494,19 +1507,20 @@ export async function buildServer(bot: Bot) {
             : esc(g.opponent ?? '')}</td>
           <td>${played}</td>
           <td>${g.fee_per_player ? '+' + esc(g.fee_per_player) + '₽' : '—'}</td>
+          <td>${g.month && g.year ? esc(monthLabel(g.month, g.year)) : '—'}</td>
           <td>${flagBtn(g, 'coach')}</td>
           <td>${flagBtn(g, 'judge')}</td>
           <td class="right"><form class="inline" method="post" action="/games/${g.id}/delete" onsubmit="return confirm('${published ? 'Сбор опубликован и останется неизменным. ' : ''}Удалить игру?')">
-            <button class="ghost">Удалить</button></form></td></tr>`;
+            ${viewFields}<button class="ghost">Удалить</button></form></td></tr>`;
       })
       .join('');
 
-    const statuses = await listAutomaticStatsStatus(month, year);
-    const statsCard = `<div class="card"><h2>Автоматическая статистика прошлого месяца</h2>
+    const statuses = await listAutomaticStatsStatus(budgetPeriod.month, budgetPeriod.year);
+    const statsCard = `<div class="card"><h2>Статистика игр за ${esc(monthLabel(month, year))}</h2>
       <p class="muted">Статистика проверяется при сборке бюджета и повторно перед публикацией. Изменение состава или взносов требует пересборки бюджета. Фоновая проверка выполняется каждый час.
       Отсутствие статистики не мешает собрать базовую часть бюджета. Публикация требует проверки игр. Введённые вручную игры проверяет администратор.</p>
-      <form method="post" action="/games/check-stats"><input type="hidden" name="month" value="${month}">
-        <input type="hidden" name="year" value="${year}"><button class="ghost">Проверить статистику сейчас</button></form>
+      <form method="post" action="/games/check-stats">${viewFields}<input type="hidden" name="month" value="${budgetPeriod.month}">
+        <input type="hidden" name="year" value="${budgetPeriod.year}"><button class="ghost">Проверить статистику сейчас</button></form>
       ${statuses.length ? statuses.map((s) => {
         const shortTeam = (name: string) => name.trim().replace(/^yandex\s+(black|red)$/i,
           (_match, color: string) => color.toUpperCase());
@@ -1521,7 +1535,7 @@ export async function buildServer(bot: Bot) {
         return `<p>${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : s.plan ? 'Проверен' : 'Не удалось определить сыгравших'))}
           ${s.plan ? ` · ${s.plan.playedCount} игроков × ${s.plan.fee} ₽ = ${s.plan.playedCount * s.plan.fee} ₽` : ''}
           ${s.checked_at ? ` · ${esc(fmtDateTime(s.checked_at))}` : ''}</p>`;
-      }).join('') : '<p class="muted">В расписании нет матчей прошлого месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}
+      }).join('') : '<p class="muted">В расписании нет матчей выбранного месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}
       <p class="muted">Взнос округляется вверх до рубля. Начисление каждому сыгравшему — в бюджет его команды.</p>
       </div>`;
     const importForm = `<div class="card"><h2>Добавить по ссылке на протокол</h2>
@@ -1535,25 +1549,25 @@ export async function buildServer(bot: Bot) {
         ЛЧБ — <a href="https://basketball.businesschampions.ru/vesna-2026/matches/1469962/" target="_blank" rel="noopener">https://basketball.businesschampions.ru/vesna-2026/matches/1469962/</a>
       </div>
       <form method="post" action="/games/import" ${published ? 'onsubmit="return confirm(\'Сбор опубликован и останется неизменным. Добавить игры?\')"' : ''}>
-        <div class="row">
+        ${viewFields}<div class="row">
           <div style="flex:0"><label>Команда</label><select name="team"><option value="BLACK">BLACK</option><option value="RED">RED</option></select></div>
-          <div style="flex:0"><label>Месяц бюджета</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
-          <div style="flex:0"><label>Год бюджета</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
+          <div style="flex:0"><label>Месяц бюджета</label><input name="month" type="number" min="1" max="12" value="${budgetPeriod.month}" required></div>
+          <div style="flex:0"><label>Год бюджета</label><input name="year" type="number" min="2024" max="2100" value="${budgetPeriod.year}" required></div>
         </div>
         <div style="margin-top:8px"><label>Ссылки на сыгранные матчи</label>
           <textarea name="games" rows="3" placeholder="https://moscow.ilovebasket.ru/games/…?apiUrl=…&#10;https://basketball.businesschampions.ru/matches/…/ ДД.ММ.ГГГГ" required></textarea></div>
         <div style="margin-top:8px"><button>Проверить и добавить</button></div>
       </form></div>`;
 
-    const statsPeriod = sourcePeriod(month,year);
+    const statsPeriod = sourcePeriod(budgetPeriod.month,budgetPeriod.year);
     const manualCandidates = (await Promise.all((['RED','BLACK'] as const).map((team) =>
       listScheduledGamesInRange(team,statsPeriod.from,statsPeriod.to)))).flat();
     const addForm = `<div class="card"><h2>Добавить игру вручную</h2>
       <div class="muted" style="margin-bottom:8px">Ручной ввод для товарищеских игр и исключений.
         Состав — список tg-логинов сыгравших (через пробел или запятую), кросс-командно; взнос падает каждому в бюджет его команды.</div>
       <form method="post" action="/games/add" ${published ? 'onsubmit="return confirm(\'Сбор опубликован и останется неизменным. Добавить игру?\')"' : ''}>
-        <input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">
-        <p class="muted">Взнос будет включён в бюджет ${esc(monthLabel(month,year))}. Для игры без протокола выбери её из расписания: связь сохранится при появлении статистики.</p>
+        ${viewFields}<input type="hidden" name="month" value="${budgetPeriod.month}"><input type="hidden" name="year" value="${budgetPeriod.year}">
+        <p class="muted">Взнос будет включён в бюджет ${esc(monthLabel(budgetPeriod.month,budgetPeriod.year))}. Для игры без протокола выбери её из расписания: связь сохранится при появлении статистики.</p>
         <div><label>Игра расписания (для исключений без протокола)</label><select name="scheduled_game_id">
           <option value="">Без привязки к расписанию</option>
           ${manualCandidates.map((g) => `<option value="${esc(g.id)}">${esc(g.team)} · ${esc(isoToRu(g.game_date))} · ${esc(g.team_a)} — ${esc(g.team_b)}</option>`).join('')}
@@ -1575,17 +1589,17 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Игры <span class="muted">${esc(monthLabel(month, year))}</span></h1>
       <div class="card"><form method="get" action="/games" class="row">
-          <div><label>Месяц</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
+          <div><label>Месяц проведения игр</label><input name="month" type="number" min="1" max="12" value="${month}" required></div>
           <div><label>Год</label><input name="year" type="number" min="2024" max="2100" value="${year}" required></div>
           <div style="flex:0"><label>&nbsp;</label><button class="ghost">Показать</button></div>
         </form></div>
-      ${published ? '<div class="card muted">Сбор за этот месяц опубликован. Изменение игр не меняет отправленные суммы, но может изменить начисления тренеру.</div>' : ''}
+      ${published ? '<div class="card muted">Сбор за следующий месяц опубликован. Изменение игр не меняет отправленные суммы, но может изменить начисления тренеру.</div>' : ''}
       ${statsCard}
       ${importForm}
       ${addForm}
-      <div class="card"><h2>Игры, включённые в бюджет ${esc(monthLabel(month,year))}</h2><table class="games-table">
-        <thead><tr><th>Дата</th><th>Команда</th><th>Соперник</th><th>Сыграло</th><th>Взнос</th><th>Тренер</th><th>Судья</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="8" class="muted">В бюджет игры ещё не добавлены. Проверка статистики сама по себе не добавляет игры: устрани ошибки выше и <a href="/budgets?month=${month}&year=${year}">собери бюджет</a>.</td></tr>`}</tbody></table></div>`;
+      <div class="card"><h2>Учтённые игры за ${esc(monthLabel(month,year))}</h2><table class="games-table">
+        <thead><tr><th>Дата</th><th>Команда</th><th>Соперник</th><th>Сыграло</th><th>Взнос</th><th>Месяц сбора взносов</th><th>Тренер</th><th>Судья</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="9" class="muted">Игры за выбранный месяц ещё не добавлены. Проверка статистики сама по себе не добавляет игры: устрани ошибки выше и <a href="/budgets?month=${budgetPeriod.month}&year=${budgetPeriod.year}">собери бюджет</a>.</td></tr>`}</tbody></table></div>`;
     return html(reply, layout(`Игры ${monthLabel(month, year)}`, body, { flash: msg }));
   });
 
@@ -1596,7 +1610,7 @@ export async function buildServer(bot: Bot) {
     const year = Number(b.year);
     const back = Number.isInteger(month) && month >= 1 && month <= 12 &&
       Number.isInteger(year) && year >= 2024 && year <= 2100
-      ? gamesQuery(month, year)
+      ? gamesBack(b, { month, year })
       : '/games';
     if (!team) return redirect(reply, back, 'Выбери команду RED или BLACK');
 
@@ -1660,7 +1674,7 @@ export async function buildServer(bot: Bot) {
         my.year,
       );
     } catch (err) {
-      return redirect(reply, gamesQuery(my.month, my.year), `Игра не добавлена: ${(err as Error).message}`);
+      return redirect(reply, gamesBack(b, my), `Игра не добавлена: ${(err as Error).message}`);
     }
     await recalcMonthBudgets(my.month, my.year);
     const note =
@@ -1668,7 +1682,7 @@ export async function buildServer(bot: Bot) {
         ? 'Игра не добавлена: ни один логин не найден в базе'
         : `Игра добавлена: сыграло ${res.matched}, взнос ${res.fee}₽` +
           (res.unmatched.length ? ` · не найдены: ${res.unmatched.join(', ')}` : '');
-    return redirect(reply, gamesQuery(my.month, my.year), note);
+    return redirect(reply, gamesBack(b, my), note);
   });
 
   app.post('/games/:id/flags', async (req, reply) => {
@@ -1678,7 +1692,7 @@ export async function buildServer(bot: Bot) {
       const res = await recomputeGameFee(id, { coach_present: b.coach_present === 'yes', judge: b.judge === 'yes' });
       if (!res || res.month == null || res.year == null) return redirect(reply, '/games', 'Игра не найдена');
       await recalcMonthBudgets(res.month, res.year);
-      return redirect(reply, gamesQuery(res.month, res.year), 'Взнос пересчитан, бюджеты обновлены');
+      return redirect(reply, gamesBack(b, { month: res.month, year: res.year }), 'Взнос пересчитан, бюджеты обновлены');
     } catch (err) {
       return redirect(reply, '/games', `Игра не изменена: ${(err as Error).message}`);
     }
@@ -1690,7 +1704,7 @@ export async function buildServer(bot: Bot) {
       const game = await deleteGameById(id);
       if (!game || game.month == null || game.year == null) return redirect(reply, '/games', 'Игра удалена');
       await recalcMonthBudgets(game.month, game.year);
-      return redirect(reply, gamesQuery(game.month, game.year), 'Игра удалена, бюджеты обновлены');
+      return redirect(reply, gamesBack(req.body, { month: game.month, year: game.year }), 'Игра удалена, бюджеты обновлены');
     } catch (err) {
       return redirect(reply, '/games', `Игра не удалена: ${(err as Error).message}`);
     }

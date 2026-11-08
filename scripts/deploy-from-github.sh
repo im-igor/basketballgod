@@ -30,6 +30,19 @@ echo "Deploying $BEFORE -> $AFTER"
 docker compose -f docker-compose.yml -f docker-compose.local.yml build app
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --no-deps app
 docker compose -f docker-compose.yml -f docker-compose.local.yml ps --format '{{.Name}} {{.State}}'
-curl --fail --silent --show-error --max-time 15 http://127.0.0.1:3000/healthz
-echo
+
+for attempt in {1..30}; do
+  if health="$(curl --fail --silent --max-time 3 http://127.0.0.1:3000/healthz)"; then
+    echo "Healthcheck: $health"
+    break
+  fi
+
+  if [[ "$attempt" == 30 ]]; then
+    echo "Application did not become healthy within 30 seconds." >&2
+    exit 1
+  fi
+
+  sleep 1
+done
+
 echo "Deployment completed at $AFTER"

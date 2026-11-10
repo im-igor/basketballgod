@@ -175,7 +175,7 @@ export interface ExtraFee {
   title: string;
   amount_per_player: number;
   team: Team | 'BOTH';
-  mode: 'PLAYED' | 'BUDGET';
+  mode: 'PLAYED' | 'BUDGET' | 'ACTIVE';
   league: 'ANY' | 'MLBL' | 'LCHB';
   start_period: number;
   end_period: number | null;

@@ -89,6 +89,18 @@ test('всем участникам бюджета: игры не нужны, н
   assert.deepEqual(extraFeesForPlayer({ ...allInput, fees: [{ ...allInput.fees[0]!, team: 'BOTH' }], team: 'RED' }), [item]);
 });
 
+test('активный участник получает взнос без выхода на площадку и только один раз', () => {
+  const activeInput = {
+    ...input,
+    games: [],
+    fees: [{ ...fee, mode: 'ACTIVE' as const, league: 'ANY' as const, end_period: null }],
+  };
+  assert.deepEqual(extraFeesForPlayer(activeInput), [item]);
+  assert.deepEqual(extraFeesForPlayer({ ...activeInput, team: 'RED' }), []);
+  assert.deepEqual(extraFeesForPlayer({ ...activeInput, period: 202609 }), []);
+  assert.deepEqual(extraFeesForPlayer({ ...activeInput, budgetId: 11, period: 202611, allocations: [allocation] }), []);
+});
+
 test('несколько независимых сборов складываются без потери копеек', () => {
   const items = extraFeesForPlayer({ ...input, fees: [fee, { ...fee, id: 2, amount_per_player: 0.1 }, { ...fee, id: 3, amount_per_player: 0.2 }] });
   assert.equal(items.length, 3);
@@ -110,6 +122,10 @@ test('форма валидирует сумму, режим, команду и 
   const all = extraFeeForm.parse({ ...form, mode: 'BUDGET', end_period: '2026-09' });
   assert.equal(all.league, 'ANY');
   assert.equal(all.end_period, null);
+  const active = extraFeeForm.parse({ ...form, mode: 'ACTIVE', league: 'MLBL', end_period: '2026-12' });
+  assert.equal(active.mode, 'ACTIVE');
+  assert.equal(active.league, 'ANY');
+  assert.equal(active.end_period, null);
 });
 
 test('Telegram показывает название, сумму разового сбора и персональную расшифровку, экранируя HTML', () => {

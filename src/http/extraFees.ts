@@ -27,7 +27,9 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
       const paid = sumMoney(assigned.filter((a) => a.paid).map((a) => a.amount));
       const rule = fee.mode === 'PLAYED'
         ? `Сыгравшие · ${fee.league === 'ANY' ? 'все игры' : fee.league} · с ${periodLabel(fee.start_period)}${fee.end_period ? ` по ${periodLabel(fee.end_period)}` : ''}`
-        : `Все участники бюджета · ${periodLabel(fee.start_period)}`;
+        : fee.mode === 'ACTIVE'
+          ? `Активные участники бюджета · с ${periodLabel(fee.start_period)}`
+          : `Все участники бюджета · ${periodLabel(fee.start_period)}`;
       return `<div class="card">
         <h2>${esc(fee.title)} · ${esc(fee.amount_per_player)} ₽/чел.</h2>
         <p>${fee.team === 'BOTH' ? 'Обе команды' : teamBadge(fee.team)} · ${esc(rule)} · ${fee.active ? 'Активен' : 'Завершён'}</p>
@@ -50,7 +52,7 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
 
     const body = `<h1>Разовые сборы</h1>
       <div class="card muted">Возмещение расходов общака: фиксированная сумма с человека один раз за сбор.
-        В режиме «Сыгравшие» взнос попадает в бюджет по мере участия в играх, в режиме «Все участники бюджета» — всем участникам выбранной команды за один месяц.
+        В режиме «Активные участники бюджета» взнос попадает в ближайший собранный бюджет активного игрока выбранной команды — игра ждать не нужно. «Сыгравшие» начисляются по протоколу, «Все участники бюджета» — всем участникам выбранной команды за один месяц.
         Сумма добавляется к обычному взносу. Завершение сбора останавливает новые начисления, сохраняя уже назначенные.</div>
       <div class="card"><h2>Добавить сбор</h2>
         <form method="post" action="/extra-fees">
@@ -60,15 +62,15 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
             <div><label for="fee-team">Команда</label><select id="fee-team" name="team"><option>BLACK</option><option>RED</option><option value="BOTH">Обе команды</option></select></div>
           </div>
           <div class="row" style="margin-top:12px">
-            <div><label for="fee-mode">С кого собирать</label><select id="fee-mode" name="mode"><option value="PLAYED">Сыгравшие</option><option value="BUDGET">Все участники бюджета</option></select></div>
+            <div><label for="fee-mode">С кого собирать</label><select id="fee-mode" name="mode"><option value="ACTIVE">Активные участники бюджета</option><option value="PLAYED">Сыгравшие</option><option value="BUDGET">Все участники бюджета</option></select></div>
             <div><label for="fee-league">Игры для сбора</label><select id="fee-league" name="league"><option value="MLBL">МЛБЛ</option><option value="LCHB">ЛЧБ</option><option value="ANY">Все игры, включая ручные</option></select></div>
             <div><label for="fee-start">Первый / единственный месяц бюджета</label><input id="fee-start" name="start_period" type="month" min="2024-01" max="2100-12" value="${defaultPeriod}" required></div>
             <div><label for="fee-end">Последний месяц (необязательно, для сыгравших)</label><input id="fee-end" name="end_period" type="month" min="2024-01" max="2100-12"></div>
           </div>
-          <p class="muted">Месяцы относятся к бюджету, в который включены игры. Например, сентябрьские игры в бюджете октября → первый месяц октябрь.
+          <p class="muted">В режиме «Активные участники бюджета» сбор попадёт в первый собранный бюджет игрока, начиная с указанного месяца. Для «Сыгравших» месяцы относятся к бюджету, в который включены игры: например, сентябрьские игры в бюджете октября → первый месяц октябрь.
             МЛБЛ и ЛЧБ определяются по импортированному протоколу. Для ручных игр MIXED выбери «Все игры» и «Обе команды».
             В режиме «Сыгравшие» команда относится к игре; сыгравший за BLACK игрок RED получит взнос в бюджет RED.
-            В режиме «Все участники бюджета» лига и последний месяц не учитываются.</p>
+            В режимах «Активные участники бюджета» и «Все участники бюджета» лига и последний месяц не учитываются.</p>
           <button>Добавить сбор</button>
         </form>
       </div>

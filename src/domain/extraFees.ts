@@ -11,7 +11,7 @@ export const extraFeeForm = z.object({
   amount_per_player: z.coerce.number().finite().positive().max(9999999999.99)
     .refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 0.0001, 'Не более двух знаков после запятой'),
   team: z.enum(['RED', 'BLACK', 'BOTH']),
-  mode: z.enum(['PLAYED', 'BUDGET']),
+  mode: z.enum(['PLAYED', 'BUDGET', 'ACTIVE']),
   league: z.enum(['ANY', 'MLBL', 'LCHB']),
   start_period: period,
   end_period: z.union([z.literal(''), period]).optional().transform((v) => v || null),
@@ -21,8 +21,8 @@ export const extraFeeForm = z.object({
   }
 }).transform((v) => ({
   ...v,
-  league: v.mode === 'BUDGET' ? 'ANY' as const : v.league,
-  end_period: v.mode === 'BUDGET' ? null : v.end_period,
+  league: v.mode === 'PLAYED' ? v.league : 'ANY' as const,
+  end_period: v.mode === 'PLAYED' ? v.end_period : null,
 }));
 
 export type ExtraFeeInput = z.infer<typeof extraFeeForm>;
@@ -47,6 +47,7 @@ function gameMatches(fee: ExtraFee, game: Game): boolean {
  * Назначение закреплено за бюджетом до его удаления. Пересборка, архивирование
  * сбора и изменение состава протокола не переносят уже начисленный долг.
  * Для PLAYED команда — команда игры; начисление идёт в домашний бюджет игрока.
+ * ACTIVE начисляется активному игроку команды в первом собранном для него бюджете.
  */
 export function extraFeesForPlayer(input: {
   playerId: number | null;
@@ -73,9 +74,11 @@ export function extraFeesForPlayer(input: {
     if (input.playerId === null || !fee.active || input.period < fee.start_period ||
         (fee.end_period !== null && input.period > fee.end_period)) continue;
 
-    const eligible = fee.mode === 'BUDGET'
-      ? input.period === fee.start_period && (fee.team === 'BOTH' || fee.team === input.team)
-      : input.games.some((g) => g.year !== null && g.month !== null &&
+    const eligible = fee.mode === 'ACTIVE'
+      ? fee.team === 'BOTH' || fee.team === input.team
+      : fee.mode === 'BUDGET'
+        ? input.period === fee.start_period && (fee.team === 'BOTH' || fee.team === input.team)
+        : input.games.some((g) => g.year !== null && g.month !== null &&
           g.year * 100 + g.month === input.period && gameMatches(fee, g) &&
           g.participants.some((p) => p.matched_player_id === input.playerId));
     if (eligible) items.push({ fee_id: fee.id, title: fee.title, amount: fee.amount_per_player });

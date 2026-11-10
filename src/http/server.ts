@@ -767,7 +767,9 @@ export async function buildServer(bot: Bot) {
 
     const extraFeesText = relevantExtraFees.length > 0
       ? relevantExtraFees.map((fee) => {
-          const audience = fee.mode === 'PLAYED' ? 'сыгравшим' : 'всем участникам бюджета';
+          const audience = fee.mode === 'PLAYED'
+            ? 'сыгравшим'
+            : fee.mode === 'ACTIVE' ? 'активным участникам бюджета' : 'всем участникам бюджета';
           const team = fee.team === 'BOTH' ? 'обе команды' : fee.team;
           return `${esc(fee.title)} — ${esc(fee.amount_per_player)} ₽/чел., ${audience}, ${team}`;
         }).join('<br>')

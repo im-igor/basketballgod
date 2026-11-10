@@ -163,6 +163,18 @@ test('режим BUDGET включает всех выбранной коман�
   assert.deepEqual((await getCharges((await save(11)).id)).map((c) => c.extra_amount), [0, 0, 0]);
 });
 
+test('меддопуск активным BLACK начисляется в ближайшем бюджете, включая нового игрока, без дублей', async () => {
+  await createExtraFee({ ...feeInput, title: 'Меддопуск МЛБЛ', mode: 'ACTIVE', league: 'ANY' });
+  const october = await save();
+  assert.deepEqual((await getCharges(october.id)).map((c) => c.extra_amount), [380, 380, 380]);
+
+  await sql(`insert into players (id, name, tg_login, team, active, is_employee)
+    values (5, 'Новый Black', '@p5', 'BLACK', true, true)`);
+  const november = await save(11, 'BLACK', [1, 2, 3, 5]);
+  assert.deepEqual((await getCharges(november.id)).map((c) => c.extra_amount), [0, 0, 0, 380]);
+  assert.equal((await listExtraFeeAllocations()).length, 4);
+});
+
 test('игрок RED за BLACK: 380 в RED, после перехода команды повторно не начисляется', async () => {
   await createExtraFee(feeInput);
   await game(10, [4]);

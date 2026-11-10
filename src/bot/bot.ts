@@ -6,6 +6,11 @@ import { registerPollAnswers } from './pollAnswers.js';
 import { registerPollDraft } from './pollDraft.js';
 import { registerDebtorsPublish } from './debtorsPublish.js';
 import { registerPayMark } from './payMark.js';
+import { registerChatMemberNotifications } from './chatMember.js';
+
+// Telegram по умолчанию не присылает chat_member. Явно запрашиваем все типы,
+// которые обрабатывает приложение, чтобы не потерять команды, callback-и и голоса.
+export const BOT_ALLOWED_UPDATES = ['message', 'poll_answer', 'callback_query', 'chat_member'] as const;
 
 // apiRoot — HTTPS-релей к Bot API, если api.telegram.org заблокирован напрямую.
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
@@ -21,6 +26,7 @@ bot.catch((err) => {
 });
 
 registerPollAnswers(bot);
+registerChatMemberNotifications(bot);
 registerDebtorsPublish(bot);
 registerPayMark(bot);
 registerCommands(bot);

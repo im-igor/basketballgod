@@ -1,7 +1,7 @@
 import { env } from './config/env.js';
 import { migrate } from './db/migrator.js';
 import { closePool } from './db/pool.js';
-import { bot, setupBotCommandsMenu } from './bot/bot.js';
+import { BOT_ALLOWED_UPDATES, bot, setupBotCommandsMenu } from './bot/bot.js';
 import { buildServer } from './http/server.js';
 import { startScheduler } from './scheduler/cron.js';
 import { startBackupScheduler } from './scheduler/backup.js';
@@ -24,7 +24,11 @@ async function main(): Promise<void> {
   if (env.TELEGRAM_USE_WEBHOOK && env.WEBHOOK_DOMAIN && env.WEBHOOK_SECRET) {
     await bot.init();
     const url = `${env.WEBHOOK_DOMAIN}/webhook/${env.WEBHOOK_SECRET}`;
-    await bot.api.setWebhook(url, { secret_token: env.WEBHOOK_SECRET, drop_pending_updates: true });
+    await bot.api.setWebhook(url, {
+      secret_token: env.WEBHOOK_SECRET,
+      drop_pending_updates: true,
+      allowed_updates: BOT_ALLOWED_UPDATES,
+    });
     log.info(`[bot] webhook установлен: ${url}`);
   } else {
     await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(() => undefined);
@@ -32,7 +36,10 @@ async function main(): Promise<void> {
     // Без .catch() отказ getUpdates (напр. 409 Conflict — уже запущен другой инстанс
     // с тем же токеном) остаётся невидимым: процесс жив, админка работает, а бот молчит.
     void bot
-      .start({ onStart: (me) => log.info(`[bot] long polling запущен как @${me.username}`) })
+      .start({
+        allowed_updates: BOT_ALLOWED_UPDATES,
+        onStart: (me) => log.info(`[bot] long polling запущен как @${me.username}`),
+      })
       .catch((e) => log.error('[bot] polling НЕ запущен:', (e as Error).message));
   }
 

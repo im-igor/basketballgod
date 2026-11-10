@@ -23,6 +23,12 @@ export async function getByLogin(tgLogin: string): Promise<Player | null> {
   return rows[0] ?? null;
 }
 
+/** Найти игрока по числовому Telegram ID из системного chat_member-обновления. */
+export async function getByTelegramUserId(tgUserId: number): Promise<Player | null> {
+  const { rows } = await query<Player>('select * from players where tg_user_id = $1', [tgUserId]);
+  return rows[0] ?? null;
+}
+
 export async function upsertPlayer(p: {
   name: string;
   tg_login: string;

@@ -22,6 +22,7 @@ import {
   getByLogin,
   upsertPlayer,
   setActive,
+  setPlayerEmployee,
   setPlayerStatus,
   deletePlayer,
 } from '../db/repos/players.repo.js';
@@ -244,6 +245,7 @@ export async function buildServer(bot: Bot) {
     team: (a, b) => a.team.localeCompare(b.team),
     active: (a, b) => Number(a.active) - Number(b.active),
     status: (a, b) => playerStatusLabel(a).localeCompare(playerStatusLabel(b)),
+    is_employee: (a, b) => Number(a.is_employee) - Number(b.is_employee),
     active_from: (a, b) => isoDate(a.active_from).localeCompare(isoDate(b.active_from)),
     active_to: (a, b) => isoDate(a.active_to).localeCompare(isoDate(b.active_to)),
   };
@@ -274,32 +276,24 @@ export async function buildServer(bot: Bot) {
     search.addEventListener('input', apply);
     hide.addEventListener('change', function(){ localStorage.setItem(KEY, hide.checked ? '1' : '0'); apply(); });
     apply();
-    document.querySelectorAll('[data-player-status]').forEach(function(button){
-      button.addEventListener('click', function(){
-        if (button.dataset.editing === '1') return;
-        button.dataset.editing = '1';
-        var current = button.dataset.status || 'NONE';
-        var login = button.dataset.login || '';
-        var select = document.createElement('select');
-        select.setAttribute('aria-label', 'Статус игрока');
-        [['RED', 'Red'], ['BLACK', 'Black'], ['BOTH', 'Black/Red'], ['NONE', 'Active'], ['INACTIVE', 'Non-active']].forEach(function(item){
-          var option = document.createElement('option'); option.value = item[0]; option.textContent = item[1]; option.selected = item[0] === current; select.appendChild(option);
-        });
-        button.replaceWith(select); select.focus();
-        var finished = false;
-        function finish(save){
-          if (finished) return;
-          finished = true;
-          if (!save || select.value === current) { window.location.reload(); return; }
-          select.disabled = true;
-          fetch('/players/status', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:login, status:select.value}) })
-            .then(function(res){ if (!res.ok) throw new Error('save'); return res.json(); })
-            .then(function(result){ window.location.assign('/players?msg=' + encodeURIComponent(result.message)); })
-            .catch(function(){ window.alert('Не удалось подтвердить сохранение статуса. Проверь значение в таблице.'); window.location.reload(); });
-        }
-        select.addEventListener('change', function(){ finish(true); });
-        select.addEventListener('blur', function(){ finish(false); });
-        select.addEventListener('keydown', function(e){ if(e.key === 'Escape') finish(false); });
+    document.querySelectorAll('[data-player-status]').forEach(function(select){
+      select.addEventListener('change', function(){
+        var previous = select.dataset.status || 'NONE';
+        select.disabled = true;
+        fetch('/players/status', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:select.dataset.login || '', status:select.value}) })
+          .then(function(res){ if (!res.ok) throw new Error('save'); return res.json(); })
+          .then(function(result){ window.location.assign('/players?msg=' + encodeURIComponent(result.message)); })
+          .catch(function(){ select.value = previous; select.disabled = false; window.alert('Не удалось подтвердить сохранение статуса. Проверь значение в таблице.'); });
+      });
+    });
+    document.querySelectorAll('[data-player-employee]').forEach(function(checkbox){
+      checkbox.addEventListener('change', function(){
+        var previous = !checkbox.checked;
+        checkbox.disabled = true;
+        fetch('/players/employee', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:checkbox.dataset.login || '', value:checkbox.checked ? 'yes' : 'no'}) })
+          .then(function(res){ if (!res.ok) throw new Error('save'); return res.json(); })
+          .then(function(){ checkbox.disabled = false; })
+          .catch(function(){ checkbox.checked = previous; checkbox.disabled = false; window.alert('Не удалось сохранить признак «Сотрудник».'); });
       });
     });
   })();`;
@@ -317,7 +311,14 @@ export async function buildServer(bot: Bot) {
         (p) => `<tr data-name="${esc(p.name.toLowerCase())}" data-active="${p.active ? '1' : '0'}">
         <td>${esc(p.name)}</td>
         <td class="muted">${esc(p.tg_login)}</td>
-        <td><button type="button" class="ghost team-cell" data-player-status data-login="${esc(p.tg_login)}" data-status="${playerStatus(p)}" title="Нажми, чтобы изменить статус">${p.active ? teamBadge(p.team) : '<span class="badge no">Non-active</span>'}</button></td>
+        <td><select class="player-status-select" data-player-status data-login="${esc(p.tg_login)}" data-status="${playerStatus(p)}" aria-label="Статус игрока ${esc(p.name)}">
+          <option value="RED" ${playerStatus(p) === 'RED' ? 'selected' : ''}>Red</option>
+          <option value="BLACK" ${playerStatus(p) === 'BLACK' ? 'selected' : ''}>Black</option>
+          <option value="BOTH" ${playerStatus(p) === 'BOTH' ? 'selected' : ''}>Black/Red</option>
+          <option value="NONE" ${playerStatus(p) === 'NONE' ? 'selected' : ''}>Active</option>
+          <option value="INACTIVE" ${playerStatus(p) === 'INACTIVE' ? 'selected' : ''}>Non-active</option>
+        </select></td>
+        <td><label class="player-employee-toggle" title="Сотрудник"><input type="checkbox" data-player-employee data-login="${esc(p.tg_login)}" ${p.is_employee ? 'checked' : ''} aria-label="Сотрудник: ${esc(p.name)}"><span>Сотрудник</span></label></td>
         <td>${esc(isoToRu(p.active_from))}</td>
         <td>${esc(isoToRu(p.active_to))}</td>
         <td class="right">
@@ -353,6 +354,7 @@ export async function buildServer(bot: Bot) {
           ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
           ${sortHeader('tg', 'tg_login', '/players', { sort, dir })}
           ${sortHeader('Статус', 'status', '/players', { sort, dir })}
+          ${sortHeader('Сотрудник', 'is_employee', '/players', { sort, dir })}
           ${sortHeader('С', 'active_from', '/players', { sort, dir })}
           ${sortHeader('По', 'active_to', '/players', { sort, dir })}
           <th></th>
@@ -428,6 +430,14 @@ export async function buildServer(bot: Bot) {
           : tags.absent ? 'Статус сохранён. Тег не обновлён: игрока нет среди обычных участников общего чата'
             : 'Статус сохранён, но Telegram не дал обновить тег. Проверь права бота и повтори через «Обновить теги Telegram»';
     return { saved: true, tagUpdated: tags.tagged > 0, message };
+  });
+
+  app.post('/players/employee', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    if (!['yes', 'no'].includes(b.value ?? '')) return reply.code(400).send('Неверное значение');
+    const player = b.login ? await setPlayerEmployee(b.login, b.value === 'yes') : null;
+    if (!player) return reply.code(404).send('Игрок не найден');
+    return { saved: true, isEmployee: player.is_employee };
   });
 
   app.post('/players/active', async (req, reply) => {

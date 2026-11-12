@@ -153,6 +153,10 @@ th { color:var(--muted); font-weight:650; font-size:12px; text-transform:upperca
 .team-cell { min-height:0; padding:0; border:0; background:transparent; cursor:pointer; }
 .team-cell:hover { background:transparent; border-color:transparent; transform:none; }
 .team-cell .badge { pointer-events:none; }
+.player-status-select { width:auto; min-width:118px; min-height:34px; padding:6px 30px 6px 9px; }
+.player-employee-toggle { display:inline-flex; align-items:center; gap:7px; margin:0; color:var(--fg); cursor:pointer; white-space:nowrap; }
+.player-employee-toggle input { width:auto; margin:0; }
+.player-employee-toggle span { display:none; }
 input,select,textarea,button { font:inherit; }
 input,select,textarea { background:var(--field); color:var(--fg); border:1px solid var(--field-line); border-radius:9px; padding:9px 11px; width:100%; min-height:40px; outline:none; transition:border-color .15s,box-shadow .15s,background .15s; }
 textarea { resize:vertical; }
@@ -227,10 +231,10 @@ button.danger:hover { filter:brightness(.92); }
   .pay-table th:nth-child(5), .pay-table td:nth-child(5),
   .pay-table th:nth-child(6), .pay-table td:nth-child(6),
   .pay-table th:nth-child(8), .pay-table td:nth-child(8){ display:none; }
-  /* Таблица игроков: ФИО(1), единый Статус(3), действия(6). */
+  /* Таблица игроков: ФИО(1), Статус(3), Сотрудник(4), действия(7). */
   .players-table th:nth-child(2), .players-table td:nth-child(2),
-  .players-table th:nth-child(4), .players-table td:nth-child(4),
-  .players-table th:nth-child(5), .players-table td:nth-child(5){ display:none; }
+  .players-table th:nth-child(5), .players-table td:nth-child(5),
+  .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
   /* Таблица игр: оставляем Соперник(3), Тренер(6), Судья(7) и удаление(8),
      чтобы тумблеры и кнопка были доступны в портретной ориентации. */
   .games-table th:nth-child(1), .games-table td:nth-child(1),

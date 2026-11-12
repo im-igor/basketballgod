@@ -131,7 +131,11 @@ test('одна колонка статуса меняет заявку и акт
     const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
     const cookies = { bbg_auth: login.cookies[0]!.value };
     const page = parse((await app.inject({ method: 'GET', url: '/players', cookies })).body);
-    assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'С', 'По', '']);
+    assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'Сотрудник', 'С', 'По', '']);
+    const statusSelect = page.querySelector('[data-login="@p1"][data-player-status]')!;
+    assert.equal(statusSelect.tagName, 'SELECT');
+    assert.equal(statusSelect.getAttribute('data-status'), 'BLACK');
+    assert.equal(page.querySelector('[data-login="@p1"][data-player-employee]')!.hasAttribute('checked'), true);
     const change = (status: string) => app.inject({ method: 'POST', url: '/players/status', cookies, payload: { login: '@p1', status } });
     const saved = await change('NONE');
     assert.equal(saved.statusCode, 200);
@@ -148,7 +152,7 @@ test('одна колонка статуса меняет заявку и акт
     assert.equal(player.active, false);
     assert.ok(player.active_to);
     const inactivePage = parse((await app.inject({ method: 'GET', url: '/players', cookies })).body);
-    assert.equal(inactivePage.querySelector('[data-login="@p1"][data-player-status]')!.textContent, 'Non-active');
+    assert.equal(inactivePage.querySelector('[data-login="@p1"][data-player-status] option[selected]')!.textContent, 'Non-active');
     assert.equal((await change('BOTH')).statusCode, 200);
     player = (await getByLogin('@p1'))!;
     assert.equal(player.team, 'BOTH');
@@ -172,6 +176,11 @@ test('одна колонка статуса меняет заявку и акт
     const missingId = await app.inject({ method: 'POST', url: '/players/status', cookies, payload: { login: '@p2', status: 'NONE' } });
     assert.equal(missingId.json().saved, true);
     assert.match(missingId.json().message, /Telegram ID/);
+    const employee = await app.inject({ method: 'POST', url: '/players/employee', cookies, payload: { login: '@p1', value: 'no' } });
+    assert.equal(employee.statusCode, 200);
+    assert.equal(employee.json().isEmployee, false);
+    assert.equal((await getByLogin('@p1'))!.is_employee, false);
+    assert.equal((await app.inject({ method: 'POST', url: '/players/employee', cookies, payload: { login: '@p1', value: 'invalid' } })).statusCode, 400);
   } finally { await app.close(); }
 });
 

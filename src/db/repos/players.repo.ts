@@ -109,6 +109,17 @@ export async function setPlayerStatus(tgLogin: string, status: PlayerStatus): Pr
   return rows[0] ?? null;
 }
 
+/** Меняем только признак сотрудника, не перезаписывая остальные поля игрока. */
+export async function setPlayerEmployee(tgLogin: string, isEmployee: boolean): Promise<Player | null> {
+  const { rows } = await query<Player>(
+    `update players set is_employee = $2, updated_at = now()
+     where lower(tg_login) = lower($1)
+     returning *`,
+    [tgLogin, isEmployee],
+  );
+  return rows[0] ?? null;
+}
+
 export async function linkTelegramUser(
   tgLogin: string,
   tgUserId: number,

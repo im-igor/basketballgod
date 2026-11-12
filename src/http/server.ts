@@ -334,7 +334,7 @@ export async function buildServer(bot: Bot) {
           Кнопка справа выгружает состав во вкладку «Players» Google-таблицы (чтобы показать человеку);
           обратно таблица не читается.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${syncButtons('players')}
-          <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате? Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
+          <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате? Активные получат Red, Black или Black/Red, неактивные — non-active. Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
         </div>
       </div></div>
       <details class="card"><summary style="cursor:pointer;font-weight:600;font-size:1.05rem">Добавить / обновить игрока</summary>

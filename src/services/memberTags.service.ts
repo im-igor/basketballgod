@@ -4,7 +4,8 @@ import { listPlayers } from '../db/repos/players.repo.js';
 import type { Player, PlayerTeam } from '../db/types.js';
 import { log } from '../util/logger.js';
 
-export function memberTag(team: PlayerTeam): string {
+export function memberTag(team: PlayerTeam, active = true): string {
+  if (!active) return 'non-active';
   return team === 'BOTH' ? 'Black/Red' : team === 'RED' ? 'Red' : 'Black';
 }
 
@@ -37,7 +38,7 @@ export async function syncMemberTags(api: Api, players?: Player[]): Promise<Memb
         result.absent++;
         continue;
       }
-      await api.setChatMemberTag(env.collectionChat.chatId, player.tg_user_id, memberTag(player.team));
+      await api.setChatMemberTag(env.collectionChat.chatId, player.tg_user_id, memberTag(player.team, player.active));
       result.tagged++;
     } catch (err) {
       result.errors++;

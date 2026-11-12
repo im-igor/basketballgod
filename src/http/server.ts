@@ -16,11 +16,13 @@ import { registerExtraFeeRoutes } from './extraFees.js';
 import { registerBackupRoutes } from './backups.js';
 import { normalizeLogin, parseBudgetArgs } from '../util/args.js';
 import { computeActivityDates, reconcileActivityDates } from '../domain/activity.js';
+import { isPlayerStatus, playerStatus, playerStatusLabel } from '../domain/playerStatus.js';
 import {
   listPlayers,
   getByLogin,
   upsertPlayer,
   setActive,
+  setPlayerStatus,
   deletePlayer,
 } from '../db/repos/players.repo.js';
 import { getTariffs, updateTariffs } from '../db/repos/tariffs.repo.js';
@@ -220,7 +222,7 @@ export async function buildServer(bot: Bot) {
       <div class="row">
         <div><label>ФИО</label><input name="name" value="${esc(p?.name ?? '')}" required></div>
         <div><label>tg_login</label><input name="tg_login" value="${esc(p?.tg_login ?? '')}" placeholder="@login" required></div>
-        <div><label>Команда</label><select name="team"><option value="RED" ${sel('RED')}>Red</option><option value="BLACK" ${sel('BLACK')}>Black</option><option value="BOTH" ${sel('BOTH')}>Black/Red</option></select></div>
+        <div><label>Команда</label><select name="team"><option value="RED" ${sel('RED')}>Red</option><option value="BLACK" ${sel('BLACK')}>Black</option><option value="BOTH" ${sel('BOTH')}>Black/Red</option><option value="NONE" ${sel('NONE')}>Active (без заявки)</option></select></div>
       </div>
       <div class="row" style="margin-top:8px">
         <div style="flex:0"><label>Сотрудник</label><input type="checkbox" name="is_employee" value="yes" ${chk(p?.is_employee ?? false)} style="width:auto"></div>
@@ -241,6 +243,7 @@ export async function buildServer(bot: Bot) {
     tg_login: (a, b) => a.tg_login.localeCompare(b.tg_login, 'ru'),
     team: (a, b) => a.team.localeCompare(b.team),
     active: (a, b) => Number(a.active) - Number(b.active),
+    status: (a, b) => playerStatusLabel(a).localeCompare(playerStatusLabel(b)),
     active_from: (a, b) => isoDate(a.active_from).localeCompare(isoDate(b.active_from)),
     active_to: (a, b) => isoDate(a.active_to).localeCompare(isoDate(b.active_to)),
   };
@@ -271,23 +274,27 @@ export async function buildServer(bot: Bot) {
     search.addEventListener('input', apply);
     hide.addEventListener('change', function(){ localStorage.setItem(KEY, hide.checked ? '1' : '0'); apply(); });
     apply();
-    document.querySelectorAll('[data-player-team]').forEach(function(button){
+    document.querySelectorAll('[data-player-status]').forEach(function(button){
       button.addEventListener('click', function(){
         if (button.dataset.editing === '1') return;
         button.dataset.editing = '1';
-        var current = button.dataset.team || 'BLACK';
+        var current = button.dataset.status || 'NONE';
         var login = button.dataset.login || '';
         var select = document.createElement('select');
-        select.setAttribute('aria-label', 'Команда игрока');
-        [['RED', 'Red'], ['BLACK', 'Black'], ['BOTH', 'Black/Red']].forEach(function(item){
+        select.setAttribute('aria-label', 'Статус игрока');
+        [['RED', 'Red'], ['BLACK', 'Black'], ['BOTH', 'Black/Red'], ['NONE', 'Active'], ['INACTIVE', 'Non-active']].forEach(function(item){
           var option = document.createElement('option'); option.value = item[0]; option.textContent = item[1]; option.selected = item[0] === current; select.appendChild(option);
         });
         button.replaceWith(select); select.focus();
+        var finished = false;
         function finish(save){
+          if (finished) return;
+          finished = true;
           if (!save || select.value === current) { window.location.reload(); return; }
-          fetch('/players/team', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:login, team:select.value}) })
+          select.disabled = true;
+          fetch('/players/status', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:login, status:select.value}) })
             .then(function(res){ if (!res.ok) throw new Error('save'); window.location.reload(); })
-            .catch(function(){ window.alert('Не удалось сохранить команду игрока'); window.location.reload(); });
+            .catch(function(){ window.alert('Не удалось сохранить статус игрока'); window.location.reload(); });
         }
         select.addEventListener('change', function(){ finish(true); });
         select.addEventListener('blur', function(){ finish(false); });
@@ -309,17 +316,11 @@ export async function buildServer(bot: Bot) {
         (p) => `<tr data-name="${esc(p.name.toLowerCase())}" data-active="${p.active ? '1' : '0'}">
         <td>${esc(p.name)}</td>
         <td class="muted">${esc(p.tg_login)}</td>
-        <td><button type="button" class="ghost team-cell" data-player-team data-login="${esc(p.tg_login)}" data-team="${esc(p.team)}" title="Нажми, чтобы изменить команду">${teamBadge(p.team)}</button></td>
-        <td>${activeBadge(p.active)}</td>
+        <td><button type="button" class="ghost team-cell" data-player-status data-login="${esc(p.tg_login)}" data-status="${playerStatus(p)}" title="Нажми, чтобы изменить статус">${p.active ? teamBadge(p.team) : '<span class="badge no">Non-active</span>'}</button></td>
         <td>${esc(isoToRu(p.active_from))}</td>
         <td>${esc(isoToRu(p.active_to))}</td>
         <td class="right">
           <a href="/players/edit?login=${encodeURIComponent(p.tg_login)}" style="margin-right:8px">Изменить</a>
-          <form class="inline" method="post" action="/players/active">
-            <input type="hidden" name="login" value="${esc(p.tg_login)}">
-            <input type="hidden" name="value" value="${p.active ? 'no' : 'yes'}">
-            <button class="ghost">${p.active ? 'Деактивировать' : 'Активировать'}</button>
-          </form>
           <form class="inline" method="post" action="/players/delete" onsubmit="return confirm('Удалить игрока из БД?')">
             <input type="hidden" name="login" value="${esc(p.tg_login)}">
             <button class="ghost">✕</button>
@@ -334,7 +335,7 @@ export async function buildServer(bot: Bot) {
           Кнопка справа выгружает состав во вкладку «Players» Google-таблицы (чтобы показать человеку);
           обратно таблица не читается.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${syncButtons('players')}
-          <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате? Активные получат Red, Black или Black/Red, неактивные — non-active. Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
+          <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате: Red, Black, Black/Red, Active или Non-active? Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
         </div>
       </div></div>
       <details class="card"><summary style="cursor:pointer;font-weight:600;font-size:1.05rem">Добавить / обновить игрока</summary>
@@ -350,8 +351,7 @@ export async function buildServer(bot: Bot) {
         <thead><tr>
           ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
           ${sortHeader('tg', 'tg_login', '/players', { sort, dir })}
-          ${sortHeader('Команда', 'team', '/players', { sort, dir })}
-          ${sortHeader('Статус', 'active', '/players', { sort, dir })}
+          ${sortHeader('Статус', 'status', '/players', { sort, dir })}
           ${sortHeader('С', 'active_from', '/players', { sort, dir })}
           ${sortHeader('По', 'active_to', '/players', { sort, dir })}
           <th></th>
@@ -376,7 +376,7 @@ export async function buildServer(bot: Bot) {
     const b = req.body as Record<string, string>;
     const name = (b.name ?? '').trim();
     const tgLoginRaw = (b.tg_login ?? '').trim();
-    if (!name || !tgLoginRaw || !['RED', 'BLACK', 'BOTH'].includes(b.team ?? '')) {
+    if (!name || !tgLoginRaw || !['RED', 'BLACK', 'BOTH', 'NONE'].includes(b.team ?? '')) {
       return redirect(reply, '/players', 'Заполни ФИО, tg_login и команду');
     }
     const tgLogin = normalizeLogin(tgLoginRaw);
@@ -407,10 +407,18 @@ export async function buildServer(bot: Bot) {
   // Быстрое редактирование ячейки «Команда» в списке игроков.
   app.post('/players/team', async (req, reply) => {
     const b = req.body as Record<string, string>;
-    if (!['RED', 'BLACK', 'BOTH'].includes(b.team ?? '')) return reply.code(400).send('Неверная команда');
+    if (!['RED', 'BLACK', 'BOTH', 'NONE'].includes(b.team ?? '')) return reply.code(400).send('Неверная команда');
     const player = b.login ? await getByLogin(b.login) : null;
     if (!player) return reply.code(404).send('Игрок не найден');
     await upsertPlayer({ ...player, team: b.team as PlayerTeam });
+    return reply.code(204).send();
+  });
+
+  app.post('/players/status', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    if (!isPlayerStatus(b.status)) return reply.code(400).send('Неверный статус');
+    const player = b.login ? await setPlayerStatus(b.login, b.status) : null;
+    if (!player) return reply.code(404).send('Игрок не найден');
     return reply.code(204).send();
   });
 

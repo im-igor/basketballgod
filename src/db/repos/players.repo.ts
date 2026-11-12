@@ -1,5 +1,6 @@
 import { query } from '../pool.js';
-import type { Player, PlayerTeam, Team } from '../types.js';
+import type { Player, PlayerStatus, PlayerTeam, Team } from '../types.js';
+import { computeActivityDates } from '../../domain/activity.js';
 
 export async function listPlayers(team?: Team): Promise<Player[]> {
   const { rows } = team
@@ -87,6 +88,23 @@ export async function setActive(
      where lower(tg_login) = lower($1)
      returning *`,
     [tgLogin, active, activeFrom, activeTo],
+  );
+  return rows[0] ?? null;
+}
+
+/** Меняем команду и активность атомарно; снятие активности сохраняет заявку. */
+export async function setPlayerStatus(tgLogin: string, status: PlayerStatus): Promise<Player | null> {
+  const active = status !== 'INACTIVE';
+  const dates = computeActivityDates(active);
+  const { rows } = await query<Player>(
+    `update players set
+       team = case when $2 = 'INACTIVE' then team else $2 end,
+       active_from = case when not active and $3 then $4::date else active_from end,
+       active_to = case when $3 then null when active then $5::date else active_to end,
+       active = $3,
+       updated_at = now()
+     where lower(tg_login) = lower($1) returning *`,
+    [tgLogin, status, active, dates.active_from, dates.active_to],
   );
   return rows[0] ?? null;
 }

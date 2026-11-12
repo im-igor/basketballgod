@@ -52,7 +52,7 @@ function toRow(p: SheetPlayer, num: number): string[] {
     p.name,
     p.tg_login,
     p.is_employee ? 'TRUE' : 'FALSE',
-    p.team === 'BOTH' ? 'Black/Red' : p.team[0] + p.team.slice(1).toLowerCase(),
+    p.team === 'NONE' ? 'Active' : p.team === 'BOTH' ? 'Black/Red' : p.team[0] + p.team.slice(1).toLowerCase(),
     p.active ? 'YES' : 'NO',
     isoToRu(p.active_from),
     isoToRu(p.active_to),

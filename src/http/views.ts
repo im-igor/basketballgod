@@ -217,8 +217,8 @@ button.danger:hover { filter:brightness(.92); }
   .card { padding:15px; border-radius:12px; overflow-x:auto; }
   button { min-height:38px; }
   /* Обычные таблицы (игроки и т.п.): прячем второстепенные колонки 4+. */
-  table:not(.pay-table):not(.schedule-table) th:nth-child(n+4),
-  table:not(.pay-table):not(.schedule-table) td:nth-child(n+4){ display:none; }
+  table:not(.pay-table):not(.schedule-table):not(.players-table) th:nth-child(n+4),
+  table:not(.pay-table):not(.schedule-table):not(.players-table) td:nth-child(n+4){ display:none; }
   /* Таблица оплат: на узком экране оставляем ФИО(1), Итого(7) и кнопку(9),
      иначе кнопка «Перевёл» уезжает за край и недоступна в портретной ориентации. */
   .pay-table th:nth-child(2), .pay-table td:nth-child(2),
@@ -227,12 +227,10 @@ button.danger:hover { filter:brightness(.92); }
   .pay-table th:nth-child(5), .pay-table td:nth-child(5),
   .pay-table th:nth-child(6), .pay-table td:nth-child(6),
   .pay-table th:nth-child(8), .pay-table td:nth-child(8){ display:none; }
-  /* Таблица игроков: оставляем ФИО(1), Статус(4) и колонку действий(7)
-     (Изменить / Активировать / удалить), скрываем tg(2), Команду(3), даты(5,6). */
+  /* Таблица игроков: ФИО(1), единый Статус(3), действия(6). */
   .players-table th:nth-child(2), .players-table td:nth-child(2),
-  .players-table th:nth-child(3), .players-table td:nth-child(3),
-  .players-table th:nth-child(5), .players-table td:nth-child(5),
-  .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
+  .players-table th:nth-child(4), .players-table td:nth-child(4),
+  .players-table th:nth-child(5), .players-table td:nth-child(5){ display:none; }
   /* Таблица игр: оставляем Соперник(3), Тренер(6), Судья(7) и удаление(8),
      чтобы тумблеры и кнопка были доступны в портретной ориентации. */
   .games-table th:nth-child(1), .games-table td:nth-child(1),
@@ -333,6 +331,7 @@ export function progressBar(paid: number, total: number): string {
 }
 
 export function teamBadge(team: string): string {
+  if (team === 'NONE') return '<span class="badge yes">Active</span>';
   if (team === 'BOTH') return '<span class="badge both">Black/Red</span>';
   if (team === 'COMMON') return '<span class="badge both">Общий</span>';
   const cls = team === 'RED' ? 'red' : 'black';

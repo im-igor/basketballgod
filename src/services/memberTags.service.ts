@@ -3,10 +3,10 @@ import { env } from '../config/env.js';
 import { listPlayers } from '../db/repos/players.repo.js';
 import type { Player, PlayerTeam } from '../db/types.js';
 import { log } from '../util/logger.js';
+import { playerStatusLabel } from '../domain/playerStatus.js';
 
 export function memberTag(team: PlayerTeam, active = true): string {
-  if (!active) return 'non-active';
-  return team === 'BOTH' ? 'Black/Red' : team === 'RED' ? 'Red' : 'Black';
+  return playerStatusLabel({ team, active });
 }
 
 export interface MemberTagSyncResult {

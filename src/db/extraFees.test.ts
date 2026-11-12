@@ -14,6 +14,8 @@ import { calculateAndSaveMonthlyPayout } from '../services/monthlyPayout.service
 import { renderBudgetFromDb, sendBudgetToChat } from '../services/notify.service.js';
 import { buildServer } from '../http/server.js';
 import type { BudgetDetails, Team } from './types.js';
+import { getByLogin } from './repos/players.repo.js';
+import { parse } from 'node-html-parser';
 import type { Bot } from 'grammy';
 
 const db = new PGlite();
@@ -90,6 +92,57 @@ beforeEach(async () => {
   await db.exec(`insert into players (id, name, tg_login, team, active, is_employee) values
     (1, 'Игрок 1', '@p1', 'BLACK', true, true), (2, 'Игрок 2', '@p2', 'BLACK', true, true),
     (3, 'Игрок 3', '@p3', 'BLACK', true, true), (4, 'Игрок 4', '@p4', 'RED', true, true)`);
+});
+
+test('Active без заявки входит в общий бюджет один раз и получает только общие разовые сборы', async () => {
+  await db.exec("update players set team='NONE' where id=1; update players set team='BOTH' where id=2; update players set active=false where id=3");
+  for (const team of ['RED', 'BLACK', 'BOTH'] as const) await createExtraFee({
+    title: `Сбор ${team}`, amount_per_player: 100, team, mode: 'BUDGET',
+    league: 'ANY', start_period: 202612, end_period: null,
+  });
+  const built = await buildAndSaveBudgets(12, 2026);
+  assert.equal(built.length, 1);
+  const charges = await getCharges(built[0]!.budgetId);
+  assert.equal(charges.length, 3);
+  assert.equal(built[0]!.result.details.total_players, 3);
+  const active = charges.find(c => c.player_id === 1)!;
+  assert.equal(active.team_badge, 'NONE');
+  assert.ok(Number(active.base_amount) > 0);
+  assert.deepEqual(active.extra_items.map(item => item.title), ['Сбор BOTH']);
+  assert.equal(Number(charges.find(c => c.player_id === 2)!.extra_amount), 300);
+  assert.equal(charges.some(c => c.player_id === 3), false);
+});
+
+test('одна колонка статуса меняет заявку и активность, сохраняя Telegram ID и даты при смене команды', async () => {
+  await db.exec("update players set tg_user_id=123,active_from='2026-10-01' where id=1");
+  const app = await buildServer({ api: {} } as Bot);
+  try {
+    const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
+    const cookies = { bbg_auth: login.cookies[0]!.value };
+    const page = parse((await app.inject({ method: 'GET', url: '/players', cookies })).body);
+    assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'С', 'По', '']);
+    const change = (status: string) => app.inject({ method: 'POST', url: '/players/status', cookies, payload: { login: '@p1', status } });
+    assert.equal((await change('NONE')).statusCode, 204);
+    let player = (await getByLogin('@p1'))!;
+    assert.equal(player.team, 'NONE');
+    assert.equal(player.active, true);
+    assert.equal(player.tg_user_id, 123);
+    assert.equal(new Date(player.active_from!).toISOString().slice(0, 10), '2026-10-01');
+    assert.equal((await change('INACTIVE')).statusCode, 204);
+    player = (await getByLogin('@p1'))!;
+    assert.equal(player.team, 'NONE');
+    assert.equal(player.active, false);
+    assert.ok(player.active_to);
+    const inactivePage = parse((await app.inject({ method: 'GET', url: '/players', cookies })).body);
+    assert.equal(inactivePage.querySelector('[data-login="@p1"][data-player-status]')!.textContent, 'Non-active');
+    assert.equal((await change('BOTH')).statusCode, 204);
+    player = (await getByLogin('@p1'))!;
+    assert.equal(player.team, 'BOTH');
+    assert.equal(player.active, true);
+    assert.equal(player.active_to, null);
+    assert.equal((await change('invalid')).statusCode, 400);
+    assert.equal((await getByLogin('@p1'))!.team, 'BOTH');
+  } finally { await app.close(); }
 });
 
 test('октябрьская отмена уменьшает начисления и отдельно зачитывается в ноябрьском сборе', async () => {

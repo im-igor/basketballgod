@@ -49,7 +49,7 @@ export async function saveBudget(input: {
     for (const c of input.charges) {
       const extraItems = extraFeesForPlayer({
         playerId: c.player_id, login: c.tg_login,
-        teams: c.team_badge === 'BOTH' ? ['RED', 'BLACK'] : c.team_badge ? [c.team_badge] : input.team === 'COMMON' ? [] : [input.team],
+        teams: c.team_badge === 'NONE' ? [] : c.team_badge === 'BOTH' ? ['RED', 'BLACK'] : c.team_badge ? [c.team_badge] : input.team === 'COMMON' ? [] : [input.team],
         budgetId: budget.id, period: input.year * 100 + input.month, fees, allocations, games,
       });
       const extraAmount = sumMoney(extraItems.map((item) => item.amount));

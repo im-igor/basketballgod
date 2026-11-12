@@ -1,6 +1,7 @@
 export type Team = 'RED' | 'BLACK';
-/** Заявка игрока. BOTH показывается в интерфейсе как Black/Red. */
-export type PlayerTeam = Team | 'BOTH';
+/** Заявка игрока: BOTH — обе команды, NONE — без командной заявки. */
+export type PlayerTeam = Team | 'BOTH' | 'NONE';
+export type PlayerStatus = PlayerTeam | 'INACTIVE';
 /** COMMON используется только для новых общих месячных бюджетов. */
 export type BudgetTeam = Team | 'COMMON';
 

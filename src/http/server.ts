@@ -293,8 +293,9 @@ export async function buildServer(bot: Bot) {
           if (!save || select.value === current) { window.location.reload(); return; }
           select.disabled = true;
           fetch('/players/status', { method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({login:login, status:select.value}) })
-            .then(function(res){ if (!res.ok) throw new Error('save'); window.location.reload(); })
-            .catch(function(){ window.alert('Не удалось сохранить статус игрока'); window.location.reload(); });
+            .then(function(res){ if (!res.ok) throw new Error('save'); return res.json(); })
+            .then(function(result){ window.location.assign('/players?msg=' + encodeURIComponent(result.message)); })
+            .catch(function(){ window.alert('Не удалось подтвердить сохранение статуса. Проверь значение в таблице.'); window.location.reload(); });
         }
         select.addEventListener('change', function(){ finish(true); });
         select.addEventListener('blur', function(){ finish(false); });
@@ -419,7 +420,14 @@ export async function buildServer(bot: Bot) {
     if (!isPlayerStatus(b.status)) return reply.code(400).send('Неверный статус');
     const player = b.login ? await setPlayerStatus(b.login, b.status) : null;
     if (!player) return reply.code(404).send('Игрок не найден');
-    return reply.code(204).send();
+    const tags = await syncMemberTags(api, [player]);
+    const message = tags.tagged
+      ? 'Статус сохранён, тег в Telegram обновлён'
+      : tags.skippedAdmins ? 'Статус сохранён. Титул администратора Telegram оставлен без изменений'
+        : tags.missingId ? 'Статус сохранён. Тег не обновлён: бот ещё не знает Telegram ID игрока. Игроку нужно нажать Start у бота'
+          : tags.absent ? 'Статус сохранён. Тег не обновлён: игрока нет среди обычных участников общего чата'
+            : 'Статус сохранён, но Telegram не дал обновить тег. Проверь права бота и повтори через «Обновить теги Telegram»';
+    return { saved: true, tagUpdated: tags.tagged > 0, message };
   });
 
   app.post('/players/active', async (req, reply) => {

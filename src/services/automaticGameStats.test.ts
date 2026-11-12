@@ -264,17 +264,20 @@ test('декабрьский бюджет собирает базовую час
   const scheduled = await seedSchedule();
   await db.query("update scheduled_games set game_date='2026-11-01' where id=$1",[scheduled.id]);
   const built = await buildAndSaveBudgets(12,2026);
-  assert.equal(built.length,2);
+  assert.equal(built.length,1);
+  assert.equal(built[0]!.team,'COMMON');
   assert.equal(await countGames(),0);
   const saved = (await db.query<{ details: { game_stats_warnings: string[] } }>('select details from budgets')).rows;
-  assert.ok(saved.every((b) => b.details.game_stats_warnings.some((w) => w.includes('Матч ещё не завершился'))));
+  // В зависимости от текущего дня матч бывает ещё не сыгран либо уже требует
+  // сверки протокола; в обоих случаях публикация до пересборки запрещена.
+  assert.ok(saved.every((b) => b.details.game_stats_warnings.length > 0));
   const charges = (await db.query<{ base_amount: string; game_amount: string; amount: string }>('select * from charges')).rows;
   assert.equal(charges.length,5);
   assert.ok(charges.every((c) => Number(c.base_amount)>0 && Number(c.game_amount)===0 && Number(c.amount)===Number(c.base_amount)));
   await db.exec("update budgets set details=jsonb_set(details,'{correction,reviewed}','true')");
   let sends = 0;
   const api = { sendMessage: async () => { sends++; return { message_id:99 }; } } as never;
-  await assert.rejects(sendBudgetToChat(api,built.find((b) => b.team==='BLACK')!.budgetId),/Статистика игр не готова/);
+  await assert.rejects(sendBudgetToChat(api,built[0]!.budgetId),/Статистика игр не готова/);
   assert.equal(sends,0);
 });
 

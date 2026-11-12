@@ -13,15 +13,15 @@ import {
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
-import { sharedCoachBudgetsReady, usesSharedCoach } from '../domain/budget.js';
+import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach } from '../domain/budget.js';
 import { gamesForPlayers } from '../domain/gamefee.js';
-import { chatStatusesByLogin } from './chatCheck.service.js';
+import { chatStatusesByLogin, checkCollectionChatMembership } from './chatCheck.service.js';
 import { monthLabel } from '../domain/dates.js';
 import { monthRange } from '../domain/dates.js';
 import { calendarFingerprint, correctionNote, isLegacyAutoCorrectionNote, snapshotEvents } from '../domain/budgetCorrections.js';
 import { listEvents } from '../google/calendar.js';
 import { log } from '../util/logger.js';
-import type { BudgetDetails, MonthlyPayout, Team } from '../db/types.js';
+import type { BudgetDetails, BudgetTeam, MonthlyPayout, Team } from '../db/types.js';
 import { updateBudgetCorrection } from './budget.service.js';
 import { buildMonthlyPayoutMessage } from '../domain/payouts.js';
 
@@ -37,7 +37,7 @@ export async function renderBudgetFromDb(
   budgetId: number,
   opts: { api?: Api; savedChatStatus?: boolean } = {},
 ): Promise<{
-  team: Team;
+  team: BudgetTeam;
   chatId: number | null;
   messageId: number | null;
   text: string;
@@ -52,7 +52,10 @@ export async function renderBudgetFromDb(
   const chatStatuses = opts.savedChatStatus
     ? new Map(Object.entries(budget.details.chat_check?.statuses ?? {}))
     : opts.api
-      ? await chatStatusesByLogin(opts.api, budget.team, charges.map((c) => c.tg_login))
+      ? budget.team === 'COMMON'
+        ? new Map((await checkCollectionChatMembership(opts.api, charges.map((c) => c.tg_login)))
+          .map((check) => [check.tg_login.toLowerCase(), check.status]))
+        : await chatStatusesByLogin(opts.api, budget.team, charges.map((c) => c.tg_login))
       : new Map();
   const views: ChargeView[] = charges.map((c) => ({
     name: c.name,
@@ -131,7 +134,7 @@ async function publishBudgetToChat(api: Api, budgetId: number): Promise<void> {
       }
     }
   }
-  if (usesSharedCoach(budget.month, budget.year)) {
+  if (budget.team !== 'COMMON' && usesSharedCoach(budget.month, budget.year)) {
     const other = await getBudget(budget.team === 'RED' ? 'BLACK' : 'RED', budget.month, budget.year);
     const red = budget.team === 'RED' ? budget : other;
     const black = budget.team === 'BLACK' ? budget : other;
@@ -151,10 +154,12 @@ async function publishBudgetToChat(api: Api, budgetId: number): Promise<void> {
         throw new Error('Начисления за игры изменились. Пересобери бюджет');
       }
     }
-    const allCharges = (await Promise.all((['RED', 'BLACK'] as Team[]).map(async (team) => {
-      const b = await getBudget(team, budget!.month, budget!.year);
-      return b ? getCharges(b.id) : [];
-    }))).flat();
+    const allCharges = budget.team === 'COMMON'
+      ? charges
+      : (await Promise.all((['RED', 'BLACK'] as Team[]).map(async (team) => {
+        const b = await getBudget(team, budget!.month, budget!.year);
+        return b ? getCharges(b.id) : [];
+      }))).flat();
     for (const game of games) {
       if (game.participants.some((p) => allCharges.filter((c) => c.player_id === p.matched_player_id).length !== 1)) {
         throw new Error('Не все участники игр включены в бюджет ровно один раз. Пересобери бюджет');
@@ -164,7 +169,7 @@ async function publishBudgetToChat(api: Api, budgetId: number): Promise<void> {
   const rendered = await renderBudgetFromDb(budgetId);
   if (!rendered) throw new Error(`Бюджет #${budgetId} не найден`);
   if (rendered.messageId != null) throw new Error('Сбор уже опубликован в чате команды');
-  const chat = env.chats[rendered.team];
+  const chat = rendered.team === 'COMMON' ? env.collectionChat : env.chats[rendered.team];
   const msg = await api.sendMessage(chat.chatId, rendered.text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
@@ -205,7 +210,8 @@ export async function sendBudgetDraftsByMonth(
   year: number,
 ): Promise<{ sent: number }> {
   let sent = 0;
-  for (const team of TEAMS) {
+  const teams: BudgetTeam[] = usesCommonBudget(month, year) ? ['COMMON'] : TEAMS;
+  for (const team of teams) {
     const budget = await getBudget(team, month, year);
     if (!budget || !budget.details) continue;
     const rendered = await renderBudgetFromDb(budget.id);
@@ -248,7 +254,7 @@ export async function refreshBudgetMessage(api: Api, budgetId: number): Promise<
 /** Собрать текст напоминания должникам и их число по бюджету (черновику или опубликованному). */
 async function buildDebtorsDraft(
   budgetId: number,
-): Promise<{ team: Team; text: string; count: number } | null> {
+): Promise<{ team: BudgetTeam; text: string; count: number } | null> {
   const budget = await getBudgetById(budgetId);
   if (!budget) return null;
   const debtors = await getDebtors(budgetId);
@@ -265,7 +271,7 @@ export async function sendDebtors(api: Api, budgetId: number): Promise<{ count: 
   const d = await buildDebtorsDraft(budgetId);
   if (!d) throw new Error(`Бюджет #${budgetId} не найден`);
   if (d.count === 0) return { count: 0 };
-  const chat = env.chats[d.team];
+  const chat = d.team === 'COMMON' ? env.collectionChat : env.chats[d.team];
   await api.sendMessage(chat.chatId, d.text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
@@ -282,7 +288,7 @@ export async function sendDebtors(api: Api, budgetId: number): Promise<{ count: 
 export async function sendDebtorsDraftToAdmins(
   api: Api,
   budgetId: number,
-): Promise<{ team: Team; count: number } | null> {
+): Promise<{ team: BudgetTeam; count: number } | null> {
   const d = await buildDebtorsDraft(budgetId);
   if (!d) return null;
   if (d.count === 0) return { team: d.team, count: 0 };

@@ -1,4 +1,4 @@
-import type { BudgetDetails, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
+import type { BudgetDetails, BudgetTeam, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { monthLabel } from './dates.js';
 import { usesSharedCoach } from './budget.js';
@@ -66,7 +66,7 @@ export interface GameView {
 }
 
 export interface BudgetMessageInput {
-  team: Team;
+  team: BudgetTeam;
   month: number;
   year: number;
   details: BudgetDetails;
@@ -105,26 +105,29 @@ function gameLeagueLabel(statUrl: string | null): string {
  */
 export function buildBudgetMessage(input: BudgetMessageInput): string {
   const { details: d, tariffs, team } = input;
-  const redCount = team === 'RED' ? d.players_team : d.players_other;
-  const blackCount = team === 'BLACK' ? d.players_team : d.players_other;
+  const common = team === 'COMMON';
+  const redCount = common ? 0 : team === 'RED' ? d.players_team : d.players_other;
+  const blackCount = common ? 0 : team === 'BLACK' ? d.players_team : d.players_other;
   const label = monthLabel(input.month, input.year);
 
   // ❗️ пока есть хотя бы один должник; ✅ когда все оплатили.
   const statusIcon = input.charges.some((c) => !c.paid) ? '❗️' : '✅';
-  const header = `<b>${statusIcon} Бюджет ${label} ${team}\n\n</b>`;
+  const header = `<b>${statusIcon} Бюджет ${label}${common ? '' : ` ${team}`}\n\n</b>`;
 
   // Эффективное число оплат тренера = календарное + ручная дельта; комментарий — после «N трен.».
   const effCoach = Math.max(0, d.coach_sessions + (d.coach_delta ?? 0));
   const coachNote = d.coach_note ? ` ${escapeHtml(d.coach_note)}` : '';
   const sharedSessions = d.coach_shared_sessions;
   const sharedNotes = d.coach_shared_notes;
-  const sharedBudget = usesSharedCoach(input.month, input.year) && !!sharedSessions;
+  const sharedBudget = !common && usesSharedCoach(input.month, input.year) && !!sharedSessions;
   const correction = d.correction;
   const coachCarry = correction
     ? (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate : 0;
   const gymCarry = correction ? correction.gym_delta * correction.gym_rate : 0;
   const signed = (amount: number) => amount < 0 ? ` - ${Math.abs(amount)}` : amount > 0 ? ` + ${amount}` : '';
-  const coachLine = sharedBudget
+  const coachLine = common
+    ? `Тренер ${d.coach_sessions} трен. (${d.coach_sessions} x ${tariffs.coach_per_session}${signed(coachCarry)}) / ${d.total_players} = ${d.coach_per_person} руб.\n`
+    : sharedBudget
     ? `Тренер ${sharedSessions.RED + sharedSessions.BLACK} трен.\n` +
       `${coachCarry ? `(${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session}${signed(coachCarry)})` : `${sharedSessions.RED + sharedSessions.BLACK} x ${tariffs.coach_per_session}`} / ${d.total_players} = ${d.coach_per_person} руб.\n` +
       (sharedNotes?.RED ? `Комментарий Red: ${escapeHtml(sharedNotes.RED)}\n` : '') +
@@ -141,8 +144,11 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
       : `${d.paid_gym_sessions} x ${tariffs.gym_paid_price} / ${d.total_players}`;
   const shareWord = hasLocker ? 'делятся' : 'делится';
 
+  const participants = common
+    ? `Всего участников: ${d.total_players} чел.\n`
+    : `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n`;
   const calcInner =
-    `Всего участников: ${blackCount} Black + ${redCount} Red = ${d.total_players} чел.\n` +
+    participants +
     `Зал ${sharedBudget ? '' : 'Black '}по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
     `${gymFormula} = ${d.gym_per_person} руб.\n` +
     `Зал ${sharedBudget ? '' : 'Red '}по вторникам - оплачивается Яндексом${sharedBudget ? '' : ' полностью'}.\n` +

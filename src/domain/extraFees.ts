@@ -52,7 +52,10 @@ function gameMatches(fee: ExtraFee, game: Game): boolean {
 export function extraFeesForPlayer(input: {
   playerId: number | null;
   login: string;
-  team: Team;
+  /** Команды, в которых игрок заявлен на момент сборки. */
+  teams?: Team[];
+  /** Совместимость с историческими вызовами для бюджета одной команды. */
+  team?: Team;
   budgetId: number;
   period: number;
   fees: ExtraFee[];
@@ -60,6 +63,7 @@ export function extraFeesForPlayer(input: {
   games: Game[];
 }): ExtraFeeItem[] {
   const items: ExtraFeeItem[] = [];
+  const playerTeams = input.teams ?? (input.team ? [input.team] : []);
   for (const fee of input.fees) {
     const existing = input.allocations.find((a) => a.fee_id === fee.id && (
       (input.playerId !== null && a.player_id === input.playerId) ||
@@ -75,9 +79,9 @@ export function extraFeesForPlayer(input: {
         (fee.end_period !== null && input.period > fee.end_period)) continue;
 
     const eligible = fee.mode === 'ACTIVE'
-      ? fee.team === 'BOTH' || fee.team === input.team
+      ? fee.team === 'BOTH' || playerTeams.includes(fee.team)
       : fee.mode === 'BUDGET'
-        ? input.period === fee.start_period && (fee.team === 'BOTH' || fee.team === input.team)
+        ? input.period === fee.start_period && (fee.team === 'BOTH' || playerTeams.includes(fee.team))
         : input.games.some((g) => g.year !== null && g.month !== null &&
           g.year * 100 + g.month === input.period && gameMatches(fee, g) &&
           g.participants.some((p) => p.matched_player_id === input.playerId));

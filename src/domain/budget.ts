@@ -57,6 +57,9 @@ const isTrainingCoach = (e: BudgetEvent) =>
 /** Начиная с первого сбора после опубликованного октября-2026 тренер общий для обеих команд. */
 export const usesSharedCoach = (month: number, year: number): boolean => year * 100 + month >= 202611;
 
+/** Начиная с декабря 2026 создаём одну запись бюджета для обоих ростеров. */
+export const usesCommonBudget = (month: number, year: number): boolean => year * 100 + month >= 202612;
+
 /** Перед публикацией обе команды должны иметь один и тот же общий расчёт. */
 export function sharedCoachBudgetsReady(red: Budget | null, black: Budget | null): boolean {
   const a = red?.details;

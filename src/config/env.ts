@@ -49,6 +49,12 @@ const schema = z.object({
   BLACK_THREAD_ID: z.coerce.number().int().optional(),
   RED_CHAT_ID: z.coerce.number().int(),
   RED_THREAD_ID: z.coerce.number().int().optional(),
+  // По умолчанию общий топик живёт в BLACK. Для тестового bball_test его
+  // подменяют COLLECTION_CHAT_ID / COLLECTION_THREAD_ID без правки кода.
+  COLLECTION_CHAT_ID: z.coerce.number().int().optional(),
+  COLLECTION_THREAD_ID: z.coerce.number().int().optional(),
+  // Позволяет прогнать новую маршрутизацию на bball_test до декабря.
+  COMMON_CHAT_ENABLED: boolish.default('false'),
 
   ADMIN_TG_IDS: csvNumbers.default('524515690'),
   POLL_OPTIONS: csvStrings.default('Да,Нет,Для Родиона'),
@@ -134,6 +140,11 @@ export const env = {
     RED: e.GOOGLE_CALENDAR_RED,
     BLACK: e.GOOGLE_CALENDAR_BLACK,
   } as Record<Team, string>,
+  // Общий чат и топик с декабря-2026 строятся на существующем BLACK-чате.
+  collectionChat: {
+    chatId: e.COLLECTION_CHAT_ID ?? e.BLACK_CHAT_ID,
+    threadId: e.COLLECTION_THREAD_ID ?? e.BLACK_THREAD_ID,
+  },
 };
 
 export const TEAMS: Team[] = ['RED', 'BLACK'];

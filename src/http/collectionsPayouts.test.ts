@@ -144,16 +144,17 @@ test('Расчеты: суммы видны, детали свернуты, ка
     assert.match(decodeURIComponent(concurrent.headers.location!),/Уже выполняется операция/);
     releaseCalendar();
     const created=await creating;
-    assert.match(decodeURIComponent(created.headers.location!),/собраны для обеих команд/);
+    assert.match(decodeURIComponent(created.headers.location!),/Общий черновик.*собран/);
     calendarGate=undefined;calendarStarted=undefined;
     const createdBudgets=(await db.query<{id:number}>('select id from budgets where month=12 and year=2026')).rows;
-    assert.equal(createdBudgets.length,2);
+    assert.equal(createdBudgets.length,1);
+    assert.equal((await db.query<{team:string}>('select team from budgets where month=12 and year=2026')).rows[0]!.team,'COMMON');
     const duplicateAfter=await post('create','12');
     assert.match(decodeURIComponent(duplicateAfter.headers.location!),/уже есть бюджет/);
     await db.exec('update charges set paid=true where budget_id in (select id from budgets where month=12)');
     const beforeEdit=await db.query('select id,paid from charges where budget_id in (select id from budgets where month=12) order by id');
     const rebuilt=await post('edit','12');
-    assert.match(decodeURIComponent(rebuilt.headers.location!),/собраны для обеих команд/);
+    assert.match(decodeURIComponent(rebuilt.headers.location!),/Общий черновик.*собран/);
     assert.deepEqual((await db.query('select id,paid from charges where budget_id in (select id from budgets where month=12) order by id')).rows,beforeEdit.rows);
     assert.equal(buildLocked,false);
     // Payment actions preserve the selected filter; paid players stay hidden by default.
@@ -166,11 +167,11 @@ test('Расчеты: суммы видны, детали свернуты, ка
     assert.equal(allPlayers.querySelector('input[role="switch"]')?.hasAttribute('checked'),false);
     assert.equal(allPlayers.querySelector(`#charge-${chargeId} input[name="all"]`)?.getAttribute('value'),'1');
     const paidDefault = await payment('yes');
-    assert.doesNotMatch(paidDefault.headers.location!,/all=1|#charge-/);
+    assert.match(paidDefault.headers.location!,/all=1.*#charge-/);
     const paidFiltered = await payment('yes','0');
     const afterPaid = parse((await app.inject({method:'GET',url:paidFiltered.headers.location!,cookies})).body);
-    assert.equal(afterPaid.querySelector(`#charge-${chargeId}`),null);
-    assert.ok(afterPaid.querySelector('input[role="switch"]')?.hasAttribute('checked'));
+    assert.ok(afterPaid.querySelector(`#charge-${chargeId}`));
+    assert.equal(afterPaid.querySelector('input[role="switch"]')?.hasAttribute('checked'),false);
     assert.match((await payment('yes','1')).headers.location!,/all=1/);
     assert.match((await payment('no','1')).headers.location!,/all=1/);
     const unpaid = parse((await app.inject({method:'GET',url:'/collections/12-2026',cookies})).body);

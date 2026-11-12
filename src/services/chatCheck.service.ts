@@ -60,6 +60,37 @@ export async function checkTeamChatMembership(
   return out;
 }
 
+/** Проверка участников будущего/текущего общего чата Black. */
+export async function checkCollectionChatMembership(
+  api: Api,
+  logins: string[],
+): Promise<MemberCheck[]> {
+  const chatId = env.collectionChat.chatId;
+  const players = await listPlayers();
+  const byLogin = new Map(players.map((p) => [p.tg_login.toLowerCase(), p]));
+  const out: MemberCheck[] = [];
+  for (let i = 0; i < logins.length; i += 4) {
+    const batch = await Promise.all(logins.slice(i, i + 4).map(async (login): Promise<MemberCheck> => {
+      const p = byLogin.get(login.toLowerCase());
+      const userId = Number(p?.tg_user_id);
+      if (!p || p.tg_user_id == null || !Number.isSafeInteger(userId) || userId <= 0) {
+        return { tg_login: login, status: 'missing_id' };
+      }
+      try {
+        const m = await api.getChatMember(chatId, userId);
+        const inChat = m.status === 'creator' || m.status === 'administrator' || m.status === 'member' ||
+          (m.status === 'restricted' && m.is_member);
+        return { tg_login: login, status: inChat ? 'member' : 'left' };
+      } catch (err) {
+        log.warn(`[chatcheck] getChatMember(${chatId}, ${userId}) не удалось`, (err as Error).message);
+        return { tg_login: login, status: 'check_error' };
+      }
+    }));
+    out.push(...batch);
+  }
+  return out;
+}
+
 /** Статус членства каждого начисляемого игрока по логину в нижнем регистре. */
 export async function chatStatusesByLogin(api: Api, team: Team, logins: string[]): Promise<Map<string, ChatStatus>> {
   const checks = await checkTeamChatMembership(api, team, logins);

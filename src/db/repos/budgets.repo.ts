@@ -1,11 +1,12 @@
 import { budgetTransaction, query, withBudgetOperation } from '../pool.js';
-import type { Budget, BudgetDetails, Charge, ExtraFee, ExtraFeeAllocation, Game, Team } from '../types.js';
+import type { Budget, BudgetDetails, BudgetTeam, Charge, ExtraFee, ExtraFeeAllocation, Game, PlayerTeam } from '../types.js';
 import { extraFeesForPlayer, sumMoney } from '../../domain/extraFees.js';
 
 export interface ChargeInput {
   player_id: number | null;
   tg_login: string;
   name: string | null;
+  team_badge?: PlayerTeam | null;
   base_amount: number;
   game_amount: number;
   amount: number;
@@ -13,7 +14,7 @@ export interface ChargeInput {
 
 /** Создать/перезаписать бюджет команды за месяц вместе с начислениями (в транзакции). */
 export async function saveBudget(input: {
-  team: Team;
+  team: BudgetTeam;
   month: number;
   year: number;
   total_per_player: number;
@@ -47,7 +48,8 @@ export async function saveBudget(input: {
     await client.query('delete from extra_fee_allocations where budget_id = $1', [budget.id]);
     for (const c of input.charges) {
       const extraItems = extraFeesForPlayer({
-        playerId: c.player_id, login: c.tg_login, team: input.team,
+        playerId: c.player_id, login: c.tg_login,
+        teams: c.team_badge === 'BOTH' ? ['RED', 'BLACK'] : c.team_badge ? [c.team_badge] : input.team === 'COMMON' ? [] : [input.team],
         budgetId: budget.id, period: input.year * 100 + input.month, fees, allocations, games,
       });
       const extraAmount = sumMoney(extraItems.map((item) => item.amount));
@@ -59,13 +61,13 @@ export async function saveBudget(input: {
         );
       }
       await client.query(
-        `insert into charges (budget_id, player_id, tg_login, name, base_amount, game_amount, extra_amount, extra_items, amount)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `insert into charges (budget_id, player_id, tg_login, name, team_badge, base_amount, game_amount, extra_amount, extra_items, amount)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          on conflict (budget_id, tg_login) do update set
-           player_id = excluded.player_id, name = excluded.name,
+           player_id = excluded.player_id, name = excluded.name, team_badge = excluded.team_badge,
            base_amount = excluded.base_amount, game_amount = excluded.game_amount,
            extra_amount = excluded.extra_amount, extra_items = excluded.extra_items, amount = excluded.amount`,
-        [budget.id, c.player_id, c.tg_login, c.name, c.base_amount, c.game_amount,
+        [budget.id, c.player_id, c.tg_login, c.name, c.team_badge ?? null, c.base_amount, c.game_amount,
           extraAmount, JSON.stringify(extraItems), sumMoney([c.base_amount, c.game_amount, extraAmount])],
       );
     }
@@ -74,7 +76,7 @@ export async function saveBudget(input: {
 }
 
 export async function getBudget(
-  team: Team,
+  team: BudgetTeam,
   month: number,
   year: number,
 ): Promise<Budget | null> {
@@ -99,7 +101,7 @@ export async function listBudgets(): Promise<Budget[]> {
 
 /** Удалить бюджет одной команды; связанные начисления удаляются каскадно. */
 export async function deleteBudget(
-  team: Team,
+  team: BudgetTeam,
   month: number,
   year: number,
 ): Promise<Budget | null> {

@@ -1,16 +1,16 @@
 import { query } from '../pool.js';
-import type { Player, Team } from '../types.js';
+import type { Player, PlayerTeam, Team } from '../types.js';
 
 export async function listPlayers(team?: Team): Promise<Player[]> {
   const { rows } = team
-    ? await query<Player>('select * from players where team = $1 order by name', [team])
+    ? await query<Player>("select * from players where team = $1 or team = 'BOTH' order by name", [team])
     : await query<Player>('select * from players order by team, name');
   return rows;
 }
 
 export async function listActive(team: Team): Promise<Player[]> {
   const { rows } = await query<Player>(
-    'select * from players where team = $1 and active = true order by name',
+    "select * from players where (team = $1 or team = 'BOTH') and active = true order by name",
     [team],
   );
   return rows;
@@ -32,7 +32,7 @@ export async function getByTelegramUserId(tgUserId: number): Promise<Player | nu
 export async function upsertPlayer(p: {
   name: string;
   tg_login: string;
-  team: Team;
+  team: PlayerTeam;
   is_employee?: boolean;
   active?: boolean;
   active_from?: string | null;

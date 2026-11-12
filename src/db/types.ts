@@ -1,4 +1,8 @@
 export type Team = 'RED' | 'BLACK';
+/** Заявка игрока. BOTH показывается в интерфейсе как Black/Red. */
+export type PlayerTeam = Team | 'BOTH';
+/** COMMON используется только для новых общих месячных бюджетов. */
+export type BudgetTeam = Team | 'COMMON';
 
 export interface Player {
   id: number;
@@ -6,7 +10,7 @@ export interface Player {
   tg_login: string;
   tg_user_id: number | null;
   is_employee: boolean;
-  team: Team;
+  team: PlayerTeam;
   active: boolean;
   active_from: string | null;
   active_to: string | null;
@@ -50,7 +54,7 @@ export interface Tag {
 
 export interface Budget {
   id: number;
-  team: Team;
+  team: BudgetTeam;
   month: number;
   year: number;
   chat_id: number | null;
@@ -161,6 +165,8 @@ export interface Charge {
   player_id: number | null;
   tg_login: string;
   name: string | null;
+  /** Заявка игрока на момент сборки бюджета. */
+  team_badge: PlayerTeam | null;
   base_amount: number;
   game_amount: number;
   extra_amount: number;

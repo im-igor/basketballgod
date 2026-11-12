@@ -56,6 +56,12 @@ function questionFor(ev: PollCalendarEvent): string {
   return `${ev.summary} ${when}${loc}`.slice(0, QUESTION_MAX);
 }
 
+function commonChatFor(_eventStart: string | null): boolean {
+  // Переключатель позволяет обкатать отправку в bball_test до боевого перехода.
+  // В декабрьском production-окружении его включают вместе с COLLECTION_*.
+  return env.COMMON_CHAT_ENABLED;
+}
+
 /**
  * Отправить один опрос в чат команды: сохранить poll_session (для сбора голосов),
  * при forward — продублировать (forward) в чат другой команды. Общий код для
@@ -80,10 +86,11 @@ interface PollSendResult {
 const runningPollSends = new Map<string, Promise<PollSendResult>>();
 
 async function performPollSend(api: Api, p: PollSendInput): Promise<PollSendResult> {
-  if (p.eventUid && await pollSessionExistsForEvent(p.team, p.eventUid)) {
+  const common = commonChatFor(p.eventStart);
+  const chat = common ? env.collectionChat : env.chats[p.team];
+  if (p.eventUid && await pollSessionExistsForEvent(p.team, p.eventUid, common ? chat.chatId : undefined)) {
     return { sent: false, messageId: null, pollId: null, forwarded: false };
   }
-  const chat = env.chats[p.team];
   const msg = await api.sendPoll(
     chat.chatId,
     p.question,
@@ -110,7 +117,7 @@ async function performPollSend(api: Api, p: PollSendInput): Promise<PollSendResu
   if (p.eventUid) await markScheduledGamePollSentForEvent(p.team, p.eventUid);
 
   let forwarded = false;
-  if (p.forward) {
+  if (p.forward && !common) {
     const dst = env.chats[other(p.team)];
     await api.forwardMessage(dst.chatId, chat.chatId, msg.message_id, {
       disable_notification: true,
@@ -124,7 +131,7 @@ async function performPollSend(api: Api, p: PollSendInput): Promise<PollSendResu
 
 async function sendPollForEvent(api: Api, p: PollSendInput): Promise<PollSendResult> {
   if (!p.eventUid) return performPollSend(api, p);
-  const key = `${p.team}:${p.eventUid}`;
+  const key = `${commonChatFor(p.eventStart) ? 'common' : p.team}:${p.team}:${p.eventUid}`;
   const running = runningPollSends.get(key);
   if (running) {
     const result = await running;

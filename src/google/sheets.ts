@@ -1,7 +1,7 @@
 import { env } from '../config/env.js';
 import { sheetsClient } from './auth.js';
 import { isoToRu } from '../domain/dates.js';
-import type { Team } from '../db/types.js';
+import type { PlayerTeam } from '../db/types.js';
 
 /**
  * Односторонняя выгрузка БД → Google-таблица.
@@ -22,7 +22,7 @@ export interface SheetPlayer {
   name: string;
   tg_login: string;
   is_employee: boolean;
-  team: Team;
+  team: PlayerTeam;
   active: boolean;
   active_from: string | null; // ISO YYYY-MM-DD
   active_to: string | null; // ISO YYYY-MM-DD
@@ -52,7 +52,7 @@ function toRow(p: SheetPlayer, num: number): string[] {
     p.name,
     p.tg_login,
     p.is_employee ? 'TRUE' : 'FALSE',
-    p.team,
+    p.team === 'BOTH' ? 'Black/Red' : p.team[0] + p.team.slice(1).toLowerCase(),
     p.active ? 'YES' : 'NO',
     isoToRu(p.active_from),
     isoToRu(p.active_to),

@@ -5,10 +5,10 @@ import {
 import { getBudget } from '../db/repos/budgets.repo.js';
 import { extraFeeForm, sumMoney } from '../domain/extraFees.js';
 import { monthLabel } from '../domain/dates.js';
+import { usesCommonBudget } from '../domain/budget.js';
 import { formatFullName } from '../domain/messages.js';
 import { recalcBudget } from '../services/budget.service.js';
 import { esc, layout, teamBadge } from './views.js';
-import type { Team } from '../db/types.js';
 
 const back = (message: string) => `/extra-fees?msg=${encodeURIComponent(message)}`;
 const periodLabel = (period: number) => monthLabel(period % 100, Math.floor(period / 100));
@@ -116,7 +116,8 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
     if (!/^(20[2-9]\d|2100)-(0[1-9]|1[0-2])$/.test(raw) || raw < '2024-01') return reply.code(400).send('Неверный месяц');
     const [year, month] = raw.split('-').map(Number) as [number, number];
     let count = 0;
-    for (const team of ['RED', 'BLACK'] as Team[]) {
+    const teams = usesCommonBudget(month, year) ? ['COMMON'] as const : ['RED', 'BLACK'] as const;
+    for (const team of teams) {
       const budget = await getBudget(team, month, year);
       if (budget && await recalcBudget(budget.id)) count++;
     }

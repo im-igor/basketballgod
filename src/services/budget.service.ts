@@ -14,14 +14,14 @@ import {
   setBudgetChatCheck,
   type ChargeInput,
 } from '../db/repos/budgets.repo.js';
-import { computeBudgets, usesSharedCoach, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
+import { computeBudgets, usesCommonBudget, usesSharedCoach, type BudgetEvent, type GameForBudget, type TeamBudget } from '../domain/budget.js';
 import { reconcileActivityDates } from '../domain/activity.js';
 import { gameFeeForPlayer, gamesForPlayers } from '../domain/gamefee.js';
 import { buildBudgetMessage } from '../domain/messages.js';
 import { monthRange } from '../domain/dates.js';
 import { correctionNote, isLegacyAutoCorrectionNote, proposeCorrection, snapshotEvents } from '../domain/budgetCorrections.js';
-import { checkTeamChatMembership } from './chatCheck.service.js';
-import type { BudgetCorrection, BudgetDetails, Player, Team } from '../db/types.js';
+import { checkCollectionChatMembership, checkTeamChatMembership } from './chatCheck.service.js';
+import type { BudgetCorrection, BudgetDetails, BudgetTeam, Player, Team } from '../db/types.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 
@@ -37,7 +37,7 @@ function isActiveInMonth(p: Player, month: number, year: number): boolean {
 }
 
 export interface BuiltBudget {
-  team: Team;
+  team: BudgetTeam;
   budgetId: number;
   result: TeamBudget;
   message: string;
@@ -57,12 +57,146 @@ export async function buildAndSaveBudgets(
   mode?: 'create' | 'edit',
 ): Promise<BuiltBudget[]> {
   return withBudgetOperation(async () => {
+    if (usesCommonBudget(month, year)) return buildAndSaveCommonBudget(month, year, api, mode);
     const existing = await Promise.all(TEAMS.map(team => getBudget(team, month, year)));
     if (existing.some(b => b?.message_id != null)) throw new Error('Опубликованный бюджет нельзя редактировать');
     if (mode === 'create' && existing.some(Boolean)) throw new Error('За этот месяц уже есть бюджет. Используй кнопку «Редактировать».');
     if (mode === 'edit' && !existing.some(Boolean)) throw new Error('Черновик не найден');
     return buildBudgets(month, year, teamsToProcess, api);
   });
+}
+
+/** Один общий бюджет с декабря-2026. Исторические RED/BLACK записи не затрагиваются. */
+async function buildAndSaveCommonBudget(
+  month: number,
+  year: number,
+  api?: Api,
+  mode?: 'create' | 'edit',
+): Promise<BuiltBudget[]> {
+  const existing = await getBudget('COMMON', month, year);
+  if (existing?.message_id != null) throw new Error('Опубликованный бюджет нельзя изменить');
+  if (mode === 'create' && existing) throw new Error('За этот месяц уже есть бюджет. Используй кнопку «Редактировать».');
+  if (mode === 'edit' && !existing) throw new Error('Черновик не найден');
+
+  const { from, to } = monthRange(month, year);
+  const sourceMonth = month === 1 ? 12 : month - 1;
+  const sourceYear = month === 1 ? year - 1 : year;
+  const { from: sourceFrom, to: sourceTo } = monthRange(sourceMonth, sourceYear);
+  const [tariffs, players, redEvents, blackEvents, sourceRedEvents, sourceBlackEvents,
+    sourceCommonBudget, sourceRedBudget, sourceBlackBudget] = await Promise.all([
+    getTariffs(), listPlayers(), listEvents('RED', from, to), listEvents('BLACK', from, to),
+    listEvents('RED', sourceFrom, sourceTo), listEvents('BLACK', sourceFrom, sourceTo),
+    getBudget('COMMON', sourceMonth, sourceYear),
+    getBudget('RED', sourceMonth, sourceYear),
+    getBudget('BLACK', sourceMonth, sourceYear),
+  ]);
+  let gameStatsWarnings: string[] = [];
+  try {
+    await importAutomaticGameStats(month, year, [...sourceRedEvents, ...sourceBlackEvents]);
+  } catch (err) {
+    if (!(err instanceof GameStatsNotReadyError)) throw err;
+    gameStatsWarnings = err.warnings;
+  }
+  const active = players.filter((p) => isActiveInMonth(p, month, year));
+  const allGames = await listAllGamesForMonth(month, year);
+  const chargeable = new Set(active.map((p) => p.id));
+  for (const game of allGames) {
+    if (!game.participants?.length || new Set(game.participants.map((p) => p.matched_player_id)).size !== game.participants.length ||
+        game.participants.some((p) => !p.matched_player_id || !chargeable.has(p.matched_player_id))) {
+      throw new Error(`Игра #${game.id}: участники не попадут в бюджет или задвоены. Проверь состав и активность`);
+    }
+  }
+  const events = [...redEvents, ...blackEvents];
+  // Первый общий сбор (декабрь) сравнивается с двумя историческими бюджетами,
+  // последующие — с одним общим. Снимок событий делает оба случая одинаковыми.
+  const suggested = proposeCorrection(
+    sourceMonth,
+    sourceYear,
+    sourceCommonBudget ?? sourceRedBudget,
+    sourceCommonBudget ? null : sourceBlackBudget,
+    [...sourceRedEvents, ...sourceBlackEvents],
+    tariffs,
+  );
+  const correction = currentCorrection(existing?.details?.correction, suggested);
+  const paidGymSessions = new Set(events.filter((e) => e.tags.GYM === 'PAID').map((e) => e.uid)).size;
+  const coachSessions = events.filter((e) => e.tags.TYPE === 'TRAINING' && e.tags.COACH === 'PAID').length;
+  const gymTotal = paidGymSessions * tariffs.gym_paid_price + tariffs.locker_rent_price +
+    correction.gym_delta * correction.gym_rate;
+  const coachTotal = coachSessions * tariffs.coach_per_session +
+    (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate;
+  const gymPer = active.length ? Math.ceil(gymTotal / active.length) : 0;
+  const coachPer = active.length ? Math.ceil(coachTotal / active.length) : 0;
+  const base = gymPer + coachPer;
+  if (base < 0) throw new Error('Зачёт превышает новый сбор. Уменьши корректировку или перенеси остаток на следующий месяц.');
+  const games: GameForBudget[] = allGames.map((g) => ({ team: g.team, fee_per_player: g.fee_per_player, participants: g.participants }));
+  const details: BudgetDetails = {
+    total_players: active.length,
+    players_team: active.length,
+    players_other: 0,
+    paid_gym_sessions: paidGymSessions,
+    coach_sessions: coachSessions,
+    gym_per_person: gymPer,
+    coach_per_person: coachPer,
+    base_per_person: base,
+    automatic_stats_verified: true,
+    game_stats_warnings: gameStatsWarnings,
+    event_snapshot: snapshotEvents(events, tariffs),
+    correction,
+    ...(existing?.details?.chat_check ? { chat_check: existing.details.chat_check } : {}),
+  };
+  const charges: ChargeInput[] = active.map((player) => ({
+    player_id: player.id,
+    tg_login: player.tg_login,
+    name: player.name,
+    team_badge: player.team,
+    base_amount: base,
+    game_amount: gameFeeForPlayer(player.id, games),
+    amount: base + gameFeeForPlayer(player.id, games),
+  }));
+  const saved = await saveBudget({ team: 'COMMON', month, year, total_per_player: base, details, charges });
+  const savedCharges = await getCharges(saved.id);
+  if (api) {
+    const checks = await checkCollectionChatMembership(api, savedCharges.map((c) => c.tg_login));
+    await setBudgetChatCheck(saved.id, {
+      checked_at: new Date().toISOString(),
+      statuses: Object.fromEntries(checks.map((check) => [check.tg_login.toLowerCase(), check.status])),
+    });
+  }
+  const message = buildBudgetMessage({
+    team: 'COMMON', month, year, details, tariffs, charges: savedCharges,
+    games: gamesForPlayers(allGames, savedCharges.map((c) => c.player_id)),
+    payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
+  });
+  return [{
+    team: 'COMMON', budgetId: saved.id,
+    result: { team: 'RED', month, year, details, base_per_person: base, charges: [] },
+    message, gamesCount: allGames.length,
+  }];
+}
+
+/**
+ * При пересборке черновика не теряем ручную корректировку, но всегда обновляем
+ * фактический календарный снимок и автоматически рассчитанную разницу.
+ */
+function currentCorrection(prior: BudgetCorrection | undefined, suggested: BudgetCorrection): BudgetCorrection {
+  const correction = prior ? structuredClone(prior) : suggested;
+  correction.source_snapshot = suggested.source_snapshot;
+  correction.source_removed_dates = suggested.source_removed_dates;
+  correction.source_added_dates = suggested.source_added_dates;
+  if (prior?.source_fingerprint && prior.source_fingerprint !== suggested.source_fingerprint) {
+    correction.source_fingerprint = suggested.source_fingerprint;
+    correction.source_changes = suggested.source_changes;
+    correction.reviewed = false;
+    if (!correction.quantities_edited) {
+      correction.coach_delta = suggested.coach_delta;
+      correction.gym_delta = suggested.gym_delta;
+    }
+  }
+  if (!correction.note_edited || isLegacyAutoCorrectionNote(correction)) {
+    correction.note_edited = false;
+    correction.note = correctionNote(correction);
+  }
+  return correction;
 }
 
 async function buildBudgets(month: number, year: number, teamsToProcess: Team[], api?: Api): Promise<BuiltBudget[]> {
@@ -126,24 +260,7 @@ async function buildBudgets(month: number, year: number, teamsToProcess: Team[],
   }
   const previousByTeam = { RED: previous[0], BLACK: previous[1] };
   const priorCorrection = previous.find((budget) => budget?.details?.correction)?.details?.correction;
-  const correction = priorCorrection ? structuredClone(priorCorrection) : suggested;
-  // Сохраняем список платных событий актуального календаря вместе с проверяемым хешем.
-  correction.source_snapshot = suggested.source_snapshot;
-  correction.source_removed_dates = suggested.source_removed_dates;
-  correction.source_added_dates = suggested.source_added_dates;
-  if (priorCorrection?.source_fingerprint && priorCorrection.source_fingerprint !== suggested.source_fingerprint) {
-    correction.source_fingerprint = suggested.source_fingerprint;
-    correction.source_changes = suggested.source_changes;
-    correction.reviewed = false;
-    if (!correction.quantities_edited) {
-      correction.coach_delta = suggested.coach_delta;
-      correction.gym_delta = suggested.gym_delta;
-    }
-  }
-  if (!correction.note_edited || isLegacyAutoCorrectionNote(correction)) {
-    correction.note_edited = false;
-    correction.note = correctionNote(correction);
-  }
+  const correction = currentCorrection(priorCorrection, suggested);
   const effectiveCoach = Object.fromEntries(TEAMS.map((team) => [team, Math.max(
     0, computed[team].details.coach_sessions + (previousByTeam[team]?.details?.coach_delta ?? 0),
   )])) as Record<Team, number>;
@@ -242,7 +359,7 @@ async function buildBudgets(month: number, year: number, teamsToProcess: Team[],
 }
 
 export interface RecalcResult {
-  team: Team;
+  team: BudgetTeam;
   budgetId: number;
   message: string;
   coachDelta: number;
@@ -268,6 +385,43 @@ export async function recalcBudget(
     getCharges(budgetId),
     listAllGamesForMonth(budget.month, budget.year),
   ]);
+
+  if (budget.team === 'COMMON') {
+    const gamesForBudget: GameForBudget[] = allGames.map((g) => ({
+      team: g.team, fee_per_player: g.fee_per_player, participants: g.participants,
+    }));
+    const correction = opts.correction ?? d.correction;
+    const gymTotal = d.paid_gym_sessions * tariffs.gym_paid_price + tariffs.locker_rent_price +
+      (correction?.gym_delta ?? 0) * (correction?.gym_rate ?? 0);
+    const coachTotal = d.coach_sessions * tariffs.coach_per_session + (correction
+      ? (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate
+      : 0);
+    const gymPer = d.total_players > 0 ? Math.ceil(gymTotal / d.total_players) : 0;
+    const coachPer = d.total_players > 0 ? Math.ceil(coachTotal / d.total_players) : 0;
+    const base = gymPer + coachPer;
+    if (base < 0) throw new Error('Зачёт превышает новый сбор. Уменьши корректировку или перенеси остаток на следующий месяц.');
+    const details: BudgetDetails = {
+      ...d,
+      gym_per_person: gymPer,
+      coach_per_person: coachPer,
+      base_per_person: base,
+      ...(correction ? { correction } : {}),
+    };
+    const updatedCharges: ChargeInput[] = charges.map((c) => {
+      const game = c.player_id ? gameFeeForPlayer(c.player_id, gamesForBudget) : c.game_amount;
+      return { ...c, base_amount: base, game_amount: game, amount: base + game };
+    });
+    await saveBudget({
+      team: 'COMMON', month: budget.month, year: budget.year,
+      total_per_player: base, details, charges: updatedCharges,
+    });
+    const message = buildBudgetMessage({
+      team: 'COMMON', month: budget.month, year: budget.year, details, tariffs,
+      charges: await getCharges(budgetId), games: gamesForPlayers(allGames, charges.map((c) => c.player_id)),
+      payment: { sberUrl: env.PAYMENT_SBER_URL, tbankUrl: env.PAYMENT_TBANK_URL },
+    });
+    return { team: 'COMMON', budgetId, message, coachDelta: 0, effCoach: d.coach_sessions };
+  }
 
   const coachDelta = (d.coach_delta ?? 0) + (opts.coachDeltaChange ?? 0);
   const correction = opts.correction ?? d.correction;
@@ -353,7 +507,9 @@ export async function updateBudgetCorrection(month: number, year: number, correc
     correction.note_edited = false;
     correction.note = correctionNote(correction);
   }
-  const budgets = await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
+  const budgets = usesCommonBudget(month, year)
+    ? [await getBudget('COMMON', month, year)]
+    : await Promise.all(TEAMS.map((team) => getBudget(team, month, year)));
   if (budgets.some((budget) => budget?.message_id != null)) {
     throw new Error('Опубликованный бюджет нельзя изменить');
   }

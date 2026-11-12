@@ -149,6 +149,10 @@ th { color:var(--muted); font-weight:650; font-size:12px; text-transform:upperca
 .badge.no { background:var(--danger-soft); color:var(--danger); }
 .badge.red { background:var(--danger-soft); color:var(--danger); }
 .badge.black { background:var(--track); color:var(--fg); }
+.badge.both { background:#e9e1ff; color:#6546a5; }
+.team-cell { min-height:0; padding:0; border:0; background:transparent; cursor:pointer; }
+.team-cell:hover { background:transparent; border-color:transparent; transform:none; }
+.team-cell .badge { pointer-events:none; }
 input,select,textarea,button { font:inherit; }
 input,select,textarea { background:var(--field); color:var(--fg); border:1px solid var(--field-line); border-radius:9px; padding:9px 11px; width:100%; min-height:40px; outline:none; transition:border-color .15s,box-shadow .15s,background .15s; }
 textarea { resize:vertical; }
@@ -329,8 +333,10 @@ export function progressBar(paid: number, total: number): string {
 }
 
 export function teamBadge(team: string): string {
+  if (team === 'BOTH') return '<span class="badge both">Black/Red</span>';
+  if (team === 'COMMON') return '<span class="badge both">Общий</span>';
   const cls = team === 'RED' ? 'red' : 'black';
-  return `<span class="badge ${cls}">${esc(team)}</span>`;
+  return `<span class="badge ${cls}">${esc(team === 'RED' ? 'Red' : 'Black')}</span>`;
 }
 
 export function activeBadge(active: boolean): string {

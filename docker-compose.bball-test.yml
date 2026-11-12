@@ -1,0 +1,8 @@
+# Временная маршрутизация новой архитектуры в bball_test / Polls.
+# Polls 2 (157) остаётся свободным для проверки отсутствия форвардов.
+services:
+  app:
+    environment:
+      COLLECTION_CHAT_ID: '-1001771759557'
+      COLLECTION_THREAD_ID: '77'
+      COMMON_CHAT_ENABLED: 'true'

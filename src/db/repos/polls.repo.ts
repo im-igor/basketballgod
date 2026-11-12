@@ -46,10 +46,11 @@ export async function pollSessionExists(pollId: string): Promise<boolean> {
 }
 
 /** Уже отправляли голосовалку для этого календарного события в эту команду. */
-export async function pollSessionExistsForEvent(team: Team, eventUid: string): Promise<boolean> {
+export async function pollSessionExistsForEvent(team: Team, eventUid: string, chatId?: number): Promise<boolean> {
   const { rows } = await query<{ ok: boolean }>(
-    'select true as ok from poll_sessions where team = $1 and event_uid = $2 limit 1',
-    [team, eventUid],
+    `select true as ok from poll_sessions where team = $1 and event_uid = $2
+     ${chatId === undefined ? '' : 'and chat_id = $3'} limit 1`,
+    chatId === undefined ? [team, eventUid] : [team, eventUid, chatId],
   );
   return rows.length > 0;
 }

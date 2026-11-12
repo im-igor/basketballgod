@@ -16,7 +16,8 @@ function isMember(member: ChatMemberState): boolean {
     || (member.status === 'restricted' && member.is_member === true);
 }
 
-function teamByChatId(chatId: number): 'RED' | 'BLACK' | null {
+function teamByChatId(chatId: number): 'RED' | 'BLACK' | 'COMMON' | null {
+  if (env.COMMON_CHAT_ENABLED && chatId === env.collectionChat.chatId) return 'COMMON';
   if (chatId === env.chats.RED.chatId) return 'RED';
   if (chatId === env.chats.BLACK.chatId) return 'BLACK';
   return null;
@@ -46,10 +47,11 @@ export function createChatMemberHandler(
 
     try {
       const player = await findPlayer(update.new_chat_member.user.id);
-      // Один Telegram ID может быть в БД, но только выход из домашнего чата игрока важен.
-      if (!player || player.team !== team) return;
+      // В общем чате следим за любым игроком; в исторических чатах — только за
+      // игроком своей команды.
+      if (!player || (team !== 'COMMON' && player.team !== team && player.team !== 'BOTH')) return;
 
-      const message = `🏀 Игрок ${player.name} (${player.tg_login}) вышел из чата ${team}.`;
+      const message = `🏀 Игрок ${player.name} (${player.tg_login}) вышел из ${team === 'COMMON' ? 'общего чата' : `чата ${team}`}.`;
       await Promise.all(adminIds.map(async (adminId) => {
         try {
           await ctx.api.sendMessage(adminId, message);

@@ -120,6 +120,17 @@ export async function setPlayerEmployee(tgLogin: string, isEmployee: boolean): P
   return rows[0] ?? null;
 }
 
+/** Меняем только примечание, не перезаписывая остальные поля игрока. */
+export async function setPlayerNotes(tgLogin: string, notes: string | null): Promise<Player | null> {
+  const { rows } = await query<Player>(
+    `update players set notes = $2, updated_at = now()
+     where lower(tg_login) = lower($1)
+     returning *`,
+    [tgLogin, notes],
+  );
+  return rows[0] ?? null;
+}
+
 export async function linkTelegramUser(
   tgLogin: string,
   tgUserId: number,

@@ -114,7 +114,7 @@ test('Active без заявки входит в общий бюджет оди�
 });
 
 test('одна колонка статуса меняет заявку и активность, сохраняя Telegram ID и даты при смене команды', async () => {
-  await db.exec("update players set tg_user_id=123,active_from='2026-10-01' where id=1");
+  await db.query("update players set name='Семерной', notes=$1, tg_user_id=123,active_from='2026-10-01' where id=1", ['Нужна отдельная майка']);
   const tagged: Array<[number, string]> = [];
   const checked: number[] = [];
   let membership = 'member';
@@ -136,6 +136,12 @@ test('одна колонка статуса меняет заявку и акт
     assert.equal(statusSelect.tagName, 'SELECT');
     assert.equal(statusSelect.getAttribute('data-status'), 'BLACK');
     assert.equal(page.querySelector('[data-login="@p1"][data-player-employee]')!.hasAttribute('checked'), true);
+    const noteButton = page.querySelector('[data-player-note-dialog="player-note-1"]');
+    assert.ok(noteButton, 'игрок с примечанием отмечен восклицательным знаком');
+    assert.equal(page.querySelector('#player-note-1 textarea[name="notes"]')!.textContent, 'Нужна отдельная майка');
+    const savedNote = await app.inject({ method: 'POST', url: '/players/notes', cookies, payload: { login: '@p1', notes: 'Майка подготовлена' } });
+    assert.equal(savedNote.statusCode, 302);
+    assert.equal((await getByLogin('@p1'))!.notes, 'Майка подготовлена');
     const change = (status: string) => app.inject({ method: 'POST', url: '/players/status', cookies, payload: { login: '@p1', status } });
     const saved = await change('NONE');
     assert.equal(saved.statusCode, 200);

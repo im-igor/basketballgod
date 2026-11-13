@@ -23,6 +23,7 @@ import {
   upsertPlayer,
   setActive,
   setPlayerEmployee,
+  setPlayerNotes,
   setPlayerStatus,
   deletePlayer,
 } from '../db/repos/players.repo.js';
@@ -256,6 +257,18 @@ export async function buildServer(bot: Bot) {
     var search = document.getElementById('player-search');
     var hide = document.getElementById('hide-inactive');
     var empty = document.getElementById('player-empty');
+    document.querySelectorAll('[data-player-note-dialog]').forEach(function(button){
+      button.addEventListener('click', function(){
+        var dialog = document.getElementById(button.dataset.playerNoteDialog || '');
+        if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+      });
+    });
+    document.querySelectorAll('[data-close-player-note]').forEach(function(button){
+      button.addEventListener('click', function(){
+        var dialog = button.closest('dialog');
+        if (dialog) dialog.close();
+      });
+    });
     if (!search || !hide) return;
     var rows = Array.prototype.slice.call(document.querySelectorAll('.players-table tbody tr'));
     var KEY = 'bbg_hide_inactive';
@@ -308,8 +321,27 @@ export async function buildServer(bot: Bot) {
     players.sort((a, b) => (dir === 'desc' ? -cmp(a, b) : cmp(a, b)));
     const rows = players
       .map(
-        (p) => `<tr data-name="${esc(p.name.toLowerCase())}" data-active="${p.active ? '1' : '0'}">
-        <td>${esc(p.name)}</td>
+        (p) => {
+          const note = (p.notes ?? '').trim();
+          const noteDialogId = `player-note-${p.id}`;
+          const noteButton = note
+            ? `<button type="button" class="ghost" data-player-note-dialog="${noteDialogId}" aria-label="Открыть примечание игрока ${esc(p.name)}" title="Открыть примечание">!</button>
+              <dialog id="${noteDialogId}" class="player-note-dialog">
+                <form method="dialog" style="float:right"><button class="ghost" aria-label="Закрыть">×</button></form>
+                <h2>Примечание: ${esc(p.name)}</h2>
+                <form method="post" action="/players/notes">
+                  <input type="hidden" name="login" value="${esc(p.tg_login)}">
+                  <label>Примечание</label>
+                  <textarea name="notes" rows="5" style="width:100%;box-sizing:border-box">${esc(note)}</textarea>
+                  <div class="row" style="justify-content:flex-end;margin-top:12px">
+                    <button type="button" class="ghost" data-close-player-note>Отмена</button>
+                    <button>Сохранить</button>
+                  </div>
+                </form>
+              </dialog>`
+            : '';
+          return `<tr data-name="${esc(p.name.toLowerCase())}" data-active="${p.active ? '1' : '0'}">
+        <td>${esc(p.name)} ${noteButton}</td>
         <td class="muted">${esc(p.tg_login)}</td>
         <td><select class="player-status-select" data-player-status data-login="${esc(p.tg_login)}" data-status="${playerStatus(p)}" aria-label="Статус игрока ${esc(p.name)}">
           <option value="RED" ${playerStatus(p) === 'RED' ? 'selected' : ''}>Red</option>
@@ -327,7 +359,8 @@ export async function buildServer(bot: Bot) {
             <input type="hidden" name="login" value="${esc(p.tg_login)}">
             <button class="ghost">✕</button>
           </form>
-        </td></tr>`,
+        </td></tr>`;
+        },
       )
       .join('');
 
@@ -438,6 +471,14 @@ export async function buildServer(bot: Bot) {
     const player = b.login ? await setPlayerEmployee(b.login, b.value === 'yes') : null;
     if (!player) return reply.code(404).send('Игрок не найден');
     return { saved: true, isEmployee: player.is_employee };
+  });
+
+  app.post('/players/notes', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    const login = (b.login ?? '').trim();
+    const player = login ? await setPlayerNotes(login, (b.notes ?? '').trim() || null) : null;
+    if (!player) return redirect(reply, '/players', 'Игрок не найден');
+    return redirect(reply, '/players', 'Примечание сохранено');
   });
 
   app.post('/players/active', async (req, reply) => {

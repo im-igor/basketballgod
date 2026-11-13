@@ -30,3 +30,22 @@ test('общий бюджет Red и Black показывает единый р�
     assert.ok(message.includes(calculation));
   }
 });
+
+test('единый COMMON-бюджет не указывает команды в строках про зал', () => {
+  const message = buildBudgetMessage({
+    team: 'COMMON', month: 12, year: 2026,
+    details: {
+      total_players: 37, players_team: 37, players_other: 0,
+      paid_gym_sessions: 5, coach_sessions: 10,
+      gym_per_person: 2028, coach_per_person: 1622, base_per_person: 3650,
+    },
+    tariffs: {
+      gym_paid_price: 15000, coach_per_session: 6000, locker_rent_price: 0,
+      coach_per_game: 0, referee_default: 0,
+    },
+    charges: [], games: [], payment: { sberUrl: 'sber', tbankUrl: 'tbank' },
+  });
+
+  assert.match(message, /Всего участников: 37 чел\.\nЗал по четвергам - 5 трен\. \(делится на всех\)\n5 x 15000 \/ 37 = 2028 руб\.\nЗал по вторникам - оплачивается Яндексом полностью\./);
+  assert.doesNotMatch(message, /Зал (?:Black|Red) по/);
+});

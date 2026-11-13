@@ -325,7 +325,7 @@ export async function buildServer(bot: Bot) {
           const note = (p.notes ?? '').trim();
           const noteDialogId = `player-note-${p.id}`;
           const noteButton = note
-            ? `<button type="button" class="ghost" data-player-note-dialog="${noteDialogId}" aria-label="Открыть примечание игрока ${esc(p.name)}" title="Открыть примечание">!</button>
+            ? `<button type="button" class="player-note-button" data-player-note-dialog="${noteDialogId}" aria-label="Открыть примечание игрока ${esc(p.name)}" title="Открыть примечание">!</button>
               <dialog id="${noteDialogId}" class="player-note-dialog">
                 <form method="dialog" style="float:right"><button class="ghost" aria-label="Закрыть">×</button></form>
                 <h2>Примечание: ${esc(p.name)}</h2>

@@ -179,6 +179,10 @@ button.loading::before { content:""; display:inline-block; width:13px; height:13
 @keyframes button-spin { to { transform:rotate(360deg); } }
 button.ghost,a.button.ghost { background:var(--card); border-color:var(--field-line); color:var(--ghost-fg); }
 button.ghost:hover,a.button.ghost:hover { background:var(--hover); border-color:var(--muted); color:var(--fg); }
+.player-note-button { width:28px; min-height:28px; margin-left:4px; padding:0; border-radius:999px; background:#ffc21c; border-color:#bd7900; color:#412300; font-size:16px; font-weight:850; line-height:1; vertical-align:middle; box-shadow:0 1px 3px rgba(104,62,0,.3); }
+.player-note-button:hover { background:#ffda62; border-color:#9b6200; color:#281600; }
+html[data-theme="dark"] .player-note-button { background:#ffd94a; border-color:#fff0a6; color:#241700; box-shadow:0 1px 5px rgba(255,205,42,.36); }
+html[data-theme="dark"] .player-note-button:hover { background:#ffe477; border-color:#fff5be; color:#180f00; }
 .theme-toggle { width:40px; padding:0; display:grid; place-items:center; font-size:17px; }
 button.ok { background:var(--ok); border-color:var(--ok); }
 button.ok:hover { background:var(--ok-hover); border-color:var(--ok-hover); }

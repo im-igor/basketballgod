@@ -38,6 +38,13 @@ test('единый COMMON-бюджет не указывает команды в
       total_players: 37, players_team: 37, players_other: 0,
       paid_gym_sessions: 5, coach_sessions: 10,
       gym_per_person: 2028, coach_per_person: 1622, base_per_person: 3650,
+      event_snapshot: {
+        events: [
+          ...Array.from({ length: 5 }, (_, i) => ({ uid: `red-${i}`, team: 'RED' as const, start: `2026-12-0${i + 1}`, paid_coach: true, paid_gym: false })),
+          ...Array.from({ length: 5 }, (_, i) => ({ uid: `black-${i}`, team: 'BLACK' as const, start: `2026-12-1${i + 1}`, paid_coach: true, paid_gym: true })),
+        ],
+        coach_rate: 6000, gym_rate: 15000, locker_rate: 0,
+      },
     },
     tariffs: {
       gym_paid_price: 15000, coach_per_session: 6000, locker_rent_price: 0,
@@ -46,6 +53,6 @@ test('единый COMMON-бюджет не указывает команды в
     charges: [], games: [], payment: { sberUrl: 'sber', tbankUrl: 'tbank' },
   });
 
-  assert.match(message, /Всего участников: 37 чел\.\nЗал по четвергам - 5 трен\. \(делится на всех\)\n5 x 15000 \/ 37 = 2028 руб\.\nЗал по вторникам - оплачивается Яндексом полностью\./);
+  assert.match(message, /Всего участников: 37 чел\.\nЗал по четвергам - 5 трен\. \(делится на всех\)\n5 x 15000 \/ 37 = 2028 руб\.\nЗал по вторникам - 5 трен\. \(оплачивается Яндексом полностью\)\./);
   assert.doesNotMatch(message, /Зал (?:Black|Red) по/);
 });

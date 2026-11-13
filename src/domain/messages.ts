@@ -121,6 +121,14 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const sharedNotes = d.coach_shared_notes;
   const sharedBudget = !common && usesSharedCoach(input.month, input.year) && !!sharedSessions;
   const omitGymTeam = common || sharedBudget;
+  const tuesdayGymSessions = common
+    ? d.event_snapshot
+      ? d.event_snapshot.events.filter((event) => event.team === 'RED' && event.paid_coach).length
+      : Math.max(0, d.coach_sessions - d.paid_gym_sessions)
+    : null;
+  const tuesdayGymText = tuesdayGymSessions === null
+    ? `оплачивается Яндексом${sharedBudget ? '' : ' полностью'}.`
+    : `${tuesdayGymSessions} трен. (оплачивается Яндексом полностью).`;
   const correction = d.correction;
   const coachCarry = correction
     ? (correction.coach_delta.RED + correction.coach_delta.BLACK) * correction.coach_rate : 0;
@@ -152,7 +160,7 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
     participants +
     `Зал ${omitGymTeam ? '' : 'Black '}по четвергам - ${d.paid_gym_sessions} трен.${lockerText} (${shareWord} на всех)\n` +
     `${gymFormula} = ${d.gym_per_person} руб.\n` +
-    `Зал ${omitGymTeam ? '' : 'Red '}по вторникам - оплачивается Яндексом${sharedBudget ? '' : ' полностью'}.\n` +
+    `Зал ${omitGymTeam ? '' : 'Red '}по вторникам - ${tuesdayGymText}\n` +
     `${coachLine}` +
     (correction?.note ? `${escapeHtml(correction.note)}\n` : '') +
     `\n` +

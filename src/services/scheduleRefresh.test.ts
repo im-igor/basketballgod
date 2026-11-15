@@ -22,6 +22,7 @@ import {
   getScheduledGameByCalendarEvent,
   listScheduleDuplicateGroups,
   listScheduledGames,
+  listUpcomingLeagueGames,
   markScheduleSourcePresence,
   recomputeScheduleConflicts,
   setScheduledGameCalendarEventId,
@@ -226,6 +227,27 @@ test('список расписания идёт от поздних игр к �
     ['november-01', 'october-25', 'october-18', 'october-04']);
   assert.deepEqual((await listScheduledGames(2)).map((game) => game.external_id),
     ['november-01', 'october-25']);
+});
+
+test('предопросная сверка не перечитывает уже начавшиеся игры сегодняшнего дня', async () => {
+  const local = (date: Date) => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date);
+    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)!.value;
+    return { date: `${value('year')}-${value('month')}-${value('day')}`, time: `${value('hour')}:${value('minute')}` };
+  };
+  const past = local(new Date(Date.now() - 60 * 60_000));
+  const today = local(new Date()).date;
+  const common = {
+    source: 'LCHB' as const, source_url: 'https://basketball.businesschampions.ru/osen-2099/',
+    team: 'RED' as const, team_a: 'Yandex Red', team_b: 'Соперник',
+    game_date: past.date, location: null, details_url: null,
+  };
+  await upsertScheduledGame({ ...common, external_id: 'already-started', game_time: past.time });
+  await upsertScheduledGame({ ...common, external_id: 'time-pending', game_date: today, game_time: null });
+  assert.deepEqual((await listUpcomingLeagueGames()).map((game) => game.external_id), ['time-pending']);
 });
 
 test('бот уведомляет администраторов о дубле только один раз', async () => {

@@ -83,7 +83,11 @@ export async function listScheduledGames(limit = 250): Promise<ScheduledGame[]> 
 export async function listUpcomingLeagueGames(): Promise<ScheduledGame[]> {
   const { rows } = await query<ScheduledGame>(
     `select * from scheduled_games
-     where source in ('LCHB', 'MLBL') and game_date >= current_date
+     where source in ('LCHB', 'MLBL')
+       and (
+         (game_time is not null and game_date + game_time > now() at time zone 'Europe/Moscow')
+         or (game_time is null and game_date >= (now() at time zone 'Europe/Moscow')::date)
+       )
      order by game_date, game_time nulls last, id`,
   );
   return rows;

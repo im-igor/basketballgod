@@ -19,6 +19,7 @@ import {
 } from '../db/repos/scheduleSources.repo.js';
 import {
   getScheduledGameById,
+  getScheduledGameByCalendarEvent,
   listScheduleDuplicateGroups,
   listScheduledGames,
   markScheduleSourcePresence,
@@ -30,6 +31,7 @@ import { buildServer } from '../http/server.js';
 import { startScheduler } from '../scheduler/cron.js';
 import { refreshScheduleSource } from './scheduleRefresh.service.js';
 import { sendPendingScheduledGamePolls } from './schedulePoll.service.js';
+import { sendWeeklyPolls } from './poll.service.js';
 import {
   deleteScheduledGameWithArtifacts,
   notifyScheduleDuplicatesToAdmins,
@@ -38,6 +40,10 @@ import {
   beginCronJobWindow,
   completeCronJobWindow,
 } from '../db/repos/cronJobWindows.repo.js';
+import {
+  readFreshCalendarGameForPoll,
+  refreshScheduledGameForPoll,
+} from './gamePollFreshness.service.js';
 
 const db = new PGlite();
 let queue = Promise.resolve();
@@ -80,6 +86,25 @@ async function openGamePollWindow(until = new Date('2100-01-01T00:00:00+03:00'))
   const startedAt = new Date(Date.now() - 1000);
   await beginCronJobWindow('game-polls', startedAt, until);
   await completeCronJobWindow('game-polls', startedAt);
+}
+
+async function storedCalendarReader(team: CalendarEvent['team'], uid: string): Promise<CalendarEvent> {
+  const game = await getScheduledGameByCalendarEvent(team, uid);
+  if (!game) throw new Error('игра не найдена');
+  const date = game.game_date instanceof Date
+    ? game.game_date.toISOString().slice(0, 10)
+    : String(game.game_date).slice(0, 10);
+  const time = game.game_time ? String(game.game_time).slice(0, 5) : null;
+  return {
+    uid,
+    team,
+    summary: `Игра ${game.team_a} - ${game.team_b}`,
+    location: game.location,
+    start: time ? new Date(`${date}T${time}:00+03:00`).toISOString() : date,
+    startDateTime: Boolean(time),
+    tags: { TYPE: 'GAME' },
+    importedSource: game.source === 'CALENDAR' ? undefined : game.source,
+  };
 }
 
 after(async () => {
@@ -342,8 +367,8 @@ test('новая игра получает одну голосовалку, по
     },
   } as unknown as Api;
 
-  const first = await sendPendingScheduledGamePolls(api, 'MLBL');
-  const second = await sendPendingScheduledGamePolls(api, 'MLBL');
+  const first = await sendPendingScheduledGamePolls(api, 'MLBL', storedCalendarReader);
+  const second = await sendPendingScheduledGamePolls(api, 'MLBL', storedCalendarReader);
   assert.deepEqual(first, { sent: 1, alreadySent: 0, deferred: 0, errors: [] });
   assert.deepEqual(second, { sent: 0, alreadySent: 0, deferred: 0, errors: [] });
   assert.equal(telegramCalls, 1);
@@ -380,7 +405,7 @@ test('голосовалка регулярного cron блокирует по
     event_start: '2099-10-05T14:00:00.000Z',
   });
   const api = { sendPoll: async () => { throw new Error('не должен вызываться'); } } as unknown as Api;
-  const result = await sendPendingScheduledGamePolls(api, 'LCHB');
+  const result = await sendPendingScheduledGamePolls(api, 'LCHB', storedCalendarReader);
   assert.deepEqual(result, { sent: 0, alreadySent: 1, deferred: 0, errors: [] });
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
 });
@@ -402,7 +427,7 @@ test('ошибка Telegram оставляет голосовалку в оче�
   await setScheduledGameCalendarEventId(game.id, 'calendar-future-3');
   const failed = await sendPendingScheduledGamePolls({
     sendPoll: async () => { throw new Error('Telegram 503'); },
-  } as unknown as Api, 'MLBL');
+  } as unknown as Api, 'MLBL', storedCalendarReader);
   assert.equal(failed.sent, 0);
   assert.match(failed.errors[0]!, /Telegram 503/);
   const pending = await getScheduledGameById(game.id);
@@ -411,7 +436,7 @@ test('ошибка Telegram оставляет голосовалку в оче�
 
   const retried = await sendPendingScheduledGamePolls({
     sendPoll: async () => ({ message_id: 303, poll: { id: 'retry-poll' } }),
-  } as unknown as Api, 'MLBL');
+  } as unknown as Api, 'MLBL', storedCalendarReader);
   assert.equal(retried.sent, 1);
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, false);
 });
@@ -433,7 +458,7 @@ test('новая игра вне сохранённого горизонта ж�
   await setScheduledGameCalendarEventId(game.id, 'calendar-outside-window');
   const result = await sendPendingScheduledGamePolls({
     sendPoll: async () => { throw new Error('не должен вызываться'); },
-  } as unknown as Api, 'MLBL');
+  } as unknown as Api, 'MLBL', storedCalendarReader);
 
   assert.deepEqual(result, { sent: 0, alreadySent: 0, deferred: 1, errors: [] });
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, true);
@@ -458,7 +483,7 @@ test('игра, известная до планового cron, не получ
 
   const result = await sendPendingScheduledGamePolls({
     sendPoll: async () => { throw new Error('не должен вызываться'); },
-  } as unknown as Api, 'LCHB');
+  } as unknown as Api, 'LCHB', storedCalendarReader);
   assert.deepEqual(result, { sent: 0, alreadySent: 0, deferred: 1, errors: [] });
   assert.equal((await getScheduledGameById(game.id))!.poll_pending, true);
 });
@@ -543,6 +568,91 @@ test('полная проверка повторно подхватывает п
     fetchMock.mock.restore();
     update.mock.restore();
   }
+});
+
+test('перед опросом ЛЧБ обновляет Calendar с сайта, но возвращает данные из Calendar', async () => {
+  const game = await upsertScheduledGame({
+    source: 'LCHB', source_url: 'https://basketball.businesschampions.ru/osen-2099/komandy/142588/',
+    external_id: 'lchb-fresh', team: 'RED', team_a: 'Yandex Red', team_b: 'ЛАНИТ',
+    game_date: '2099-12-20', game_time: '18:00', location: null,
+    details_url: 'https://basketball.businesschampions.ru/matches/999001/',
+  });
+  await setScheduledGameCalendarEventId(game.id, 'lchb-calendar');
+  const fetchMock = mock.method(globalThis, 'fetch', async () => new Response(`
+    <div class="nogame-info__match-name">Дивизион<br>Зал ЛЧБ №2</div>
+    <div class="nogame-info__match-stadium"></div>
+    <div class="nogame-info__match-date">21 Декабря (Пн)</div>
+    <div class="nogame-info__match-time">20:30</div>`));
+  const updates: Array<{ requestBody?: { location?: string | null } }> = [];
+  const update = mock.method(calendar_v3.Resource$Events.prototype, 'update', async (args) => {
+    updates.push(args); return { data: {} };
+  });
+  const get = mock.method(calendar_v3.Resource$Events.prototype, 'get', async () => ({ data: {
+    id: 'lchb-calendar', summary: 'Имя из Google Calendar', location: 'Зал из Google Calendar',
+    start: { dateTime: '2099-12-21T20:30:00+03:00' }, description: 'TYPE=GAME',
+    extendedProperties: { private: { basketballgodSource: 'LCHB' } },
+  } }));
+  try {
+    const event = await readFreshCalendarGameForPoll('RED', 'lchb-calendar');
+    const stored = await getScheduledGameById(game.id);
+    assert.equal(String(stored!.game_time).slice(0, 5), '20:30');
+    assert.equal(stored!.location, 'Зал ЛЧБ №2');
+    assert.equal(updates[0]!.requestBody?.location, 'Зал ЛЧБ №2');
+    assert.equal(event.summary, 'Имя из Google Calendar');
+    assert.equal(event.location, 'Зал из Google Calendar');
+  } finally {
+    fetchMock.mock.restore(); update.mock.restore(); get.mock.restore();
+  }
+});
+
+test('перед опросом МЛБЛ повторно читает API и обновляет время и зал', async () => {
+  const game = await upsertScheduledGame({
+    source: 'MLBL', source_url: 'https://moscow.ilovebasket.ru/schedule',
+    external_id: '1090999', team: 'BLACK', team_a: 'Yandex Black', team_b: 'Пардус',
+    game_date: '2099-12-20', game_time: '13:00', location: 'Старый зал', details_url: null,
+  });
+  await setScheduledGameCalendarEventId(game.id, 'mlbl-calendar');
+  const fetchMock = mock.method(globalThis, 'fetch', async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'moscow.ilovebasket.ru') return new Response(
+      'window.comps = [{"id":142708,"apiUrl":"https://reg.infobasket.su"}];');
+    return new Response(JSON.stringify([{
+      GameID: 1090999, GameDate: '20.12.2099', GameTime: '14:30', HasTime: true, GameStatus: 0,
+      ShortTeamNameAru: 'Yandex Black', ShortTeamNameBru: 'Пардус', ArenaRu: 'Новый зал МЛБЛ',
+    }]));
+  });
+  const update = mock.method(calendar_v3.Resource$Events.prototype, 'update', async () => ({ data: {} }));
+  try {
+    const stored = await getScheduledGameById(game.id);
+    assert.ok(stored);
+    const updated = await refreshScheduledGameForPoll(stored);
+    assert.equal(String(updated.game_time).slice(0, 5), '14:30');
+    assert.equal(updated.location, 'Новый зал МЛБЛ');
+  } finally {
+    fetchMock.mock.restore(); update.mock.restore();
+  }
+});
+
+test('ручная товарищеская игра отправляется по свежим данным Google Calendar без сайта лиги', async () => {
+  const start = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  let listCalls = 0;
+  const list = mock.method(calendar_v3.Resource$Events.prototype, 'list', async () => ({ data: {
+    items: listCalls++ === 0 ? [{
+      id: 'manual-friendly', summary: 'Товарищеская игра из Calendar', location: 'Ручной зал',
+      start: { dateTime: start }, description: 'TYPE=FRIENDLY',
+    }] : [],
+  } }));
+  const questions: string[] = [];
+  const api = { sendPoll: async (_chat: number, question: string) => {
+    questions.push(question);
+    return { message_id: 501, poll: { id: 'manual-friendly-poll' } };
+  } } as unknown as Api;
+  try {
+    const result = await sendWeeklyPolls(api, 'game');
+    assert.equal(result.sent, 1);
+    assert.match(questions[0]!, /Товарищеская игра из Calendar/);
+    assert.match(questions[0]!, /Ручной зал/);
+  } finally { list.mock.restore(); }
 });
 
 function manualEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {

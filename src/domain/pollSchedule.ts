@@ -23,12 +23,19 @@ export function scheduledGameStart(game: ScheduledGame): Date {
   const date = game.game_date instanceof Date ? game.game_date.toISOString().slice(0,10) : String(game.game_date).slice(0,10);
   return new Date(`${date}T${game.game_time ? String(game.game_time).slice(0,5) : '00:00'}:00+03:00`);
 }
-export function inActivePollWindow(game: ScheduledGame, window: CronJobWindow | null, now: Date): boolean {
-  if (!window?.completed_at) return false;
+export function inActivePollWindowForStart(
+  createdAt: string | Date,
+  start: Date,
+  window: CronJobWindow | null,
+  now: Date,
+): boolean {
+  if (!window?.completed_at || !Number.isFinite(start.getTime())) return false;
   const started = new Date(window.window_started_at);
   const until = new Date(window.window_until);
-  const start = scheduledGameStart(game);
-  return now < start && now < until && new Date(game.created_at) >= started && start >= started && start < until;
+  return now < start && now < until && new Date(createdAt) >= started && start >= started && start < until;
+}
+export function inActivePollWindow(game: ScheduledGame, window: CronJobWindow | null, now: Date): boolean {
+  return inActivePollWindowForStart(game.created_at, scheduledGameStart(game), window, now);
 }
 
 /** Следующий реальный cron-такт проверки: привязка к часам, а не now + интервал. */

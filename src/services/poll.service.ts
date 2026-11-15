@@ -17,6 +17,10 @@ import {
   beginCronJobWindow,
   completeCronJobWindow,
 } from '../db/repos/cronJobWindows.repo.js';
+import {
+  readFreshCalendarGameForPoll,
+  refreshLeagueCalendarsBeforePolls,
+} from './gamePollFreshness.service.js';
 
 const TEAMS: Team[] = ['RED', 'BLACK'];
 const other = (t: Team): Team => (t === 'RED' ? 'BLACK' : 'RED');
@@ -203,9 +207,29 @@ export async function sendWeeklyPolls(
     await beginCronJobWindow('game-polls', windowStartedAt, windowUntil);
   }
 
+  let verifiedLeagueEvents = new Set<string>();
+  let knownLeagueEvents = new Set<string>();
+  if (kind === 'game') {
+    try {
+      const freshness = await refreshLeagueCalendarsBeforePolls();
+      knownLeagueEvents = freshness.knownLeagueEventIds;
+      verifiedLeagueEvents = freshness.verifiedEventIds;
+      for (const error of freshness.errors) log.warn(`[polls:game] актуальность не подтверждена: ${error}`);
+    } catch (err) {
+      // Ручные события Calendar всё равно можно отправить; импортированные из лиг
+      // будут отфильтрованы ниже как непроверенные.
+      log.error('[polls:game] не удалось обновить календарь перед опросами', (err as Error).message);
+    }
+  }
+
   for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
     for (const ev of events) {
       if (!matchesKind(ev, kind) || !isUpcomingPollEvent(ev, windowStartedAt)) continue;
+      const leagueEvent = knownLeagueEvents.has(ev.uid) || ev.importedSource === 'LCHB' || ev.importedSource === 'MLBL';
+      if (kind === 'game' && leagueEvent && !verifiedLeagueEvents.has(ev.uid)) {
+        log.warn(`[polls:game] пропущен непроверенный матч ${team}: ${ev.summary}`);
+        continue;
+      }
       try {
         const res = await sendPollForEvent(api, {
           team,
@@ -280,12 +304,21 @@ export async function publishPollDraft(
     throw new Error(draft.status === 'sent' ? 'Этот опрос уже отправлен' : 'Этот опрос пропущен');
   }
 
+  let question = draft.question;
+  let eventStart = draft.event_start;
+  if (!draft.is_training && draft.event_uid) {
+    const event = await readFreshCalendarGameForPoll(draft.team, draft.event_uid);
+    if (!isUpcomingPollEvent(event, new Date())) throw new Error('Игра уже началась — опрос не отправлен');
+    question = questionFor(event);
+    eventStart = event.start;
+  }
+
   const res = await sendPollForEvent(api, {
     team: draft.team,
-    question: draft.question,
+    question,
     options: draft.options,
     eventUid: draft.event_uid,
-    eventStart: draft.event_start,
+    eventStart,
     forward: draft.forward,
   });
 

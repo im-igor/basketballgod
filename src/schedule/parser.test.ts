@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import {
   parseLchbLocationHtml,
+  parseLchbMatchDetailsHtml,
   parseLchbScheduleHtml,
   parseMlblCompetitionsHtml,
   parseMlblGames,
@@ -56,6 +57,20 @@ test('парсит площадку ЛЧБ только до переноса с
     parseLchbLocationHtml('<div class="nogame-info__match-stadium">Территория мяча. Площадка №2.<br>Дивизион «Алмаз»</div>'),
     'Территория мяча. Площадка №2.',
   );
+});
+
+test('detail page ЛЧБ даёт актуальные дату, время и зал из резервного блока', () => {
+  const html = `<div class="nogame-info__match-name">
+      Дивизион "Сапфир. Группа 3".<br>Территория мяча. Площадка №2.
+    </div>
+    <div class="nogame-info__match-stadium"></div>
+    <div class="nogame-info__match-date">22 Ноября (Вс)</div>
+    <div class="nogame-info__match-time"><div>15:50</div></div>`;
+  assert.deepEqual(parseLchbMatchDetailsHtml(html, '2026-11-20'), {
+    gameDate: '2026-11-22',
+    gameTime: '15:50',
+    location: 'Территория мяча. Площадка №2.',
+  });
 });
 
 test('парсит список соревнований и только запланированные матчи Yandex Black из МЛБЛ', () => {
@@ -119,12 +134,13 @@ test('исторический диапазон МЛБЛ использует к
 test('обычный импорт МЛБЛ запрашивает явный годовой диапазон без обрезающего max', async () => {
   assert.deepEqual(mlblUpcomingRange(new Date('2026-11-15T19:00:00Z')),
     { from: '2026-11-15', to: '2027-11-16' });
+  const expectedRange = mlblCalendarRange(mlblUpcomingRange());
   const stub = mock.method(globalThis, 'fetch', async (input: URL | RequestInfo) => {
     const url = new URL(String(input));
     if (url.hostname === 'moscow.ilovebasket.ru') return new Response(
       'window.comps = [{"id":142708,"apiUrl":"https://reg.infobasket.su"}];');
-    assert.equal(url.searchParams.get('from'), '15.11.2026');
-    assert.equal(url.searchParams.get('to'), '15.11.2027');
+    assert.equal(url.searchParams.get('from'), expectedRange.from);
+    assert.equal(url.searchParams.get('to'), expectedRange.to);
     assert.equal(url.searchParams.has('max'), false);
     return new Response(JSON.stringify([
       { GameID: 6, GameDate: '06.12.2026', GameStatus: 0, ShortTeamNameAru: 'Yandex Black', ShortTeamNameBru: 'Пардус' },

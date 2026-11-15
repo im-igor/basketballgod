@@ -1,13 +1,18 @@
-import { inActivePollWindow } from '../domain/pollSchedule.js';
+import { inActivePollWindowForStart } from '../domain/pollSchedule.js';
 import type { Api } from 'grammy';
-import type { ScheduledGameSource, ScheduledGame } from '../db/types.js';
+import type { ScheduledGameSource } from '../db/types.js';
 import {
   listPendingScheduledGamePolls,
   recordScheduledGamePollResult,
 } from '../db/repos/scheduledGames.repo.js';
 import { sendGamePollForEvent } from './poll.service.js';
 import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
-import { scheduledGameSummary } from '../google/calendar.js';
+import {
+  createGamePollFreshnessContext,
+  readFreshCalendarGameForPoll,
+  type GamePollFreshnessContext,
+} from './gamePollFreshness.service.js';
+import type { CalendarEvent } from '../google/calendar.js';
 
 export interface SchedulePollDispatchResult {
   sent: number;
@@ -16,18 +21,11 @@ export interface SchedulePollDispatchResult {
   errors: string[];
 }
 
-function gameDate(game: ScheduledGame): string {
-  return game.game_date instanceof Date
-    ? game.game_date.toISOString().slice(0, 10)
-    : String(game.game_date).slice(0, 10);
-}
-
-function gameStart(game: ScheduledGame): { start: string; startDateTime: boolean } {
-  const date = gameDate(game);
-  const time = game.game_time ? String(game.game_time).slice(0, 5) : null;
-  if (!time) return { start: date, startDateTime: false };
-  return { start: new Date(`${date}T${time}:00+03:00`).toISOString(), startDateTime: true };
-}
+type FreshGameReader = (
+  team: CalendarEvent['team'],
+  eventId: string,
+  context: GamePollFreshnessContext,
+) => Promise<CalendarEvent>;
 
 /**
  * Отправить голосовалки игр, обнаруженных после последнего планового cron и попавших
@@ -36,6 +34,7 @@ function gameStart(game: ScheduledGame): { start: string; startDateTime: boolean
 export async function sendPendingScheduledGamePolls(
   api: Api,
   source?: ScheduledGameSource,
+  readFreshGame: FreshGameReader = readFreshCalendarGameForPoll,
 ): Promise<SchedulePollDispatchResult> {
   const result: SchedulePollDispatchResult = { sent: 0, alreadySent: 0, deferred: 0, errors: [] };
   const [games, window] = await Promise.all([
@@ -43,25 +42,15 @@ export async function sendPendingScheduledGamePolls(
     getCronJobWindow('game-polls'),
   ]);
   const now = new Date();
+  const freshness = createGamePollFreshnessContext();
   for (const game of games) {
-    if (!inActivePollWindow(game, window, now)) {
-      result.deferred++;
-      continue;
-    }
     try {
-      const start = gameStart(game);
-      const sent = await sendGamePollForEvent(api, {
-        uid: game.calendar_event_id!,
-        team: game.team,
-        summary: scheduledGameSummary({
-          source: game.source === 'CALENDAR' ? (game.team === 'RED' ? 'LCHB' : 'MLBL') : game.source,
-          team: game.team,
-          teamA: game.team_a,
-          teamB: game.team_b,
-        }),
-        location: game.location,
-        ...start,
-      });
+      const event = await readFreshGame(game.team, game.calendar_event_id!, freshness);
+      if (!inActivePollWindowForStart(game.created_at, new Date(event.start), window, now)) {
+        result.deferred++;
+        continue;
+      }
+      const sent = await sendGamePollForEvent(api, event);
       await recordScheduledGamePollResult(game.id, true);
       if (sent.sent) result.sent++;
       else result.alreadySent++;

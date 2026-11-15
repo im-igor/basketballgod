@@ -71,6 +71,13 @@ export async function listAllEvents(timeMin: Date, timeMax: Date): Promise<Calen
   return [...red, ...black].sort((a, b) => a.start.localeCompare(b.start));
 }
 
+/** Повторно прочитать одно событие непосредственно перед внешним действием. */
+export async function getEvent(team: Team, eventId: string): Promise<CalendarEvent | null> {
+  const calendar = calendarClient();
+  const res = await calendar.events.get({ calendarId: env.calendars[team], eventId });
+  return mapEvent(team, res.data);
+}
+
 export interface ScheduledCalendarEvent {
   source: 'LCHB' | 'MLBL';
   externalId: string;

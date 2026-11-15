@@ -2,7 +2,7 @@ import '../test/env.js';
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
-import { listEvents, upsertScheduledCalendarEvent, type ScheduledCalendarEvent } from './calendar.js';
+import { getEvent, listEvents, upsertScheduledCalendarEvent, type ScheduledCalendarEvent } from './calendar.js';
 import { parseTags } from './tags.js';
 
 test('импорт и повторная синхронизация игр RED используют MIXED, BLACK — ALL_BLACK', async () => {
@@ -62,4 +62,17 @@ test('чтение календаря не обрывается после пе�
   } finally {
     list.mock.restore();
   }
+});
+
+test('точечная проверка перечитывает актуальное событие Calendar', async () => {
+  const get = mock.method(calendar_v3.Resource$Events.prototype, 'get', async () => ({ data: {
+    id: 'fresh-game', summary: 'Товарищеская игра', location: 'Новый зал',
+    start: { dateTime: '2026-11-22T18:00:00+03:00' }, description: 'TYPE=FRIENDLY',
+  } }));
+  try {
+    const event = await getEvent('RED', 'fresh-game');
+    assert.equal(event?.summary, 'Товарищеская игра');
+    assert.equal(event?.location, 'Новый зал');
+    assert.equal(event?.tags.TYPE, 'FRIENDLY');
+  } finally { get.mock.restore(); }
 });

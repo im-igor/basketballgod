@@ -156,10 +156,53 @@ export function parseLchbScheduleHtml(
 export function parseLchbLocationHtml(html: string): string | null {
   const root = parse(html);
   const stadium = root.querySelector('.nogame-info__match-stadium');
-  if (!stadium) return null;
-  const firstLine = stadium.innerHTML.split(/<br\s*\/?>/i)[0] ?? '';
+  const firstLine = stadium?.innerHTML.split(/<br\s*\/?>/i)[0] ?? '';
   const location = clean(parse(firstLine).textContent);
-  return location || null;
+  if (location) return location;
+  // Для будущих матчей ЛЧБ иногда оставляет stadium пустым, но публикует зал
+  // второй строкой в названии матча.
+  const matchName = root.querySelector('.nogame-info__match-name');
+  const lines = (matchName?.innerHTML ?? '')
+    .split(/<br\s*\/?>/i)
+    .map((line) => clean(parse(line).textContent))
+    .filter(Boolean);
+  return lines.length > 1 ? lines.at(-1)! : null;
+}
+
+export interface LchbMatchDetails {
+  gameDate: string;
+  gameTime: string;
+  location: string | null;
+}
+
+const LCHB_MONTHS: Record<string, number> = {
+  января: 1, февраля: 2, марта: 3, апреля: 4, мая: 5, июня: 6,
+  июля: 7, августа: 8, сентября: 9, октября: 10, ноября: 11, декабря: 12,
+};
+
+/** Актуальные дата, время и площадка с detail page матча ЛЧБ. */
+export function parseLchbMatchDetailsHtml(html: string, previousDate: string): LchbMatchDetails {
+  const root = parse(html);
+  const dateText = clean(root.querySelector('.nogame-info__match-date')?.textContent);
+  const dm = dateText.toLocaleLowerCase('ru-RU').match(/^(\d{1,2})\s+([а-яё]+)/u);
+  const month = dm?.[2] ? LCHB_MONTHS[dm[2]] : undefined;
+  const previous = new Date(`${previousDate}T00:00:00Z`);
+  if (!dm?.[1] || !month || !Number.isFinite(previous.getTime())) {
+    throw new Error('ЛЧБ не вернула актуальную дату матча');
+  }
+  const day = Number(dm[1]);
+  const candidates = [-1, 0, 1].map((offset) => new Date(Date.UTC(previous.getUTCFullYear() + offset, month - 1, day)));
+  const closest = candidates.sort((a, b) =>
+    Math.abs(a.getTime() - previous.getTime()) - Math.abs(b.getTime() - previous.getTime()))[0]!;
+  const gameDate = closest.toISOString().slice(0, 10);
+  const timeText = clean(root.querySelector('.nogame-info__match-time')?.textContent);
+  const time = timeText.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);
+  if (!time?.[1] || !time[2]) throw new Error('ЛЧБ не вернула актуальное время матча');
+  return {
+    gameDate,
+    gameTime: `${time[1].padStart(2, '0')}:${time[2]}`,
+    location: parseLchbLocationHtml(html),
+  };
 }
 
 export function parseMlblCompetitionsHtml(html: string): MlblCompetition[] {
@@ -282,6 +325,12 @@ export async function fetchLchbLocation(rawUrl: string): Promise<string | null> 
   const { url, source } = assertSourceUrl(rawUrl.trim());
   if (source !== 'LCHB') throw new Error('Ожидалась ссылка на матч ЛЧБ');
   return parseLchbLocationHtml(await fetchText(url));
+}
+
+export async function fetchLchbMatchDetails(rawUrl: string, previousDate: string): Promise<LchbMatchDetails> {
+  const { url, source } = assertSourceUrl(rawUrl.trim());
+  if (source !== 'LCHB') throw new Error('Ожидалась ссылка на матч ЛЧБ');
+  return parseLchbMatchDetailsHtml(await fetchText(url), previousDate);
 }
 
 export async function fetchSchedulePage(rawUrl: string, team: Team, range?: StatsScheduleRange): Promise<ScheduledGameInput[]> {

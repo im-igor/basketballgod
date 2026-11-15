@@ -28,7 +28,7 @@ export function inActivePollWindow(game: ScheduledGame, window: CronJobWindow | 
   const started = new Date(window.window_started_at);
   const until = new Date(window.window_until);
   const start = scheduledGameStart(game);
-  return now < until && new Date(game.created_at) >= started && start >= started && start < until;
+  return now < start && now < until && new Date(game.created_at) >= started && start >= started && start < until;
 }
 
 /** Следующий реальный cron-такт проверки: привязка к часам, а не now + интервал. */

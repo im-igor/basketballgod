@@ -10,9 +10,11 @@ import {
   upsertScheduledGame,
   adoptCalendarScheduledGame,
   listScheduledGamesInRange,
+  listUpcomingLeagueGames,
+  setScheduledGameLocation,
 } from '../db/repos/scheduledGames.repo.js';
 import { upsertScheduledCalendarEvent } from '../google/calendar.js';
-import { fetchSchedulePage } from '../schedule/parser.js';
+import { fetchLchbLocation, fetchSchedulePage } from '../schedule/parser.js';
 import type { ScheduledGame, Team } from '../db/types.js';
 import type { ScheduleDuplicateGroup } from '../domain/schedule.js';
 import { scheduledMatchupKey } from '../domain/schedule.js';
@@ -45,6 +47,44 @@ export async function syncScheduledGame(row: ScheduledGame): Promise<void> {
     coachConflict: row.coach_conflict,
   });
   await setScheduledGameCalendarEventId(row.id, eventId);
+}
+
+export interface KnownGamesSyncResult {
+  synced: number;
+  locationsAdded: number;
+  errors: string[];
+}
+
+/**
+ * Ручная полная проверка: обновляет формат названий всех будущих игр лиг и
+ * повторно ищет площадки ЛЧБ, которые могли появиться после первого импорта.
+ */
+export async function syncKnownLeagueGames(): Promise<KnownGamesSyncResult> {
+  const result: KnownGamesSyncResult = { synced: 0, locationsAdded: 0, errors: [] };
+  for (const original of await listUpcomingLeagueGames()) {
+    let row = original;
+    if (row.source === 'LCHB' && !row.location && row.details_url) {
+      try {
+        const location = await fetchLchbLocation(row.details_url);
+        if (location) {
+          const updated = await setScheduledGameLocation(row.id, location);
+          if (updated) {
+            row = updated;
+            result.locationsAdded++;
+          }
+        }
+      } catch (err) {
+        result.errors.push(`${row.team_a} — ${row.team_b}, площадка: ${(err as Error).message}`);
+      }
+    }
+    try {
+      await syncScheduledGame(row);
+      result.synced++;
+    } catch (err) {
+      result.errors.push(`${row.team_a} — ${row.team_b}, Calendar: ${(err as Error).message}`);
+    }
+  }
+  return result;
 }
 
 /** Импорт страницы целиком: БД обновляется первой, затем тот же матч синхронизируется в Calendar. */

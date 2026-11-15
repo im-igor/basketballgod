@@ -7,6 +7,7 @@ import {
 } from '../db/repos/scheduledGames.repo.js';
 import { sendGamePollForEvent } from './poll.service.js';
 import { getCronJobWindow } from '../db/repos/cronJobWindows.repo.js';
+import { scheduledGameSummary } from '../google/calendar.js';
 
 export interface SchedulePollDispatchResult {
   sent: number;
@@ -52,7 +53,12 @@ export async function sendPendingScheduledGamePolls(
       const sent = await sendGamePollForEvent(api, {
         uid: game.calendar_event_id!,
         team: game.team,
-        summary: `Игра ${game.team_a} - ${game.team_b}`,
+        summary: scheduledGameSummary({
+          source: game.source === 'CALENDAR' ? (game.team === 'RED' ? 'LCHB' : 'MLBL') : game.source,
+          team: game.team,
+          teamA: game.team_a,
+          teamB: game.team_b,
+        }),
         location: game.location,
         ...start,
       });

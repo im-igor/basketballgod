@@ -230,6 +230,15 @@ async function fetchLchb(url: URL, team: Team, statistics = false): Promise<Sche
 
 export interface StatsScheduleRange { from: string; to: string }
 
+/** Явное окно будущего сезона вместо нестабильной карусели `today-365`. */
+export function mlblUpcomingRange(now = new Date()): StatsScheduleRange {
+  const from = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
+  const to = new Date(`${from}T00:00:00Z`);
+  to.setUTCFullYear(to.getUTCFullYear() + 1);
+  to.setUTCDate(to.getUTCDate() + 1);
+  return { from, to: to.toISOString().slice(0, 10) };
+}
+
 /** API календаря МЛБЛ принимает ДД.ММ.ГГГГ. ISO и today-365 могут вернуть урезанную карусель. */
 export function mlblCalendarRange(range: StatsScheduleRange): { from: string; to: string } {
   const format = (iso: string) => iso.slice(0,10).split('-').reverse().join('.');
@@ -247,12 +256,9 @@ async function fetchMlbl(url: URL, team: Team, range?: StatsScheduleRange): Prom
       const endpoint = new URL('/Comp/GetCalendarCarousel/', api);
       endpoint.searchParams.set('comps', String(comp.id));
       endpoint.searchParams.set('format', 'json');
-      if (range) {
-        const dates = mlblCalendarRange(range);
-        endpoint.searchParams.set('from', dates.from);
-        endpoint.searchParams.set('to', dates.to);
-      } else endpoint.searchParams.set('from', 'today-365');
-      endpoint.searchParams.set('max', '500');
+      const dates = mlblCalendarRange(range ?? mlblUpcomingRange());
+      endpoint.searchParams.set('from', dates.from);
+      endpoint.searchParams.set('to', dates.to);
       const raw: unknown = JSON.parse(await fetchText(endpoint));
       return parseMlblGames(raw, url.toString(), team, api.origin, !!range);
     }),
@@ -269,6 +275,13 @@ async function fetchMlbl(url: URL, team: Team, range?: StatsScheduleRange): Prom
   return [...unique.values()].sort((a, b) =>
     `${a.game_date} ${a.game_time ?? ''}`.localeCompare(`${b.game_date} ${b.game_time ?? ''}`),
   );
+}
+
+/** Повторно читает площадку уже известного матча, когда лига опубликовала её позже. */
+export async function fetchLchbLocation(rawUrl: string): Promise<string | null> {
+  const { url, source } = assertSourceUrl(rawUrl.trim());
+  if (source !== 'LCHB') throw new Error('Ожидалась ссылка на матч ЛЧБ');
+  return parseLchbLocationHtml(await fetchText(url));
 }
 
 export async function fetchSchedulePage(rawUrl: string, team: Team, range?: StatsScheduleRange): Promise<ScheduledGameInput[]> {

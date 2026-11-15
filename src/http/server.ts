@@ -56,8 +56,10 @@ import {
   validateGame,
   type GamePlan,
 } from '../services/gameFee.service.js';
-import { importSchedule, setScheduleCoachDecision } from '../services/scheduleImport.service.js';
-import { refreshScheduleSourceWithPolls, refreshCalendarSchedules } from '../services/scheduleRefresh.service.js';
+import { importSchedule, setScheduleCoachDecision, syncKnownLeagueGames } from '../services/scheduleImport.service.js';
+import {
+  refreshScheduleSource, refreshScheduleSourceWithPolls, refreshCalendarSchedules,
+} from '../services/scheduleRefresh.service.js';
 import {
   deleteScheduledGameWithArtifacts,
   notifyScheduleDuplicatesToAdmins,
@@ -1860,41 +1862,26 @@ export async function buildServer(bot: Bot) {
       getCronJobWindow('game-polls'),
     ]);
     const duplicateIds = new Set(duplicateGroups.flatMap((group) => group.games.map((game) => game.id)));
-    const googleCalendarUrl = (team: Team) =>
-      `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(env.calendars[team])}`;
-    const calendarLinks = `<div class="card row" style="align-items:center">
-      <span class="muted">Открыть календарь:</span>
-      <a href="${esc(googleCalendarUrl('RED'))}" target="_blank" rel="noopener">${teamBadge('RED')}</a>
-      <a href="${esc(googleCalendarUrl('BLACK'))}" target="_blank" rel="noopener">${teamBadge('BLACK')}</a>
-    </div>`;
     const sourceByName = new Map(sources.map((source) => [source.source, source]));
-    const sourceCard = (source: ScheduleSource, example: string): string => {
+    const sourceRow = (source: ScheduleSource, example: string): string => {
       const saved = sourceByName.get(source);
       const team = SCHEDULE_SOURCE_TEAMS[source];
       const checked = saved?.enabled !== false ? 'checked' : '';
       const status = !saved
-        ? '<span class="muted">Источник ещё не настроен.</span>'
+        ? '<span class="muted">ещё не настроен</span>'
         : saved.last_checked_at
           ? `${saved.last_error ? '<span class="badge no">ошибка</span>' : '<span class="badge yes">проверено</span>'} ` +
             `<span class="muted">${esc(fmtDateTime(saved.last_checked_at))}` +
             `${saved.last_found !== null ? ` · найдено ${esc(saved.last_found)}, новых ${esc(saved.last_new ?? 0)}, сохранено ${esc(saved.last_saved ?? 0)}, Calendar ${esc(saved.last_calendar_synced ?? 0)}` : ''}</span>` +
-            `${saved.last_error ? `<div class="muted" style="margin-top:5px">${esc(saved.last_error)}</div>` : ''}`
-          : '<span class="muted">Ссылка сохранена, но ещё не проверялась.</span>';
-      return `<div class="card">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <h2 style="margin:0">${source} · ${teamBadge(team)}</h2><div>${status}</div>
+            `${saved.last_error ? `<span class="muted schedule-source-error">${esc(saved.last_error)}</span>` : ''}`
+          : '<span class="muted">ссылка сохранена, ещё не проверялась</span>';
+      return `<div class="schedule-source-row">
+        <div class="schedule-source-name"><b>${source === 'LCHB' ? 'ЛЧБ' : 'МЛБЛ'}</b>${teamBadge(team)}</div>
+        <div class="schedule-source-input">
+          <input name="${source.toLowerCase()}_url" type="url" value="${esc(saved?.url ?? '')}" placeholder="${esc(example)}" aria-label="Страница расписания ${source}" required>
+          <label class="schedule-enabled"><input type="checkbox" name="${source.toLowerCase()}_enabled" value="yes" ${checked}> авто</label>
         </div>
-        <form method="post" action="/schedule/sources" style="margin-top:12px">
-          <input type="hidden" name="source" value="${source}">
-          <div class="row">
-            <div><label>Страница расписания ${source}</label><input name="url" type="url" value="${esc(saved?.url ?? '')}" placeholder="${esc(example)}" required></div>
-            <label class="inline" style="display:flex;gap:7px;align-items:center;margin-bottom:10px">
-              <input type="checkbox" name="enabled" value="yes" ${checked} style="width:auto"> использовать в автопроверке
-            </label>
-            <div style="flex:0"><button>Сохранить и проверить</button></div>
-          </div>
-        </form>
-        ${saved ? `<form class="inline" method="post" action="/schedule/sources/${source}/refresh"><button class="ghost">Проверить сейчас</button></form>` : ''}
+        <div class="schedule-source-status">${status}</div>
       </div>`;
     };
     const autoStatus = cronConfig.schedule_import_enabled
@@ -1926,12 +1913,11 @@ export async function buildServer(bot: Bot) {
           : g.coach_conflict
             ? '<span class="badge yes">тренер здесь</span>'
             : '<span class="badge yes">тренер по плану</span>';
-      const coachControl = `${coachState}<form method="post" action="/schedule/${esc(g.id)}/coach" style="margin-top:6px;display:flex;gap:5px">
-        <select name="coach" style="min-width:115px"><option value="auto" ${selected('auto')}>не задано</option><option value="yes" ${selected('yes')}>тренер будет</option><option value="no" ${selected('no')}>без тренера</option></select>
+      const coachControl = `${coachState}<form class="schedule-coach" method="post" action="/schedule/${esc(g.id)}/coach">
+        <select name="coach"><option value="auto" ${selected('auto')}>не задано</option><option value="yes" ${selected('yes')}>тренер будет</option><option value="no" ${selected('no')}>без тренера</option></select>
         <button class="ghost">OK</button></form>`;
       const pollStatus = scheduledPollStatus(g,pollContext);
-      const pollState = `<span class="badge ${pollStatus.kind}" title="${esc(pollStatus.detail)}">${esc(pollStatus.text)}</span>` +
-        (pollStatus.detail ? `<div class="muted" style="margin-top:4px">${esc(pollStatus.detail)}</div>` : '');
+      const pollState = `<span class="badge ${pollStatus.kind}" title="${esc(pollStatus.detail)}">${esc(pollStatus.text)}</span>`;
       const duplicateState = isDuplicate
         ? '<span class="badge no">возможный дубль</span>'
         : '<span class="muted">—</span>';
@@ -1942,38 +1928,69 @@ export async function buildServer(bot: Bot) {
         ? `<form method="post" action="/schedule/${esc(g.id)}/delete" onsubmit="return confirm(${esc(deleteConfirmation)})"><button class="danger">Удалить лишнюю</button></form>`
         : '<span class="muted">—</span>';
       return `<tr>
-        <td>${esc(g.source)}</td>
-        <td>${teamBadge(g.team)}</td>
-        <td>${teams[0]}</td>
-        <td>${teams[1]}</td>
-        <td>${esc(date)}</td>
-        <td>${esc(time)}</td>
+        <td><b>${g.source === 'LCHB' ? 'ЛЧБ' : g.source === 'MLBL' ? 'МЛБЛ' : 'Calendar'}</b><div>${teamBadge(g.team)}</div></td>
+        <td><div>${teams[0]}</div><div class="muted">${teams[1]}</div></td>
+        <td><b>${esc(date)}</b><div class="muted">${esc(time)}</div></td>
         <td>${esc(g.location ?? '—')}</td>
-        <td>${duplicateState}</td>
         <td>${coachControl}</td>
-        <td>${g.calendar_event_id ? '<span class="badge yes">в календаре</span>' : '<span class="badge no">ошибка</span>'}</td>
-        <td>${pollState}</td>
-        <td>${actions}</td>
+        <td><div class="schedule-statuses">${g.calendar_event_id ? '<span class="badge yes">Google</span>' : '<span class="badge no">нет Google</span>'}${pollState}</div></td>
+        <td><div class="schedule-statuses">${duplicateState}${actions}</div></td>
       </tr>`;
     }).join('');
 
     const body = `<h1>Расписание игр</h1>
-      ${calendarLinks}
-      <div class="card row" style="align-items:center;justify-content:space-between">
-        <div><b>Периодическое обновление</b><div class="muted">Проверяются страницы лиг и ручные игры из Google Calendar. События календаря импортируются в базу за последние 30 дней и на год вперёд.</div></div>
-        <div>${autoStatus} · <a href="/cron">настроить крон</a></div>
-      </div>
-      ${sourceCard('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
-      ${sourceCard('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
-      <div class="card"><b>Ручные игры из Google Calendar</b>
-        <p class="muted">В календаре команды укажи TYPE=GAME или TYPE=FRIENDLY и название «Игра Команда 1 - Команда 2». Автоимпорт работает с интервалом обновления расписаний, даже если сайт лиги недоступен.</p>
-        <form method="post" action="/schedule/calendar/import"><button>Импортировать из календарей</button></form>
+      <form class="card schedule-import-card" method="post" action="/schedule/refresh">
+        <div class="schedule-import-heading"><div><h2>Импорт в календарь</h2><div>${autoStatus} · <a href="/cron">настроить крон</a></div></div>
+          <button>Проверить и сохранить</button></div>
+        <div class="schedule-source-list">
+          ${sourceRow('LCHB', 'https://basketball.businesschampions.ru/vesna-2026/komandy/142588/')}
+          ${sourceRow('MLBL', 'https://moscow.ilovebasket.ru/schedule')}
+        </div>
+      </form>
+      <div class="card schedule-manual-card"><div><b>Ручные игры из Google Calendar</b>
+        <div class="muted">TYPE=GAME или TYPE=FRIENDLY, название «Игра Команда 1 - Команда 2». Автоимпорт идёт вместе с расписанием.</div></div>
+        <form method="post" action="/schedule/calendar/import"><button class="ghost">Импортировать</button></form>
       </div>
       <div class="card table-scroll"><table class="schedule-table">
-        <thead><tr><th>Источник</th><th>Команда</th><th>Команда 1</th><th>Команда 2</th><th>Дата</th><th>Время</th><th>Место</th><th>Дубли</th><th>Тренер</th><th>Google</th><th>Опрос</th><th>Действия</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="12" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
+        <thead><tr><th>Лига / команда</th><th>Матч</th><th>Дата / время</th><th>Зал</th><th>Тренер</th><th>Google / опрос</th><th>Дубли / действия</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">Импортированных матчей пока нет</td></tr>'}</tbody>
       </table></div>`;
     return html(reply, layout('Расписание', body, { flash: msg, wide: true }));
+  });
+
+  app.post('/schedule/refresh', async (req, reply) => {
+    const b = req.body as Record<string, string>;
+    try {
+      const configs = (['LCHB', 'MLBL'] as const).map((source) => {
+        const url = (b[`${source.toLowerCase()}_url`] ?? '').trim();
+        if (!url) throw new Error(`Укажи страницу расписания ${source}`);
+        const detected = scheduleSourceForUrl(url);
+        if (detected !== source) throw new Error(`Для ${source} указана страница ${detected}`);
+        return { source, url, enabled: b[`${source.toLowerCase()}_enabled`] === 'yes' };
+      });
+      for (const config of configs) {
+        await upsertScheduleSource({
+          source: config.source,
+          team: SCHEDULE_SOURCE_TEAMS[config.source],
+          url: config.url,
+          enabled: config.enabled,
+        });
+      }
+      const results = await refreshCalendarSchedules();
+      for (const config of configs) results.push(await refreshScheduleSource(config.source));
+      const known = await syncKnownLeagueGames();
+      const totals = results.reduce((sum, item) => ({
+        found: sum.found + item.found,
+        newGames: sum.newGames + item.newGames,
+        saved: sum.saved + item.saved,
+        synced: sum.synced + item.calendarSynced,
+      }), { found: 0, newGames: 0, saved: 0, synced: 0 });
+      const errors = [...results.flatMap((item) => item.errors), ...known.errors];
+      const summary = `Проверено: найдено ${totals.found}, новых ${totals.newGames}, сохранено ${totals.saved}, Calendar ${totals.synced}; обновлено будущих игр ${known.synced}, новых площадок ${known.locationsAdded}`;
+      return redirect(reply, '/schedule', `${summary}${errors.length ? ` · ошибки: ${errors.slice(0, 3).join('; ')}` : ''}`);
+    } catch (err) {
+      return redirect(reply, '/schedule', `Импорт не выполнен: ${(err as Error).message}`);
+    }
   });
 
   app.post('/schedule/calendar/import', async (_req, reply) => {

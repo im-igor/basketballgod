@@ -87,6 +87,13 @@ export interface ScheduledCalendarEvent {
   coachConflict: boolean;
 }
 
+/** Единое название для Google Calendar и Telegram: команда + лига + участники. */
+export function scheduledGameSummary(event: Pick<ScheduledCalendarEvent, 'source' | 'team' | 'teamA' | 'teamB'>): string {
+  const team = event.team === 'RED' ? 'Red' : 'Black';
+  const league = event.source === 'LCHB' ? 'ЛЧБ' : 'МЛБЛ';
+  return `Игра ${team} · ${league} · ${event.teamA} - ${event.teamB}`;
+}
+
 /** Стабильный допустимый Google event id: повторный импорт не создаёт дубликат. */
 function importedEventId(event: ScheduledCalendarEvent): string {
   return `bbg${createHash('sha256')
@@ -120,7 +127,7 @@ function calendarBody(event: ScheduledCalendarEvent) {
     `Источник: ${event.detailsUrl ?? event.sourceUrl}`,
   ].join('\n');
   const common = {
-    summary: `Игра ${prefix}${event.teamA} - ${event.teamB}`,
+    summary: `${prefix}${scheduledGameSummary(event)}`,
     description,
     location: event.location ?? undefined,
     // 11 — красный (не решено), 10 — зелёный (тренер назначен), 8 — серый (без тренера).

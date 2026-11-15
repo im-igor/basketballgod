@@ -134,6 +134,28 @@ h2 { margin:0 0 14px; font-size:16px; line-height:1.35; letter-spacing:-.01em; }
 .paid-switch input:checked + .paid-switch-track:after { transform:translateX(16px); background:#fff; }
 .paid-switch input:focus-visible + .paid-switch-track { outline:2px solid var(--fg); outline-offset:3px; }
 .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.schedule-import-card { padding:16px 18px; }
+.schedule-import-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.schedule-import-heading h2 { margin:0 0 5px; }
+.schedule-import-heading button { flex:none; }
+.schedule-source-list { display:grid; gap:8px; }
+.schedule-source-row { display:grid; grid-template-columns:120px minmax(280px,1fr) minmax(260px,auto); align-items:center; gap:10px; padding-top:8px; border-top:1px solid var(--line); }
+.schedule-source-name,.schedule-source-input,.schedule-source-status,.schedule-statuses { display:flex; align-items:center; gap:7px; min-width:0; }
+.schedule-source-input input { min-height:34px; padding:6px 9px; }
+.schedule-enabled { display:flex; align-items:center; gap:5px; margin:0; white-space:nowrap; }
+.schedule-enabled input { width:auto; margin:0; }
+.schedule-source-status { font-size:12px; flex-wrap:wrap; }
+.schedule-source-error { color:var(--danger); overflow-wrap:anywhere; }
+.schedule-manual-card { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; }
+.schedule-manual-card form { flex:none; }
+.schedule-table th,.schedule-table td { padding:8px 9px; }
+.schedule-table td { line-height:1.35; }
+.schedule-coach { display:flex; gap:5px; margin-top:5px; }
+.schedule-coach select { min-width:112px; min-height:32px; padding:5px 28px 5px 8px; }
+.schedule-coach button { min-height:32px; padding:5px 9px; }
+.schedule-statuses { flex-wrap:wrap; }
+.schedule-statuses form { margin:0; }
+.schedule-statuses .danger { min-height:32px; padding:5px 9px; }
 details.card > summary { list-style:none; }
 details.card > summary::-webkit-details-marker { display:none; }
 details.card > summary:after { content:'+'; float:right; color:var(--muted); font-size:20px; line-height:1; }
@@ -246,12 +268,14 @@ button.danger:hover { filter:brightness(.92); }
   .games-table th:nth-child(4), .games-table td:nth-child(4),
   .games-table th:nth-child(5), .games-table td:nth-child(5){ display:none; }
   /* Расписание: на мобильном оставляем пары команд, дату, время, площадку,
-     признак дубля и действие с ним. */
+     тренера и действия с дублями. */
   .schedule-table th:nth-child(1), .schedule-table td:nth-child(1),
-  .schedule-table th:nth-child(2), .schedule-table td:nth-child(2),
-  .schedule-table th:nth-child(9), .schedule-table td:nth-child(9),
-  .schedule-table th:nth-child(10), .schedule-table td:nth-child(10),
-  .schedule-table th:nth-child(11), .schedule-table td:nth-child(11){ display:none; }
+  .schedule-table th:nth-child(6), .schedule-table td:nth-child(6){ display:none; }
+  .schedule-import-heading,.schedule-manual-card { align-items:stretch; flex-direction:column; }
+  .schedule-import-heading button,.schedule-manual-card button { width:100%; }
+  .schedule-source-row { grid-template-columns:1fr; gap:7px; }
+  .schedule-source-input { flex-wrap:wrap; }
+  .schedule-source-input input { flex:1 1 240px; }
 }
 `;
 

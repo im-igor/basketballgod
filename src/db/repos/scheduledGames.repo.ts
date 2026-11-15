@@ -79,6 +79,25 @@ export async function listScheduledGames(limit = 250): Promise<ScheduledGame[]> 
   return rows;
 }
 
+/** Будущие игры лиг для повторной синхронизации названий и поздних площадок. */
+export async function listUpcomingLeagueGames(): Promise<ScheduledGame[]> {
+  const { rows } = await query<ScheduledGame>(
+    `select * from scheduled_games
+     where source in ('LCHB', 'MLBL') and game_date >= current_date
+     order by game_date, game_time nulls last, id`,
+  );
+  return rows;
+}
+
+export async function setScheduledGameLocation(id: string, location: string): Promise<ScheduledGame | null> {
+  const { rows } = await query<ScheduledGame>(
+    `update scheduled_games set location = $2, updated_at = now()
+     where id = $1 returning *`,
+    [id, location],
+  );
+  return rows[0] ?? null;
+}
+
 /** Отметить, какие внешние ID присутствовали в последнем успешном ответе лиги. */
 export async function markScheduleSourcePresence(
   source: ScheduleSource,

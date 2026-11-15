@@ -6,7 +6,7 @@ import type { Api, Bot } from 'grammy';
 import cron from 'node-cron';
 import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
 import { calendarGameInput, importCalendarSchedule } from './calendarScheduleImport.service.js';
-import { importSchedule } from './scheduleImport.service.js';
+import { importSchedule, syncKnownLeagueGames } from './scheduleImport.service.js';
 import type { CalendarEvent } from '../google/calendar.js';
 import { pool } from '../db/pool.js';
 import { migrate } from '../db/migrator.js';
@@ -260,12 +260,15 @@ test('админка показывает дубль без техническо
     const schedule = await app.inject({ method: 'GET', url: '/schedule', cookies });
     assert.equal(schedule.statusCode, 200);
     assert.match(schedule.body, /возможный дубль/);
-    assert.match(schedule.body, /<th>Дубли<\/th>/);
+    assert.match(schedule.body, /<th>Дубли \/ действия<\/th>/);
     assert.doesNotMatch(schedule.body, /есть в источнике/);
     assert.doesNotMatch(schedule.body, /нет в источнике/);
     assert.equal((schedule.body.match(/Удалить лишнюю/g) ?? []).length, 2);
     assert.match(schedule.body, /<main class="wide">/);
     assert.match(schedule.body, /class="card table-scroll"/);
+    assert.match(schedule.body, /Импорт в календарь/);
+    assert.match(schedule.body, /Проверить и сохранить/);
+    assert.doesNotMatch(schedule.body, /Открыть календарь/);
   } finally {
     await app.close();
   }
@@ -509,6 +512,36 @@ test('админка показывает источники и сохраняе
   } finally {
     await app.close();
     scheduleMock.mock.restore();
+  }
+});
+
+test('полная проверка повторно подхватывает поздно опубликованную площадку ЛЧБ', async () => {
+  const game = await upsertScheduledGame({
+    source: 'LCHB',
+    source_url: 'https://basketball.businesschampions.ru/osen-2099/komandy/142588/',
+    external_id: 'late-location',
+    team: 'RED',
+    team_a: 'Yandex Red',
+    team_b: 'ЛАНИТ',
+    game_date: '2099-12-20',
+    game_time: '19:00',
+    location: null,
+    details_url: 'https://basketball.businesschampions.ru/matches/1479459/',
+  });
+  await setScheduledGameCalendarEventId(game.id, 'late-location-calendar');
+  const fetchMock = mock.method(globalThis, 'fetch', async () => new Response(
+    '<div class="nogame-info__match-stadium">Территория мяча. Площадка №2.<br>Дивизион</div>',
+  ));
+  const update = mock.method(calendar_v3.Resource$Events.prototype, 'update', async () => ({ data: {} }));
+  try {
+    const result = await syncKnownLeagueGames();
+    assert.equal(result.synced, 1);
+    assert.equal(result.locationsAdded, 1);
+    assert.deepEqual(result.errors, []);
+    assert.equal((await getScheduledGameById(game.id))!.location, 'Территория мяча. Площадка №2.');
+  } finally {
+    fetchMock.mock.restore();
+    update.mock.restore();
   }
 });
 

@@ -19,7 +19,10 @@ export interface CalendarScheduleImportResult {
 /** В расписание попадают только явно помеченные игры, а не тренировки и личные события. */
 export function calendarGameInput(event: CalendarEvent): ScheduledGameInput | null {
   if (event.tags.TYPE !== 'GAME' && event.tags.TYPE !== 'FRIENDLY') return null;
-  const title = event.summary.replace(/^Игра\s+/iu, '').trim();
+  const title = event.summary
+    .replace(/^Игра\s+/iu, '')
+    .replace(/^(?:Red|Black)\s*·\s*(?:МЛБЛ|ЛЧБ)\s*·\s*/iu, '')
+    .trim();
   // Дефисы внутри названий (Транснефть-Технологии, Yandex-2) сохраняются.
   const teams = title.split(/\s+(?:[-–—]|vs\.?)\s+/iu);
   if (teams.length !== 2 || teams.some((name) => !name.trim())) {

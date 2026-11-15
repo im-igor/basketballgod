@@ -12,17 +12,22 @@ test('импорт и повторная синхронизация игр RED �
     sourceUrl: 'https://example.com/schedule', detailsUrl: null,
     calendarEventId: 'existing-event', coachPresent: true, coachConflict: false,
   };
-  const updates: Array<{ eventId?: string; requestBody?: { description?: string | null } }> = [];
+  const updates: Array<{ eventId?: string; requestBody?: { description?: string | null; summary?: string | null } }> = [];
   const update = mock.method(calendar_v3.Resource$Events.prototype, 'update', async (args) => {
     updates.push(args);
     return { data: {} };
   });
   try {
     for (const team of ['RED', 'RED', 'BLACK'] as const) {
-      await upsertScheduledCalendarEvent({ ...fixture, team });
+      await upsertScheduledCalendarEvent({ ...fixture, team, source: team === 'BLACK' ? 'MLBL' : 'LCHB' });
     }
     assert.deepEqual(updates.map((args) => parseTags(args.requestBody?.description).INVOLVED),
       ['MIXED', 'MIXED', 'ALL_BLACK']);
+    assert.deepEqual(updates.map((args) => args.requestBody?.summary), [
+      'Игра Red · ЛЧБ · RED - Opponent',
+      'Игра Red · ЛЧБ · RED - Opponent',
+      'Игра Black · МЛБЛ · RED - Opponent',
+    ]);
     assert.ok(updates.every((args) => args.eventId === 'existing-event'));
     assert.ok(updates.every((args) => parseTags(args.requestBody?.description).TYPE === 'GAME'));
   } finally {

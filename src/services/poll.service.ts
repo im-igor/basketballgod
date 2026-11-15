@@ -31,6 +31,12 @@ function matchesKind(ev: CalendarEvent, kind: PollKind): boolean {
     : ev.tags.TYPE === 'GAME' || ev.tags.TYPE === 'FRIENDLY';
 }
 
+/** Google возвращает событие, уже начавшееся, пока его слот ещё не завершён. */
+export function isUpcomingPollEvent(ev: Pick<CalendarEvent, 'start'>, now: Date): boolean {
+  const start = new Date(ev.start);
+  return Number.isFinite(start.getTime()) && start.getTime() > now.getTime();
+}
+
 /** Горизонт и таймзона для вида рассылки: cron_config → фолбэк на env. */
 async function scheduleFor(kind: PollKind): Promise<{ horizonDays: number; timezone: string }> {
   const fallback = kind === 'training' ? env.POLL_TRAINING_HORIZON_DAYS : env.POLL_GAME_HORIZON_DAYS;
@@ -199,7 +205,7 @@ export async function sendWeeklyPolls(
 
   for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
     for (const ev of events) {
-      if (!matchesKind(ev, kind)) continue;
+      if (!matchesKind(ev, kind) || !isUpcomingPollEvent(ev, windowStartedAt)) continue;
       try {
         const res = await sendPollForEvent(api, {
           team,
@@ -241,7 +247,7 @@ export async function buildPollDrafts(): Promise<PollDraftRow[]> {
     const windowUntil = calendarHorizonEnd(windowStartedAt, horizonDays, timezone);
     for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
       for (const ev of events) {
-        if (!matchesKind(ev, kind)) continue;
+        if (!matchesKind(ev, kind) || !isUpcomingPollEvent(ev, windowStartedAt)) continue;
         const id = await createPollDraft({
           team,
           event_uid: ev.uid,

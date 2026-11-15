@@ -8,6 +8,7 @@ import {
   scheduleSourceForUrl,
   fetchSchedulePage,
   mlblCalendarRange,
+  mlblUpcomingRange,
 } from './parser.js';
 
 test('определяет турнир только по разрешённым HTTPS-доменам', () => {
@@ -113,6 +114,27 @@ test('исторический диапазон МЛБЛ использует к
     { from: '01.10.2026', to: '31.10.2026' });
   assert.deepEqual(mlblCalendarRange({ from: '2028-02-01', to: '2028-03-01' }),
     { from: '01.02.2028', to: '29.02.2028' });
+});
+
+test('обычный импорт МЛБЛ запрашивает явный годовой диапазон без обрезающего max', async () => {
+  assert.deepEqual(mlblUpcomingRange(new Date('2026-11-15T19:00:00Z')),
+    { from: '2026-11-15', to: '2027-11-16' });
+  const stub = mock.method(globalThis, 'fetch', async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'moscow.ilovebasket.ru') return new Response(
+      'window.comps = [{"id":142708,"apiUrl":"https://reg.infobasket.su"}];');
+    assert.equal(url.searchParams.get('from'), '15.11.2026');
+    assert.equal(url.searchParams.get('to'), '15.11.2027');
+    assert.equal(url.searchParams.has('max'), false);
+    return new Response(JSON.stringify([
+      { GameID: 6, GameDate: '06.12.2026', GameStatus: 0, ShortTeamNameAru: 'Yandex Black', ShortTeamNameBru: 'Пардус' },
+      { GameID: 20, GameDate: '20.12.2026', GameStatus: 0, ShortTeamNameAru: 'Jumpball Строгино', ShortTeamNameBru: 'Yandex Black' },
+    ]));
+  });
+  try {
+    const games = await fetchSchedulePage('https://moscow.ilovebasket.ru/schedule', 'BLACK');
+    assert.deepEqual(games.map((game) => game.external_id), ['6', '20']);
+  } finally { stub.mock.restore(); }
 });
 
 test('история МЛБЛ находит завершённые октябрьские матчи, обычный импорт сохраняет фильтр будущих', async () => {

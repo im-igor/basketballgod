@@ -677,6 +677,31 @@ test('ручная товарищеская игра отправляется п
   } finally { list.mock.restore(); }
 });
 
+test('название тренировки не повторяет день недели словами', async () => {
+  const start = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  let listCalls = 0;
+  const list = mock.method(calendar_v3.Resource$Events.prototype, 'list', async () => ({ data: {
+    items: listCalls++ === 0 ? [{
+      id: 'training-tue', summary: 'Тренировка Вт', location: 'Большая Новодмитровская ул., 63, стр. 1',
+      start: { dateTime: start }, description: 'TYPE=TRAINING',
+    }] : [],
+  } }));
+  const questions: string[] = [];
+  const api = {
+    sendPoll: async (_chat: number, question: string) => {
+      questions.push(question);
+      return { message_id: 502, poll: { id: 'training-poll' } };
+    },
+    forwardMessage: async () => ({ message_id: 503 }),
+  } as unknown as Api;
+  try {
+    const result = await sendWeeklyPolls(api, 'training');
+    assert.equal(result.sent, 1);
+    assert.match(questions[0]!, /^Тренировка Вт \d{2}-\d{2}-\d{4} \d{2}:\d{2} \[Большая Новодмитровская ул\., 63, стр\. 1\]$/);
+    assert.doesNotMatch(questions[0]!, /понедельник|вторник|среда|четверг|пятница|суббота|воскресенье/);
+  } finally { list.mock.restore(); }
+});
+
 function manualEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
   return {
     uid: 'manual-red', team: 'RED', summary: 'Игра ЛАНИТ - Yandex Red',
@@ -721,6 +746,9 @@ test('календарный импорт пропускает трениров�
   const allDay = calendarGameInput(manualEvent({ start: '2026-11-01', startDateTime: false }));
   assert.equal(allDay!.game_time, null);
   assert.equal(allDay!.game_date, '2026-11-01');
+  const titled = calendarGameInput(manualEvent({ summary: 'ЛЧБ · Yandex Red - ЛАНИТ' }));
+  assert.equal(titled!.team_a, 'Yandex Red');
+  assert.equal(titled!.team_b, 'ЛАНИТ');
 });
 
 test('восстановившийся сайт лиги принимает ручную игру без второго Google-события и потери истории', async () => {

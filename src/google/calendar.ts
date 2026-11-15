@@ -96,9 +96,8 @@ export interface ScheduledCalendarEvent {
 
 /** Единое название для Google Calendar и Telegram: команда + лига + участники. */
 export function scheduledGameSummary(event: Pick<ScheduledCalendarEvent, 'source' | 'team' | 'teamA' | 'teamB'>): string {
-  const team = event.team === 'RED' ? 'Red' : 'Black';
   const league = event.source === 'LCHB' ? 'ЛЧБ' : 'МЛБЛ';
-  return `Игра ${team} · ${league} · ${event.teamA} - ${event.teamB}`;
+  return `${league} · ${event.teamA} - ${event.teamB}`;
 }
 
 /** Стабильный допустимый Google event id: повторный импорт не создаёт дубликат. */

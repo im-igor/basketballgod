@@ -24,9 +24,9 @@ test('импорт и повторная синхронизация игр RED �
     assert.deepEqual(updates.map((args) => parseTags(args.requestBody?.description).INVOLVED),
       ['MIXED', 'MIXED', 'ALL_BLACK']);
     assert.deepEqual(updates.map((args) => args.requestBody?.summary), [
-      'Игра Red · ЛЧБ · RED - Opponent',
-      'Игра Red · ЛЧБ · RED - Opponent',
-      'Игра Black · МЛБЛ · RED - Opponent',
+      'ЛЧБ · RED - Opponent',
+      'ЛЧБ · RED - Opponent',
+      'МЛБЛ · RED - Opponent',
     ]);
     assert.ok(updates.every((args) => args.eventId === 'existing-event'));
     assert.ok(updates.every((args) => parseTags(args.requestBody?.description).TYPE === 'GAME'));

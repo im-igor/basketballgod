@@ -60,8 +60,8 @@ const QUESTION_MAX = 300; // лимит вопроса опроса Telegram
 
 type PollCalendarEvent = Pick<CalendarEvent, 'uid' | 'team' | 'summary' | 'location' | 'start' | 'startDateTime'>;
 
-function questionFor(ev: PollCalendarEvent): string {
-  const when = eventLabel(ev.start, ev.startDateTime);
+function questionFor(ev: PollCalendarEvent, withWeekday = true): string {
+  const when = eventLabel(ev.start, ev.startDateTime, withWeekday);
   const loc = ev.location ? ` [${ev.location}]` : '';
   return `${ev.summary} ${when}${loc}`.slice(0, QUESTION_MAX);
 }
@@ -233,7 +233,7 @@ export async function sendWeeklyPolls(
       try {
         const res = await sendPollForEvent(api, {
           team,
-          question: questionFor(ev),
+          question: questionFor(ev, kind === 'game'),
           options: env.POLL_OPTIONS,
           eventUid: ev.uid,
           eventStart: ev.start,
@@ -275,7 +275,7 @@ export async function buildPollDrafts(): Promise<PollDraftRow[]> {
         const id = await createPollDraft({
           team,
           event_uid: ev.uid,
-          question: questionFor(ev),
+          question: questionFor(ev, kind === 'game'),
           options: env.POLL_OPTIONS,
           event_start: ev.start,
           is_training: forward,

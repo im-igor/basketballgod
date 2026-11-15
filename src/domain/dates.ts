@@ -86,9 +86,10 @@ export function isoToRu(v: string | Date | null | undefined): string {
 }
 
 /** Человекочитаемая дата+время события для вопроса опроса (в таймзоне env.TZ). */
-export function eventLabel(iso: string, withTime: boolean): string {
+export function eventLabel(iso: string, withTime: boolean, withWeekday = true): string {
   const p = partsInTZ(new Date(iso));
-  const base = `${WEEKDAYS_RU[p.weekday] ?? ''} ${p.day}-${p.month}-${p.year}`;
+  const date = `${p.day}-${p.month}-${p.year}`;
+  const base = withWeekday ? `${WEEKDAYS_RU[p.weekday] ?? ''} ${date}` : date;
   if (!withTime) return base;
   return `${base} ${p.hour}:${p.minute}`;
 }

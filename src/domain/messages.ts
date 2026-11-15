@@ -191,7 +191,8 @@ export function buildBudgetMessage(input: BudgetMessageInput): string {
   const quote = `<blockquote>${calcInner}${gamesInner}${extraInner}</blockquote>\n`;
 
   // В черновике показываем точный результат проверки чата; без проверки — статус оплаты.
-  const usersList = input.charges
+  const usersList = [...input.charges]
+    .sort((a, b) => formatFullName(a.name).localeCompare(formatFullName(b.name), 'ru', { sensitivity: 'base' }))
     .map((c) => {
       const flag = c.chatStatus === 'left' ? '🚫'
         : c.chatStatus === 'missing_id' ? '🟡'

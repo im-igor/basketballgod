@@ -6,7 +6,7 @@ import { calendar_v3 } from 'googleapis/build/src/apis/calendar/index.js';
 import { pool } from './pool.js';
 import { migrate } from './migrator.js';
 import { saveBudget, getBudget, getCharges, setChargePaid, deleteBudget } from './repos/budgets.repo.js';
-import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, setExtraFeeActive } from './repos/extraFees.repo.js';
+import { createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, listExtraFees, setExtraFeeActive } from './repos/extraFees.repo.js';
 import { saveGame } from './repos/games.repo.js';
 import { saveMonthlyPayout } from './repos/monthlyPayouts.repo.js';
 import { buildAndSaveBudgets, recalcBudget, updateBudgetCorrection } from '../services/budget.service.js';
@@ -498,5 +498,36 @@ test('админка: авторизация, валидация, создани
     assert.equal(stop.statusCode, 302);
     const removed = await app.inject({ method: 'POST', url: '/extra-fees/1/delete', cookies });
     assert.match(decodeURIComponent(removed.headers.location!), /уже имеет начисления/);
+  } finally { await app.close(); }
+});
+
+test('админка сохраняет выбранных получателей, поиск и новое правило начисления', async () => {
+  const app = await buildServer({ api: {} } as Bot);
+  try {
+    const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
+    const cookies = { bbg_auth: login.cookies[0]!.value };
+    const create = await app.inject({ method: 'POST', url: '/extra-fees', cookies, payload: {
+      title: 'Выборочный сбор', amount_per_player: '100', team: 'BOTH', mode: 'ACTIVE', league: 'ANY',
+      start_period: '2026-10', end_period: '', recipient_scope: 'SELECTED', player_ids: ['1', '1', '3'],
+    } });
+    assert.equal(create.statusCode, 302);
+    let fees = await listExtraFees();
+    assert.deepEqual(fees[0]!.recipient_player_ids, [1, 3]);
+
+    const page = await app.inject({ method: 'GET', url: '/extra-fees', cookies });
+    assert.match(page.body, /Поиск по ФИО/);
+    assert.match(page.body, /Выбрать найденных/);
+    assert.match(page.body, /выбрано игроков: 2/);
+
+    const update = await app.inject({ method: 'POST', url: `/extra-fees/${fees[0]!.id}/rule`, cookies, payload: {
+      team: 'BOTH', mode: 'ACTIVE', league: 'MLBL', recipient_scope: 'SELECTED', player_ids: ['2'],
+    } });
+    assert.equal(update.statusCode, 302);
+    fees = await listExtraFees();
+    assert.equal(fees[0]!.league, 'ANY');
+    assert.deepEqual(fees[0]!.recipient_player_ids, [2]);
+
+    const budget = await save();
+    assert.deepEqual((await getCharges(budget.id)).map((charge) => charge.extra_amount), [0, 100, 0]);
   } finally { await app.close(); }
 });

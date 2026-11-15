@@ -36,7 +36,10 @@ export async function saveBudget(input: {
     const budget = rows[0];
     if (!budget) throw new Error('Опубликованный бюджет нельзя изменить');
 
-    const fees = (await client.query<ExtraFee>('select * from extra_fees order by id')).rows;
+    const fees = (await client.query<ExtraFee>(`select f.*,
+      coalesce(array_agg(r.player_id order by r.player_id) filter (where r.player_id is not null), '{}') as recipient_player_ids
+      from extra_fees f left join extra_fee_recipients r on r.fee_id = f.id
+      group by f.id order by f.id`)).rows;
     const allocations = (await client.query<ExtraFeeAllocation>('select * from extra_fee_allocations')).rows;
     const games = (await client.query<Game>(
       'select * from games where month = $1 and year = $2', [input.month, input.year],

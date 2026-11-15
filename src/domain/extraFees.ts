@@ -15,17 +15,47 @@ export const extraFeeForm = z.object({
   league: z.enum(['ANY', 'MLBL', 'LCHB']),
   start_period: period,
   end_period: z.union([z.literal(''), period]).optional().transform((v) => v || null),
+  recipient_scope: z.enum(['ALL', 'SELECTED']).default('ALL'),
+  player_ids: z.preprocess(
+    (value) => value === undefined || value === '' ? [] : Array.isArray(value) ? value : [value],
+    z.array(z.coerce.number().int().positive()).max(1000),
+  ),
 }).superRefine((v, ctx) => {
   if (v.mode === 'PLAYED' && v.end_period !== null && v.end_period < v.start_period) {
     ctx.addIssue({ code: 'custom', path: ['end_period'], message: 'Конец сбора раньше начала' });
   }
+  if (v.recipient_scope === 'SELECTED' && v.player_ids.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['player_ids'], message: 'Выбери хотя бы одного игрока' });
+  }
 }).transform((v) => ({
   ...v,
+  player_ids: [...new Set(v.player_ids)],
   league: v.mode === 'PLAYED' ? v.league : 'ANY' as const,
   end_period: v.mode === 'PLAYED' ? v.end_period : null,
 }));
 
 export type ExtraFeeInput = z.infer<typeof extraFeeForm>;
+
+export const extraFeeRuleForm = z.object({
+  team: z.enum(['RED', 'BLACK', 'BOTH']),
+  mode: z.enum(['PLAYED', 'BUDGET', 'ACTIVE']),
+  league: z.enum(['ANY', 'MLBL', 'LCHB']),
+  recipient_scope: z.enum(['ALL', 'SELECTED']),
+  player_ids: z.preprocess(
+    (value) => value === undefined || value === '' ? [] : Array.isArray(value) ? value : [value],
+    z.array(z.coerce.number().int().positive()).max(1000),
+  ),
+}).superRefine((v, ctx) => {
+  if (v.recipient_scope === 'SELECTED' && v.player_ids.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['player_ids'], message: 'Выбери хотя бы одного игрока' });
+  }
+}).transform((v) => ({
+  ...v,
+  player_ids: [...new Set(v.player_ids)],
+  league: v.mode === 'PLAYED' ? v.league : 'ANY' as const,
+}));
+
+export type ExtraFeeRuleInput = z.infer<typeof extraFeeRuleForm>;
 
 /** Денежные суммы складываем в копейках. */
 export function sumMoney(amounts: number[]): number {
@@ -77,6 +107,7 @@ export function extraFeesForPlayer(input: {
     }
     if (input.playerId === null || !fee.active || input.period < fee.start_period ||
         (fee.end_period !== null && input.period > fee.end_period)) continue;
+    if (fee.recipient_scope === 'SELECTED' && !fee.recipient_player_ids.includes(input.playerId)) continue;
 
     const eligible = fee.mode === 'ACTIVE'
       ? fee.team === 'BOTH' || playerTeams.includes(fee.team)

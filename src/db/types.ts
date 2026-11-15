@@ -187,6 +187,9 @@ export interface ExtraFee {
   start_period: number;
   end_period: number | null;
   active: boolean;
+  recipient_scope: 'ALL' | 'SELECTED';
+  /** Заполняется репозиторием; для ALL остаётся пустым. */
+  recipient_player_ids: number[];
 }
 
 export interface ExtraFeeItem {

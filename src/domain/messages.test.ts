@@ -56,3 +56,18 @@ test('единый COMMON-бюджет не указывает команды в
   assert.match(message, /Всего участников: 37 чел\.\nЗал по четвергам - 5 трен\. \(делится на всех\)\n5 x 15000 \/ 37 = 2028 руб\.\nЗал по вторникам - 5 трен\. \(оплачивается Яндексом полностью\)\./);
   assert.doesNotMatch(message, /Зал (?:Black|Red) по/);
 });
+
+test('игроки в сообщении бюджета сортируются по отображаемому имени', () => {
+  const message = buildBudgetMessage({
+    team: 'COMMON', month: 12, year: 2026,
+    details: { total_players: 3, players_team: 3, players_other: 0, paid_gym_sessions: 0, coach_sessions: 0, gym_per_person: 0, coach_per_person: 0, base_per_person: 0 },
+    tariffs: { gym_paid_price: 0, coach_per_session: 0, locker_rent_price: 0, coach_per_game: 0, referee_default: 0 },
+    charges: [
+      { name: 'Александров Николай Анатольевич', tg_login: '@n', game_amount: 0, amount: 0, paid: false },
+      { name: 'Андросов Владимир Владимирович', tg_login: '@v', game_amount: 0, amount: 0, paid: false },
+      { name: 'Базаров Александр Андреевич', tg_login: '@a', game_amount: 0, amount: 0, paid: false },
+    ], games: [], payment: { sberUrl: '', tbankUrl: '' },
+  });
+  assert.ok(message.indexOf('Александр Андреевич Базаров') < message.indexOf('Владимир Владимирович Андросов'));
+  assert.ok(message.indexOf('Владимир Владимирович Андросов') < message.indexOf('Николай Анатольевич Александров'));
+});

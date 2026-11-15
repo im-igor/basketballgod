@@ -8,6 +8,7 @@ import { buildBudgetMessage } from './messages.js';
 const fee: ExtraFee = {
   id: 1, title: 'Меддопуск МЛБЛ', amount_per_player: 380, team: 'BLACK',
   mode: 'PLAYED', league: 'MLBL', start_period: 202610, end_period: 202705, active: true,
+  recipient_scope: 'ALL', recipient_player_ids: [],
 };
 const game: Game = {
   id: 1, team: 'BLACK', event_uid: null, opponent: 'Соперник', played_on: '2026-09-20',
@@ -101,6 +102,23 @@ test('активный участник получает взнос без вы�
   assert.deepEqual(extraFeesForPlayer({ ...activeInput, budgetId: 11, period: 202611, allocations: [allocation] }), []);
 });
 
+test('выбранные получатели дополнительно ограничивают ACTIVE и PLAYED', () => {
+  const selected = { ...fee, recipient_scope: 'SELECTED' as const, recipient_player_ids: [2] };
+  assert.deepEqual(extraFeesForPlayer({ ...input, fees: [selected] }), []);
+  assert.deepEqual(extraFeesForPlayer({
+    ...input, playerId: 2, login: '@p2', fees: [selected],
+    games: [{ ...game, participants: [{ name: 'Игрок 2', matched_player_id: 2 }] }],
+  }), [item]);
+  assert.deepEqual(extraFeesForPlayer({
+    ...input, playerId: 2, login: '@p2', games: [],
+    fees: [{ ...selected, mode: 'ACTIVE', league: 'ANY', end_period: null }],
+  }), [item]);
+  assert.deepEqual(extraFeesForPlayer({
+    ...input, playerId: 3, login: '@p3', games: [],
+    fees: [{ ...selected, mode: 'ACTIVE', league: 'ANY', end_period: null }],
+  }), []);
+});
+
 test('несколько независимых сборов складываются без потери копеек', () => {
   const items = extraFeesForPlayer({ ...input, fees: [fee, { ...fee, id: 2, amount_per_player: 0.1 }, { ...fee, id: 3, amount_per_player: 0.2 }] });
   assert.equal(items.length, 3);
@@ -126,6 +144,9 @@ test('форма валидирует сумму, режим, команду и 
   assert.equal(active.mode, 'ACTIVE');
   assert.equal(active.league, 'ANY');
   assert.equal(active.end_period, null);
+  const selected = extraFeeForm.parse({ ...form, recipient_scope: 'SELECTED', player_ids: ['2', '2', '3'] });
+  assert.deepEqual(selected.player_ids, [2, 3]);
+  assert.equal(extraFeeForm.safeParse({ ...form, recipient_scope: 'SELECTED' }).success, false);
 });
 
 test('Telegram показывает название, сумму разового сбора и персональную расшифровку, экранируя HTML', () => {
@@ -140,5 +161,5 @@ test('Telegram показывает название, сумму разовог�
   });
   assert.match(message, /Мед &lt;допуск&gt;: \+380 руб\.\/чел\./);
   assert.match(message, /@first 1880 \(в т\.ч\. разовые: Мед &lt;допуск&gt; \+380\)/);
-  assert.match(message, /@second 1000$/);
+  assert.match(message, /@second 1000(?:\n|$)/);
 });

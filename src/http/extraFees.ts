@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import {
   createExtraFee, deleteUnusedExtraFee, listExtraFeeAllocations, listExtraFees, setExtraFeeActive,
+  updateExtraFeeRule,
 } from '../db/repos/extraFees.repo.js';
+import { listPlayers } from '../db/repos/players.repo.js';
 import { getBudget } from '../db/repos/budgets.repo.js';
-import { extraFeeForm, sumMoney } from '../domain/extraFees.js';
+import { extraFeeForm, extraFeeRuleForm, sumMoney } from '../domain/extraFees.js';
 import { monthLabel } from '../domain/dates.js';
 import { usesCommonBudget } from '../domain/budget.js';
 import { formatFullName } from '../domain/messages.js';
@@ -13,10 +15,67 @@ import { esc, layout, teamBadge } from './views.js';
 const back = (message: string) => `/extra-fees?msg=${encodeURIComponent(message)}`;
 const periodLabel = (period: number) => monthLabel(period % 100, Math.floor(period / 100));
 
+const recipientScript = `<script>
+document.querySelectorAll('[data-recipient-picker]').forEach(function(picker) {
+  var search = picker.querySelector('[data-recipient-search]');
+  var list = picker.querySelector('[data-recipient-list]');
+  var rows = Array.from(list.querySelectorAll('[data-recipient-row]'));
+  var scopes = Array.from(picker.querySelectorAll('input[name="recipient_scope"]'));
+  function syncScope() {
+    var selected = scopes.some(function(radio) { return radio.checked && radio.value === 'SELECTED'; });
+    list.hidden = !selected;
+    picker.querySelector('[data-recipient-tools]').hidden = !selected;
+    rows.forEach(function(row) { row.querySelector('input[type="checkbox"]').disabled = !selected; });
+  }
+  function filter() {
+    var needle = (search.value || '').trim().toLocaleLowerCase('ru');
+    rows.forEach(function(row) { row.hidden = !!needle && !row.dataset.search.includes(needle); });
+  }
+  scopes.forEach(function(radio) { radio.addEventListener('change', syncScope); });
+  search.addEventListener('input', filter);
+  picker.querySelector('[data-select-filtered]').addEventListener('click', function() {
+    scopes.forEach(function(radio) { radio.checked = radio.value === 'SELECTED'; });
+    syncScope(); filter();
+    rows.filter(function(row) { return !row.hidden; }).forEach(function(row) { row.querySelector('input[type="checkbox"]').checked = true; });
+  });
+  picker.querySelector('[data-clear-filtered]').addEventListener('click', function() {
+    rows.filter(function(row) { return !row.hidden; }).forEach(function(row) { row.querySelector('input[type="checkbox"]').checked = false; });
+  });
+  syncScope(); filter();
+});
+</script>`;
+
+function recipientPicker(players: Awaited<ReturnType<typeof listPlayers>>, selectedIds: number[], scope: 'ALL' | 'SELECTED', key: string): string {
+  const selected = new Set(selectedIds);
+  const rows = [...players]
+    .sort((a, b) => formatFullName(a.name).localeCompare(formatFullName(b.name), 'ru', { sensitivity: 'base' }))
+    .map((player) => {
+      const name = formatFullName(player.name) || player.tg_login;
+      return `<label data-recipient-row data-search="${esc(`${name} ${player.tg_login}`.toLocaleLowerCase('ru'))}" style="display:flex;gap:8px;align-items:center;padding:5px 0">
+        <input type="checkbox" name="player_ids" value="${player.id}" ${selected.has(player.id) ? 'checked' : ''}>
+        <span>${esc(name)} <span class="muted">${esc(player.tg_login)}</span></span>
+      </label>`;
+    }).join('');
+  return `<fieldset data-recipient-picker style="margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:12px">
+    <legend>Кому может быть начислен сбор</legend>
+    <label style="margin-right:16px"><input type="radio" name="recipient_scope" value="ALL" ${scope === 'ALL' ? 'checked' : ''}> Всем подходящим игрокам</label>
+    <label><input type="radio" name="recipient_scope" value="SELECTED" ${scope === 'SELECTED' ? 'checked' : ''}> Только выбранным</label>
+    <div data-recipient-tools style="margin-top:10px">
+      <label for="recipient-search-${esc(key)}">Поиск по ФИО</label>
+      <input id="recipient-search-${esc(key)}" data-recipient-search type="search" placeholder="Начни вводить имя или фамилию">
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button type="button" class="ghost" data-select-filtered>Выбрать найденных</button>
+        <button type="button" class="ghost" data-clear-filtered>Снять найденных</button>
+      </div>
+    </div>
+    <div data-recipient-list style="max-height:280px;overflow:auto;margin-top:8px">${rows}</div>
+  </fieldset>`;
+}
+
 /** Все маршруты защищены общим preHandler авторизации админки. */
 export function registerExtraFeeRoutes(app: FastifyInstance): void {
   app.get('/extra-fees', async (req, reply) => {
-    const [fees, allocations] = await Promise.all([listExtraFees(), listExtraFeeAllocations()]);
+    const [fees, allocations, players] = await Promise.all([listExtraFees(), listExtraFeeAllocations(), listPlayers()]);
     const nextMonth = new Date();
     nextMonth.setDate(1);
     nextMonth.setMonth(nextMonth.getMonth() + 1);
@@ -30,10 +89,25 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
         : fee.mode === 'ACTIVE'
           ? `Активные участники бюджета · с ${periodLabel(fee.start_period)}`
           : `Все участники бюджета · ${periodLabel(fee.start_period)}`;
+      const recipients = fee.recipient_scope === 'ALL'
+        ? 'все подходящие игроки'
+        : `выбрано игроков: ${fee.recipient_player_ids.length}`;
       return `<div class="card">
         <h2>${esc(fee.title)} · ${esc(fee.amount_per_player)} ₽/чел.</h2>
-        <p>${fee.team === 'BOTH' ? 'Обе команды' : teamBadge(fee.team)} · ${esc(rule)} · ${fee.active ? 'Активен' : 'Завершён'}</p>
+        <p>${fee.team === 'BOTH' ? 'Обе команды' : teamBadge(fee.team)} · ${esc(rule)} · ${esc(recipients)} · ${fee.active ? 'Активен' : 'Завершён'}</p>
         <p class="muted">Начислено ${assigned.length} чел. / ${esc(total)} ₽. Оплачено в составе бюджетов: ${esc(paid)} ₽.</p>
+        <details style="margin:12px 0"><summary>Настроить будущие начисления</summary>
+          <form method="post" action="/extra-fees/${fee.id}/rule">
+            <div class="row" style="margin-top:12px">
+              <div><label>Команда игры / заявки</label><select name="team"><option value="BLACK" ${fee.team === 'BLACK' ? 'selected' : ''}>BLACK</option><option value="RED" ${fee.team === 'RED' ? 'selected' : ''}>RED</option><option value="BOTH" ${fee.team === 'BOTH' ? 'selected' : ''}>Обе команды</option></select></div>
+              <div><label>Когда начислять</label><select name="mode"><option value="ACTIVE" ${fee.mode === 'ACTIVE' ? 'selected' : ''}>Активным</option><option value="PLAYED" ${fee.mode === 'PLAYED' ? 'selected' : ''}>Фактически сыгравшим</option>${fee.mode === 'BUDGET' ? '<option value="BUDGET" selected>Все участники одного бюджета (старый режим)</option>' : ''}</select></div>
+              <div><label>Лига для сыгравших</label><select name="league"><option value="MLBL" ${fee.league === 'MLBL' ? 'selected' : ''}>МЛБЛ</option><option value="LCHB" ${fee.league === 'LCHB' ? 'selected' : ''}>ЛЧБ</option><option value="ANY" ${fee.league === 'ANY' ? 'selected' : ''}>Все игры</option></select></div>
+            </div>
+            ${recipientPicker(players, fee.recipient_player_ids, fee.recipient_scope, `fee-${fee.id}`)}
+            <p class="muted">Изменение влияет только на будущие назначения. Уже начисленные суммы сохраняются.</p>
+            <button>Сохранить логику</button>
+          </form>
+        </details>
         <div class="row">
           <form class="inline" method="post" action="/extra-fees/${fee.id}/status">
             <input type="hidden" name="active" value="${fee.active ? 'no' : 'yes'}">
@@ -52,7 +126,7 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
 
     const body = `<h1>Разовые сборы</h1>
       <div class="card muted">Возмещение расходов общака: фиксированная сумма с человека один раз за сбор.
-        В режиме «Активные участники бюджета» взнос попадает в ближайший собранный бюджет активного игрока выбранной команды — игра ждать не нужно. «Сыгравшие» начисляются по протоколу, «Все участники бюджета» — всем участникам выбранной команды за один месяц.
+        Сначала выбирается круг игроков — все либо отмеченные вручную. Затем правило: «Активные» получают взнос в ближайшем бюджете, «Фактически сыгравшие» — только после выхода в матче выбранной лиги.
         Сумма добавляется к обычному взносу. Завершение сбора останавливает новые начисления, сохраняя уже назначенные.</div>
       <div class="card"><h2>Добавить сбор</h2>
         <form method="post" action="/extra-fees">
@@ -62,15 +136,16 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
             <div><label for="fee-team">Команда</label><select id="fee-team" name="team"><option>BLACK</option><option>RED</option><option value="BOTH">Обе команды</option></select></div>
           </div>
           <div class="row" style="margin-top:12px">
-            <div><label for="fee-mode">С кого собирать</label><select id="fee-mode" name="mode"><option value="ACTIVE">Активные участники бюджета</option><option value="PLAYED">Сыгравшие</option><option value="BUDGET">Все участники бюджета</option></select></div>
+            <div><label for="fee-mode">Когда начислять</label><select id="fee-mode" name="mode"><option value="ACTIVE">Всем активным</option><option value="PLAYED">Фактически сыгравшим</option></select></div>
             <div><label for="fee-league">Игры для сбора</label><select id="fee-league" name="league"><option value="MLBL">МЛБЛ</option><option value="LCHB">ЛЧБ</option><option value="ANY">Все игры, включая ручные</option></select></div>
             <div><label for="fee-start">Первый / единственный месяц бюджета</label><input id="fee-start" name="start_period" type="month" min="2024-01" max="2100-12" value="${defaultPeriod}" required></div>
             <div><label for="fee-end">Последний месяц (необязательно, для сыгравших)</label><input id="fee-end" name="end_period" type="month" min="2024-01" max="2100-12"></div>
           </div>
+          ${recipientPicker(players, [], 'ALL', 'new')}
           <p class="muted">В режиме «Активные участники бюджета» сбор попадёт в первый собранный бюджет игрока, начиная с указанного месяца. Для «Сыгравших» месяцы относятся к бюджету, в который включены игры: например, сентябрьские игры в бюджете октября → первый месяц октябрь.
             МЛБЛ и ЛЧБ определяются по импортированному протоколу. Для ручных игр MIXED выбери «Все игры» и «Обе команды».
-            В режиме «Сыгравшие» команда относится к игре; сыгравший за BLACK игрок RED получит взнос в бюджет RED.
-            В режимах «Активные участники бюджета» и «Все участники бюджета» лига и последний месяц не учитываются.</p>
+            В режиме «Фактически сыгравшие» команда относится к игре; сыгравший за BLACK игрок RED получит взнос в свой общий бюджет.
+            Для «Активных» лига и последний месяц не учитываются. Выбор игроков дополнительно ограничивает получателей при любом правиле.</p>
           <button>Добавить сбор</button>
         </form>
       </div>
@@ -83,7 +158,8 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
           <div><button class="ghost">Пересчитать обе команды</button></div>
         </form>
       </div>
-      ${cards || '<div class="card muted">Разовых сборов пока нет.</div>'}`;
+      ${cards || '<div class="card muted">Разовых сборов пока нет.</div>'}
+      ${recipientScript}`;
     return reply.type('text/html; charset=utf-8').send(layout('Разовые сборы', body, {
       flash: (req.query as Record<string, string>).msg,
     }));
@@ -102,6 +178,17 @@ export function registerExtraFeeRoutes(app: FastifyInstance): void {
     if (!Number.isSafeInteger(id) || id <= 0 || !['yes', 'no'].includes(value ?? '')) return reply.code(400).send('Неверные параметры');
     await setExtraFeeActive(id, value === 'yes');
     return reply.redirect(back(value === 'yes' ? 'Сбор возобновлён.' : 'Сбор завершён. Уже назначенные взносы сохранены.'));
+  });
+
+  app.post('/extra-fees/:id/rule', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isSafeInteger(id) || id <= 0) return reply.code(400).send('Неверный сбор');
+    const parsed = extraFeeRuleForm.safeParse(req.body);
+    if (!parsed.success) return reply.redirect(back('Проверь правило и выбери хотя бы одного игрока для выборочного сбора.'));
+    const updated = await updateExtraFeeRule(id, parsed.data);
+    return reply.redirect(back(updated
+      ? 'Логика будущих начислений обновлена. Уже назначенные суммы сохранены.'
+      : 'Сбор не найден.'));
   });
 
   app.post('/extra-fees/:id/delete', async (req, reply) => {

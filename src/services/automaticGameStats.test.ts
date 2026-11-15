@@ -110,12 +110,36 @@ test('некорректное время, другая дата, отсутст
   assert.match((await checkAutomaticGameStats(11, 2026, now, reader))[0]!.error!, /исчез/);
   assert.equal(await countGames(), 0);
 });
-test('неизвестный календарный матч блокирует весь импорт; частичных записей нет', async () => {
+test('готовый матч сохраняется в черновик, даже если другой календарный матч ещё не проверен', async () => {
   await seedSchedule(); mockProtocol();
   await checkAutomaticGameStats(11, 2026, now);
   await assert.rejects(importAutomaticGameStats(11, 2026, [{ uid: 'missing', team: 'RED', summary: 'Игра без протокола',
     start: '2026-10-15T19:00:00+03:00', startDateTime: true, location: null, tags: { TYPE: 'GAME' } }]), /[Нн]ет проверенного протокола/);
-  assert.equal(await countGames(), 0);
+  assert.equal(await countGames(), 1);
+});
+
+test('разовая замена переносит начисление с заявочного имени на фактически сыгравшего', async () => {
+  const scheduled = await seedSchedule();
+  mockProtocol();
+  await db.query('update players set active=false where id=1');
+  const actual = (await db.query<{ id: number }>(
+    "insert into players (name,tg_login,team,is_employee,active) values ('Маник Дмитрий','@manik','RED',true,true) returning id",
+  )).rows[0]!;
+  await db.query(
+    `insert into game_participant_overrides (scheduled_game_id,from_player_id,to_player_id,reason)
+     values ($1,1,$2,'Фактический игрок выступал под заявочным именем')`,
+    [scheduled.id, actual.id],
+  );
+
+  const checked = (await checkAutomaticGameStats(11, 2026, now))[0]!;
+  assert.equal(checked.ready, true);
+  assert.equal(checked.plan!.participants.some((p) => p.matched_player_id === 1), false);
+  assert.equal(checked.plan!.participants.some((p) => p.matched_player_id === actual.id), true);
+  await importAutomaticGameStats(11, 2026, []);
+  const stored = (await db.query<{ participants: Array<{ matched_player_id: number }> }>(
+    'select participants from games',
+  )).rows[0]!;
+  assert.equal(stored.participants.some((p) => p.matched_player_id === actual.id), true);
 });
 test('в опубликованный период автоматический и ручной импорт запрещены', async () => {
   await seedSchedule(); await makeStable(); mockProtocol();

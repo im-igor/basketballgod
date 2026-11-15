@@ -15,6 +15,7 @@ import {
   findScheduledGameForManualEntry,
   getScheduledGameByExternalId,
   getScheduledGameById,
+  listGameParticipantOverrides,
 } from '../db/repos/scheduledGames.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { computeGameFee } from '../domain/gamefee.js';
@@ -77,7 +78,8 @@ export type GameValidation = { ok: true; plan: GamePlan } | { ok: false; errors:
 /**
  * Спарсить и проверить игру БЕЗ записи в БД. Каждый вышедший на паркет (время > 0) должен
  * находиться в ростере (любой команды — кросс-команда) с `active=YES` и `employee=TRUE`.
- * Иначе — список ошибок. `roster` — активные игроки обеих команд.
+ * Подтверждённая замена для конкретного матча переносит проверку и начисление на
+ * фактически сыгравшего из `game_participant_overrides`.
  */
 export async function validateGame(
   url: string,
@@ -89,6 +91,9 @@ export async function validateGame(
 ): Promise<GameValidation> {
   const ref = gameStatsRef(url);
   const scheduled = await getScheduledGameByExternalId(ref.source, ref.externalId);
+  const participantOverrides = scheduled
+    ? await listGameParticipantOverrides(scheduled.id)
+    : new Map<number, Player>();
   const game = await fetchGameStats(url);
   if (automatic) {
     const color = team.toLowerCase();
@@ -121,12 +126,19 @@ export async function validateGame(
     const matched = matchPlayer(p.name, roster, automatic);
     if (!matched) {
       errors.push(`${url} (${team}): «${p.name}» не найден в ростере (RED/BLACK)`);
-    } else if (!matched.active) {
-      errors.push(`${url} (${team}): «${matched.name}» неактивен (active=NO)`);
-    } else if (!matched.is_employee) {
-      errors.push(`${url} (${team}): «${matched.name}» не сотрудник (employee=FALSE)`);
     } else {
-      participants.push({ name: p.name, tg_login: matched.tg_login, matched_player_id: matched.id });
+      const chargedPlayer = participantOverrides.get(matched.id) ?? matched;
+      if (!chargedPlayer.active) {
+        errors.push(`${url} (${team}): «${chargedPlayer.name}» неактивен (active=NO)`);
+      } else if (!chargedPlayer.is_employee) {
+        errors.push(`${url} (${team}): «${chargedPlayer.name}» не сотрудник (employee=FALSE)`);
+      } else {
+        participants.push({
+          name: p.name,
+          tg_login: chargedPlayer.tg_login,
+          matched_player_id: chargedPlayer.id,
+        });
+      }
     }
   }
   if (new Set(participants.map((p) => p.matched_player_id)).size !== participants.length) {

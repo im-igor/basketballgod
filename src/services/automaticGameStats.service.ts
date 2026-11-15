@@ -120,21 +120,22 @@ export class GameStatsNotReadyError extends Error {
   }
 }
 
-/** Сверяет весь прошлый месяц. При одном пробеле ничего не записывает. */
+/** Сохраняет готовые матчи; пробелы остаются предупреждениями и блокируют публикацию. */
 export async function importAutomaticGameStats(month: number, year: number, events: CalendarEvent[], verifyOnly = false): Promise<void> {
   const { from, to } = sourcePeriod(month, year);
+  const calendarWarnings: string[] = [];
   for (const team of ['RED', 'BLACK'] as const) {
     const calendar = await importCalendarSchedule(team, new Date(from), new Date(to),
       async () => events.filter((e) => e.team === team));
-    if (calendar.errors.length) throw new GameStatsNotReadyError(calendar.errors.map((e) => `Нет проверенного протокола: ${e}`));
+    calendarWarnings.push(...calendar.errors.map((e) => `Нет проверенного протокола: ${e}`));
   }
   const { checks, sourceErrors } = await inspectAutomaticGameStats(month, year);
-  await budgetTransaction(async (client) => {
+  const warnings = await budgetTransaction(async (client) => {
     const published = await client.query('select id from budgets where month=$1 and year=$2 and message_id is not null', [month, year]);
     if (!verifyOnly && published.rows.length) throw new Error('Опубликованный бюджет нельзя менять');
     const existing = (await client.query<Game>('select * from games')).rows;
     const errors: string[] = [];
-    const pending: string[] = [];
+    const pending: string[] = [...calendarWarnings];
     const additions: GamePlan[] = [];
     const updates: { id: number; plan: GamePlan }[] = [];
     for (const failure of sourceErrors) {
@@ -191,25 +192,28 @@ export async function importAutomaticGameStats(month: number, year: number, even
       }
     }
     if (errors.length) throw new Error(`Ошибка учёта игр. ${errors.join('; ')}`);
-    if (pending.length) throw new GameStatsNotReadyError(pending);
     if (verifyOnly && additions.length) throw new Error('Появились новые игры. Пересобери и проверь бюджет');
-    for (const { id, plan } of updates) {
-      await client.query(
-        `update games set event_uid=$2,team=$3,opponent=$4,played_on=$5,stat_url=$6,fee_per_player=$7,
-         participants=$8,coach_present=$9,automatic_stats_fingerprint=$10 where id=$1`,
-        [id,plan.calendarEventId,plan.team,plan.opponent,plan.date,plan.url,plan.fee,
-          JSON.stringify(plan.participants),plan.coachPresent,planFingerprint(plan)],
-      );
+    if (!verifyOnly) {
+      for (const { id, plan } of updates) {
+        await client.query(
+          `update games set event_uid=$2,team=$3,opponent=$4,played_on=$5,stat_url=$6,fee_per_player=$7,
+           participants=$8,coach_present=$9,automatic_stats_fingerprint=$10 where id=$1`,
+          [id,plan.calendarEventId,plan.team,plan.opponent,plan.date,plan.url,plan.fee,
+            JSON.stringify(plan.participants),plan.coachPresent,planFingerprint(plan)],
+        );
+      }
+      for (const plan of additions) {
+        await client.query(
+          `insert into games (event_uid,team,opponent,played_on,stat_url,fee_per_player,participants,coach_present,judge,month,year,automatic_stats_fingerprint)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10,$11)`,
+          [plan.calendarEventId, plan.team, plan.opponent, plan.date, plan.url, plan.fee,
+            JSON.stringify(plan.participants), plan.coachPresent, month, year, planFingerprint(plan)],
+        );
+      }
     }
-    for (const plan of additions) {
-      await client.query(
-        `insert into games (event_uid,team,opponent,played_on,stat_url,fee_per_player,participants,coach_present,judge,month,year,automatic_stats_fingerprint)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10,$11)`,
-        [plan.calendarEventId, plan.team, plan.opponent, plan.date, plan.url, plan.fee,
-          JSON.stringify(plan.participants), plan.coachPresent, month, year, planFingerprint(plan)],
-      );
-    }
+    return pending;
   });
+  if (warnings.length) throw new GameStatsNotReadyError(warnings);
 }
 
 /** Сохранённые результаты для админки: открытие страницы не обращается к сайтам. */

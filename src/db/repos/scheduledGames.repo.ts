@@ -1,5 +1,5 @@
 import { query } from '../pool.js';
-import type { ScheduledGame, ScheduleSource, ScheduledGameSource, Team } from '../types.js';
+import type { Player, ScheduledGame, ScheduleSource, ScheduledGameSource, Team } from '../types.js';
 import { groupScheduleDuplicates, type ScheduleDuplicateGroup } from '../../domain/schedule.js';
 
 export interface ScheduledGameInput {
@@ -139,6 +139,20 @@ export async function getScheduledGameByExternalId(
     [source, externalId],
   );
   return rows[0] ?? null;
+}
+
+/** Разовые подтверждённые замены заявочного имени на фактически сыгравшего. */
+export async function listGameParticipantOverrides(
+  scheduledGameId: string,
+): Promise<Map<number, Player>> {
+  const { rows } = await query<Player & { from_player_id: number }>(
+    `select target.*, replacement.from_player_id
+     from game_participant_overrides replacement
+     join players target on target.id = replacement.to_player_id
+     where replacement.scheduled_game_id = $1`,
+    [scheduledGameId],
+  );
+  return new Map(rows.map((row) => [row.from_player_id, row]));
 }
 
 /** Новые импортированные игры, для которых ещё нужно отправить голосовалку. */

@@ -73,7 +73,6 @@ const schema = z.object({
   GOOGLE_CALENDAR_BLACK: z.string().min(1),
   GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
   GOOGLE_SERVICE_ACCOUNT_BASE64: z.string().optional(),
-  GOOGLE_SHEET_ID: z.string().optional(),
 
   // DB
   DATABASE_URL: z.string().min(1, 'Укажи DATABASE_URL'),

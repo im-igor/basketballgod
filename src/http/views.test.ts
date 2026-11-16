@@ -36,5 +36,5 @@ test('раздел из меню управления раскрывает ег�
   assert.match(html, /class="nav-menu" open/);
   assert.match(html, /<summary aria-label="Управление" aria-current="page">/);
   assert.match(html, /href="\/extra-fees" aria-current="page"/);
-  assert.match(html, /action="\/sync\/push"/);
+  assert.doesNotMatch(html, /sync\/push|Выгрузить/);
 });

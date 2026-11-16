@@ -38,7 +38,7 @@ test('/start привязывает Telegram ID к игроку для пров�
       reply: async (text: string) => { reply = text; },
     } as unknown as Context);
     assert.match(reply, /Telegram ID привязан/);
-    assert.match(reply, /таблица, бюджеты, оплаты, должники, игры и голосовалки управляются в админке/);
+    assert.match(reply, /Состав, бюджеты, оплаты, должники, игры и голосовалки управляются в админке/);
     const player = (await db.query<{ tg_user_id: string }>(
       "select tg_user_id from players where lower(tg_login)='@testplayer'",
     )).rows[0]!;

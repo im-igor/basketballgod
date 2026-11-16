@@ -31,6 +31,17 @@ test('проверка Telegram доступна только администр
   }
 });
 
+test('маршруты экспорта в Google Sheets удалены из админки', async () => {
+  const app = await buildServer({ api: {} } as unknown as Bot);
+  try {
+    for (const url of ['/sync/push', '/players/push', '/tariffs/push', '/cron/push', '/tags/push']) {
+      assert.equal(app.hasRoute({ method: 'POST', url }), false, url);
+    }
+  } finally {
+    await app.close();
+  }
+});
+
 test('индикатор есть в общем layout, но отсутствует на странице входа', () => {
   assert.match(layout('Расписание', ''), /id="telegram-status"/);
   assert.doesNotMatch(layout('Вход', '', { nav: false }), /id="telegram-status"|fetch\('\/api\/telegram-status'/);

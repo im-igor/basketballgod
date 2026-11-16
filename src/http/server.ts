@@ -11,7 +11,7 @@ import formbody from '@fastify/formbody';
 import { webhookCallback, type Bot } from 'grammy';
 import { env } from '../config/env.js';
 import { log } from '../util/logger.js';
-import { layout, esc, teamBadge, activeBadge, sortHeader, syncButtons, progressBar } from './views.js';
+import { layout, esc, teamBadge, activeBadge, sortHeader, progressBar } from './views.js';
 import { registerExtraFeeRoutes } from './extraFees.js';
 import { registerBackupRoutes } from './backups.js';
 import { normalizeLogin, parseBudgetArgs } from '../util/args.js';
@@ -77,13 +77,6 @@ import {
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { syncMemberTags } from '../services/memberTags.service.js';
 import { checkCollectionChatMembership, type ChatStatus } from '../services/chatCheck.service.js';
-import {
-  syncAllToSheet,
-  exportPlayersToSheet,
-  exportTariffsToSheet,
-  exportCronToSheet,
-  exportTagsToSheet,
-} from '../services/sheetSync.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
 import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach, usesUnifiedDebtorReminder } from '../domain/budget.js';
@@ -113,17 +106,6 @@ function redirect(reply: FastifyReply, to: string, msg?: string): FastifyReply {
 
 function html(reply: FastifyReply, body: string): FastifyReply {
   return reply.type('text/html; charset=utf-8').send(body);
-}
-
-/** Обработчик кнопки синхронизации: запускает fn и редиректит на `back` со сводкой/ошибкой. */
-function syncRoute(back: string, fn: () => Promise<string>) {
-  return async (_req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
-    try {
-      return redirect(reply, back, await fn());
-    } catch (err) {
-      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
-    }
-  };
 }
 
 export async function buildServer(bot: Bot) {
@@ -207,7 +189,7 @@ export async function buildServer(bot: Bot) {
     return html(reply, layout('Главная', body, { flash: msg }));
   });
 
-  // ── Players (источник правды — БД; выгрузка во вкладку Players по кнопке) ────
+  // ── Players (источник правды — БД) ───────────────────────
   // date-значение из БД (Date или ISO-строка) → YYYY-MM-DD для input[type=date].
   const isoDate = (v: string | Date | null | undefined): string => {
     if (!v) return '';
@@ -391,10 +373,8 @@ export async function buildServer(bot: Bot) {
 
     const body = `<h1>Игроки <span class="muted">(${players.length})</span></h1>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД — это единственный источник правды.
-          Кнопка справа выгружает состав во вкладку «Players» Google-таблицы (чтобы показать человеку);
-          обратно таблица не читается.</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">${syncButtons('players')}
+        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД — это единственный источник правды.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате: Red, Black, Black/Red, Active или Non-active? Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
         </div>
       </div></div>
@@ -527,8 +507,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/players', 'Игрок удалён из БД');
   });
 
-  app.post('/players/push', syncRoute('/players', exportPlayersToSheet));
-
   app.post('/players/tags', async (_req, reply) => {
     const result = await syncMemberTags(api);
     return redirect(reply, '/players', `Теги обновлены: ${result.tagged}; администраторов пропущено: ${result.skippedAdmins}; без Telegram ID: ${result.missingId}; вне чата: ${result.absent}; ошибок: ${result.errors}`);
@@ -541,10 +519,7 @@ export async function buildServer(bot: Bot) {
     const field = (name: string, label: string, val: number) =>
       `<div><label>${label}</label><input name="${name}" type="number" step="1" value="${val}"></div>`;
     const body = `<h1>Тарифы</h1>
-      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Правки пишутся в БД. Кнопка справа — выгрузка во вкладку «tariffs» (только показать).</div>
-        ${syncButtons('tariffs')}
-      </div></div>
+      <div class="card muted">Правки пишутся в БД.</div>
       <div class="card"><form method="post" action="/tariffs"><div class="row">
         ${field('coach_per_session', 'Тренер / тренировка', t.coach_per_session)}
         ${field('coach_per_game', 'Тренер / игра', t.coach_per_game)}
@@ -568,8 +543,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/tariffs', 'Тарифы сохранены');
   });
 
-  app.post('/tariffs/push', syncRoute('/tariffs', exportTariffsToSheet));
-
   // ── Cron (расписание планировщика в cron_config) ─────────
   app.get('/cron', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
@@ -583,11 +556,7 @@ export async function buildServer(bot: Bot) {
       .map((minutes) => `<option value="${minutes}"${c.schedule_import_interval_minutes === minutes ? ' selected' : ''}>${scheduleIntervalLabel(minutes)}</option>`)
       .join('');
     const body = `<h1>Крон</h1>
-      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Расписание планировщика (в БД). Пустое поле → берётся значение из env/дефолтов.
-          Кнопка справа — выгрузка во вкладку «cron» (только показать).</div>
-        ${syncButtons('cron')}
-      </div></div>
+      <div class="card muted">Расписание планировщика хранится в БД. Пустое поле → берётся значение из env/дефолтов.</div>
       <div class="card"><form method="post" action="/cron">
         <div class="row">
           ${text('timezone', 'Таймзона', c.timezone, 'Europe/Moscow')}
@@ -659,8 +628,6 @@ export async function buildServer(bot: Bot) {
     return redirect(reply, '/cron', applied ? 'Расписание сохранено и применено' : 'Расписание сохранено');
   });
 
-  app.post('/cron/push', syncRoute('/cron', exportCronToSheet));
-
   // ── Tags (справочник тегов календарных событий) ──────────
   app.get('/tags', async (req, reply) => {
     const msg = (req.query as Record<string, string>).msg;
@@ -678,11 +645,7 @@ export async function buildServer(bot: Bot) {
       )
       .join('');
     const body = `<h1>Теги <span class="muted">(${tags.length})</span></h1>
-      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Справочник тегов календарных событий (легенда KEY=VALUE). Хранится в БД;
-          кнопка справа — выгрузка во вкладку «Tags» (только показать). На валидацию парсинга не влияет.</div>
-        ${syncButtons('tags')}
-      </div></div>
+      <div class="card muted">Справочник тегов календарных событий (легенда KEY=VALUE) хранится в БД. На валидацию парсинга не влияет.</div>
       <div class="card"><h2>Добавить / обновить</h2>
         <form method="post" action="/tags"><div class="row">
           <div><label>Ключ (KEY)</label><input name="tag_key" placeholder="TYPE" required></div>
@@ -716,11 +679,6 @@ export async function buildServer(bot: Bot) {
     if (Number.isInteger(id)) await deleteTag(id);
     return redirect(reply, '/tags', 'Тег удалён');
   });
-
-  app.post('/tags/push', syncRoute('/tags', exportTagsToSheet));
-
-  // ── Синхронизация всех вкладок (кнопки в шапке) ──────────
-  app.post('/sync/push', syncRoute('/', syncAllToSheet));
 
   // ── Budgets ──────────────────────────────────────────────
   // Месяц/год по умолчанию: следующий месяц (номер) и текущий год.

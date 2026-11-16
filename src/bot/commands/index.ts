@@ -12,7 +12,7 @@ const HELP = `<b>basketballgod — команды</b>
 /active @login yes|no — активность игрока на след. месяц (пишет в БД)
 
 <b>Управление:</b>
-Состав, таблица, бюджеты, оплаты, должники, игры и голосовалки управляются в админке.`;
+Состав, бюджеты, оплаты, должники, игры и голосовалки управляются в админке.`;
 
 /** Текст аргументов команды (grammY типизирует ctx.match как string | RegExpMatchArray). */
 const argText = (ctx: Context): string => (typeof ctx.match === 'string' ? ctx.match : '');

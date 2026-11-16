@@ -324,7 +324,6 @@ export function layout(
           <summary aria-label="Управление"${managementActive ? ' aria-current="page"' : ''}><span class="management-label">Управление</span><span class="management-compact" aria-hidden="true">•••</span><span class="nav-menu-caret">▾</span></summary>
           <div class="nav-menu-panel">
             ${managementLinks}
-            <form method="post" action="/sync/push"><button type="submit" title="Выгрузить все данные из БД в Google-таблицу">Выгрузить всё</button></form>
           </div>
         </details>
         <button class="ghost theme-toggle" id="theme-toggle" type="button" aria-label="Включить тёмную тему" title="Включить тёмную тему">☾</button>
@@ -344,16 +343,6 @@ export function layout(
 ${FORM_BUSY_SCRIPT}
 ${opts.nav === false ? '' : TELEGRAM_STATUS_SCRIPT}</script>
 </body></html>`;
-}
-
-/**
- * Кнопка выгрузки раздела в соответствующую вкладку Google-таблицы (БД → таблица).
- * Синхронизация односторонняя: таблица — витрина для показа, обратно не читается.
- */
-export function syncButtons(section: string): string {
-  return `<div style="display:flex;gap:8px;flex-wrap:wrap">
-    <form class="inline" method="post" action="/${section}/push"><button class="ghost">⬆ Выгрузить в таблицу</button></form>
-  </div>`;
 }
 
 /** Прогресс-бар сбора: сколько собрано из нужной суммы + процент. */

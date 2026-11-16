@@ -1,20 +1,17 @@
 // Узкие импорты: общий googleapis загружает типы всех Google API при сборке.
 import { auth, calendar } from 'googleapis/build/src/apis/calendar/index.js';
-import { sheets } from 'googleapis/build/src/apis/sheets/index.js';
 import { env } from '../config/env.js';
 
 /**
  * Авторизация через сервисный аккаунт Google.
  * Ключ берём из base64 (GOOGLE_SERVICE_ACCOUNT_BASE64) либо из файла
- * (GOOGLE_APPLICATION_CREDENTIALS). Календари и таблицу нужно расшарить
- * на email сервис-аккаунта (client_email из ключа).
+ * (GOOGLE_APPLICATION_CREDENTIALS). Календари нужно расшарить на email
+ * сервис-аккаунта (client_email из ключа).
  */
 
 const SCOPES = [
   // Импорт расписания создаёт и обновляет матчи в календарях команд.
   'https://www.googleapis.com/auth/calendar',
-  // В таблицу только пишем (выгрузка из БД), но узкого write-only scope у Sheets нет.
-  'https://www.googleapis.com/auth/spreadsheets',
 ];
 
 function loadCredentials(): { client_email: string; private_key: string } | undefined {
@@ -44,8 +41,4 @@ export function getAuth() {
 
 export function calendarClient() {
   return calendar({ version: 'v3', auth: getAuth() });
-}
-
-export function sheetsClient() {
-  return sheets({ version: 'v4', auth: getAuth() });
 }

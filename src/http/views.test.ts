@@ -38,3 +38,8 @@ test('раздел из меню управления раскрывает ег�
   assert.match(html, /href="\/extra-fees" aria-current="page"/);
   assert.doesNotMatch(html, /sync\/push|Выгрузить/);
 });
+
+test('checkbox и radio не растягиваются на всю ширину поля', () => {
+  const html = layout('Разовые сборы', '');
+  assert.match(html, /input\[type="checkbox"\],input\[type="radio"\]\s*\{[^}]*width:auto/);
+});

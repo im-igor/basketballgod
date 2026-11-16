@@ -191,7 +191,9 @@ input,select,textarea { background:var(--field); color:var(--fg); border:1px sol
 textarea { resize:vertical; }
 input:hover,select:hover,textarea:hover { border-color:var(--muted); }
 input:focus,select:focus,textarea:focus { background:var(--card); border-color:var(--accent); box-shadow:0 0 0 3px rgba(232,93,42,.13); }
-input[type="checkbox"] { accent-color:var(--accent); min-height:auto; }
+input[type="checkbox"],input[type="radio"] { width:auto; min-height:auto; padding:0; accent-color:var(--accent); }
+.recipient-scope { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+.recipient-scope label { display:inline-flex; align-items:center; gap:8px; margin:0; }
 .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
 .row > div { flex:1; min-width:120px; }
 a.button { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; font-size:13px; }

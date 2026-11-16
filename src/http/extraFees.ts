@@ -58,8 +58,10 @@ function recipientPicker(players: Awaited<ReturnType<typeof listPlayers>>, selec
     }).join('');
   return `<fieldset data-recipient-picker style="margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:12px">
     <legend>Кому может быть начислен сбор</legend>
-    <label style="margin-right:16px"><input type="radio" name="recipient_scope" value="ALL" ${scope === 'ALL' ? 'checked' : ''}> Всем подходящим игрокам</label>
-    <label><input type="radio" name="recipient_scope" value="SELECTED" ${scope === 'SELECTED' ? 'checked' : ''}> Только выбранным</label>
+    <div class="recipient-scope">
+      <label><input type="radio" name="recipient_scope" value="ALL" ${scope === 'ALL' ? 'checked' : ''}> Всем подходящим игрокам</label>
+      <label><input type="radio" name="recipient_scope" value="SELECTED" ${scope === 'SELECTED' ? 'checked' : ''}> Только выбранным</label>
+    </div>
     <div data-recipient-tools style="margin-top:10px">
       <label for="recipient-search-${esc(key)}">Поиск по ФИО</label>
       <input id="recipient-search-${esc(key)}" data-recipient-search type="search" placeholder="Начни вводить имя или фамилию">

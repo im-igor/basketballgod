@@ -25,7 +25,12 @@ test('Игры открываются из меню без периода, со�
       ('BLACK','Матч ноября','2026-11-01',12,2026,'[]'),('RED','Матч октября','2026-10-31',11,2026,'[]'),('BLACK','Матч декабря','2026-12-31',1,2027,'[]'),('BLACK','Матч января','2027-01-01',2,2027,'[]')`);
     await db.exec(`insert into scheduled_games(source,source_url,external_id,team,team_a,team_b,game_date) values
       ('MLBL','https://example.com','oct','BLACK','Yandex Black','Расписание октября','2026-10-31'),
+      ('MLBL','https://example.com','oct-finished','BLACK','Yandex Black','Завершённая игра','2026-10-20'),
       ('MLBL','https://example.com','nov','BLACK','Yandex Black','Расписание ноября','2026-11-01')`);
+    await db.exec(`insert into scheduled_games(source,source_url,external_id,team,team_a,team_b,game_date,calendar_event_id) values
+      ('MLBL','https://example.com','oct-accounted','BLACK','Yandex Black','Учтённая игра','2026-10-15','accounted-event')`);
+    await db.exec(`insert into games(event_uid,team,opponent,played_on,month,year,participants) values
+      ('accounted-event','BLACK','Учтённая игра','2026-10-15',11,2026,'[]')`);
     mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-30T12:00:00+03:00') });
     app = await buildServer({ api: {} } as Bot);
     const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
@@ -39,6 +44,15 @@ test('Игры открываются из меню без периода, со�
     assert.equal(page.statusCode, 200);
     assert.deepEqual(period(page.body), ['10', '2026']);
     assert.match(page.body, /Матч октября/);
+    const octoberPage = parse(page.body);
+    const statusFor = (game: string) => octoberPage.querySelectorAll('.game-status-line')
+      .find(line => line.textContent.includes(game))?.querySelector('.game-status')?.textContent.trim();
+    assert.equal(statusFor('Расписание октября'), 'Запланирована');
+    assert.equal(statusFor('Завершённая игра'), 'Завершена');
+    assert.equal(statusFor('Учтённая игра'), 'Учтена');
+    const accountedRow = octoberPage.querySelectorAll('.games-table tbody tr')
+      .find(row => row.textContent.includes('Учтённая игра'))!;
+    assert.equal(accountedRow.querySelector('.game-status')?.textContent.trim(), 'Учтена');
     assert.doesNotMatch(page.body, /Матч ноября|Матч января|NaN/);
     const november = await get('/games?month=11&year=2026');
     assert.deepEqual(period(november.body), ['11', '2026']);

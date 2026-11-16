@@ -172,6 +172,13 @@ th { color:var(--muted); font-weight:650; font-size:12px; text-transform:upperca
 .badge.red { background:var(--danger-soft); color:var(--danger); }
 .badge.black { background:var(--track); color:var(--fg); }
 .badge.both { background:#e9e1ff; color:#6546a5; }
+.badge.game-status { white-space:nowrap; }
+.badge.game-status.planned { background:#e7f0ff; color:#315f9d; }
+.badge.game-status.completed { background:#fff0d7; color:#8a5810; }
+.badge.game-status.accounted { background:var(--ok-soft); color:var(--ok); }
+html[data-theme="dark"] .badge.game-status.planned { background:#1b304d; color:#a9c9ff; }
+html[data-theme="dark"] .badge.game-status.completed { background:#3b2b16; color:#f2c779; }
+.game-status-line { display:flex; align-items:baseline; gap:7px; flex-wrap:wrap; }
 .team-cell { min-height:0; padding:0; border:0; background:transparent; cursor:pointer; }
 .team-cell:hover { background:transparent; border-color:transparent; transform:none; }
 .team-cell .badge { pointer-events:none; }
@@ -247,8 +254,8 @@ button.danger:hover { filter:brightness(.92); }
   .card { padding:15px; border-radius:12px; overflow-x:auto; }
   button { min-height:38px; }
   /* Обычные таблицы (игроки и т.п.): прячем второстепенные колонки 4+. */
-  table:not(.pay-table):not(.schedule-table):not(.players-table) th:nth-child(n+4),
-  table:not(.pay-table):not(.schedule-table):not(.players-table) td:nth-child(n+4){ display:none; }
+  table:not(.pay-table):not(.schedule-table):not(.players-table):not(.games-table) th:nth-child(n+4),
+  table:not(.pay-table):not(.schedule-table):not(.players-table):not(.games-table) td:nth-child(n+4){ display:none; }
   /* Таблица оплат: на узком экране оставляем ФИО(1), Итого(7) и кнопку(9),
      иначе кнопка «Перевёл» уезжает за край и недоступна в портретной ориентации. */
   .pay-table th:nth-child(2), .pay-table td:nth-child(2),
@@ -261,12 +268,13 @@ button.danger:hover { filter:brightness(.92); }
   .players-table th:nth-child(2), .players-table td:nth-child(2),
   .players-table th:nth-child(5), .players-table td:nth-child(5),
   .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
-  /* Таблица игр: оставляем Соперник(3), Тренер(6), Судья(7) и удаление(8),
-     чтобы тумблеры и кнопка были доступны в портретной ориентации. */
+  /* Таблица игр: оставляем Соперник(3), Статус(4), Тренер(8), Судья(9) и удаление(10),
+     чтобы состояние, тумблеры и кнопка были доступны в портретной ориентации. */
   .games-table th:nth-child(1), .games-table td:nth-child(1),
   .games-table th:nth-child(2), .games-table td:nth-child(2),
-  .games-table th:nth-child(4), .games-table td:nth-child(4),
-  .games-table th:nth-child(5), .games-table td:nth-child(5){ display:none; }
+  .games-table th:nth-child(5), .games-table td:nth-child(5),
+  .games-table th:nth-child(6), .games-table td:nth-child(6),
+  .games-table th:nth-child(7), .games-table td:nth-child(7){ display:none; }
   /* Расписание: на мобильном оставляем пары команд, дату, время, площадку,
      тренера и действия с дублями. */
   .schedule-table th:nth-child(1), .schedule-table td:nth-child(1),

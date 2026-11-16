@@ -1604,6 +1604,16 @@ export async function buildServer(bot: Bot) {
     return gamesQuery(view?.month ?? fallback.month, view?.year ?? fallback.year);
   };
 
+  type GameLifecycle = 'planned' | 'completed' | 'accounted';
+  const gameLifecycleBadge = (status: GameLifecycle): string => {
+    const labels: Record<GameLifecycle, string> = {
+      planned: 'Запланирована',
+      completed: 'Завершена',
+      accounted: 'Учтена',
+    };
+    return `<span class="badge game-status ${status}">${labels[status]}</span>`;
+  };
+
   app.post('/games/check-stats', async (req, reply) => {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/games', 'Неверный месяц/год');
@@ -1652,6 +1662,7 @@ export async function buildServer(bot: Bot) {
           <td>${g.stat_url
             ? `<a href="${esc(g.stat_url)}" target="_blank" rel="noopener">${esc(g.opponent ?? 'протокол')}</a>`
             : esc(g.opponent ?? '')}</td>
+          <td>${gameLifecycleBadge('accounted')}</td>
           <td>${played}</td>
           <td>${g.fee_per_player ? '+' + esc(g.fee_per_player) + '₽' : '—'}</td>
           <td>${g.month && g.year ? esc(monthLabel(g.month, g.year)) : '—'}</td>
@@ -1663,6 +1674,15 @@ export async function buildServer(bot: Bot) {
       .join('');
 
     const statuses = await listAutomaticStatsStatus(budgetPeriod.month, budgetPeriod.year);
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
+    const scheduledGameIsAccounted = (scheduled: (typeof statuses)[number]): boolean => games.some((game) => {
+      if (scheduled.calendar_event_id && game.event_uid === scheduled.calendar_event_id) return true;
+      if (!game.stat_url || scheduled.source === 'CALENDAR') return false;
+      try {
+        const ref = gameStatsRef(game.stat_url);
+        return ref.source === scheduled.source && ref.externalId === scheduled.external_id;
+      } catch { return false; }
+    });
     const statsCard = `<div class="card"><h2>Статистика игр за ${esc(monthLabel(month, year))}</h2>
       <p class="muted">Статистика проверяется при сборке бюджета и повторно перед публикацией. Изменение состава или взносов требует пересборки бюджета. Фоновая проверка выполняется каждый час.
       Отсутствие статистики не мешает собрать базовую часть бюджета. Публикация требует проверки игр. Введённые вручную игры проверяет администратор.</p>
@@ -1679,7 +1699,9 @@ export async function buildServer(bot: Bot) {
         const matchLabel = statsUrl
           ? `<a href="${esc(statsUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть статистику матча">${label}</a>`
           : label;
-        return `<p>${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : s.plan ? 'Проверен' : 'Не удалось определить сыгравших'))}
+        const gameDate = s.game_date instanceof Date ? s.game_date.toISOString().slice(0, 10) : String(s.game_date).slice(0, 10);
+        const lifecycle: GameLifecycle = scheduledGameIsAccounted(s) ? 'accounted' : gameDate < today ? 'completed' : 'planned';
+        return `<p class="game-status-line">${gameLifecycleBadge(lifecycle)} ${matchLabel} — ${esc(s.error ?? (!s.checked_at ? 'Ещё не проверен' : s.plan ? 'Проверен' : 'Не удалось определить сыгравших'))}
           ${s.plan ? ` · ${s.plan.playedCount} игроков × ${s.plan.fee} ₽ = ${s.plan.playedCount * s.plan.fee} ₽` : ''}
           ${s.checked_at ? ` · ${esc(fmtDateTime(s.checked_at))}` : ''}</p>`;
       }).join('') : '<p class="muted">В расписании нет матчей выбранного месяца. Полнота дополнительно сверяется с календарями при сборке бюджета.</p>'}
@@ -1745,8 +1767,8 @@ export async function buildServer(bot: Bot) {
       ${importForm}
       ${addForm}
       <div class="card"><h2>Учтённые игры за ${esc(monthLabel(month,year))}</h2><table class="games-table">
-        <thead><tr><th>Дата</th><th>Команда</th><th>Соперник</th><th>Сыграло</th><th>Взнос</th><th>Месяц сбора взносов</th><th>Тренер</th><th>Судья</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="9" class="muted">Игры за выбранный месяц ещё не добавлены. Проверка статистики сама по себе не добавляет игры: устрани ошибки выше и <a href="/budgets?month=${budgetPeriod.month}&year=${budgetPeriod.year}">собери бюджет</a>.</td></tr>`}</tbody></table></div>`;
+        <thead><tr><th>Дата</th><th>Команда</th><th>Соперник</th><th>Статус</th><th>Сыграло</th><th>Взнос</th><th>Месяц сбора взносов</th><th>Тренер</th><th>Судья</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="10" class="muted">Игры за выбранный месяц ещё не добавлены. Проверка статистики сама по себе не добавляет игры: устрани ошибки выше и <a href="/budgets?month=${budgetPeriod.month}&year=${budgetPeriod.year}">собери бюджет</a>.</td></tr>`}</tbody></table></div>`;
     return html(reply, layout(`Игры ${monthLabel(month, year)}`, body, { flash: msg }));
   });
 

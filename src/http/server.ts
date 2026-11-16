@@ -70,6 +70,7 @@ import {
   sendBudgetToChat,
   refreshBudgetMessage,
   sendDebtors,
+  sendMonthlyDebtors,
   sendBudgetDraftsByMonth,
   renderBudgetFromDb,
 } from '../services/notify.service.js';
@@ -84,7 +85,7 @@ import {
 } from '../services/sheetSync.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
-import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach } from '../domain/budget.js';
+import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach, usesUnifiedDebtorReminder } from '../domain/budget.js';
 import type { Team, Player, PlayerTeam, BudgetTeam, Charge, Budget, BudgetCorrection, MonthlyPayout, MonthlyPayoutItem, ScheduleSource } from '../db/types.js';
 
 const COOKIE = 'bbg_auth';
@@ -1545,6 +1546,11 @@ export async function buildServer(bot: Bot) {
     const seg = periodOf(period.month, period.year);
     const back = backToList ? '/collections' : `/collections/${seg}`;
     try {
+      if (usesUnifiedDebtorReminder(period.month, period.year)) {
+        const result = await sendMonthlyDebtors(api, period.month, period.year);
+        return redirect(reply, back, !result.published ? 'Сбор ещё не опубликован'
+          : result.count ? `Напоминание отправлено (должников: ${result.count})` : 'Должников нет');
+      }
       let count = 0;
       let published = 0;
       for (const b of await monthBudgetsOf(period.month, period.year)) {

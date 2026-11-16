@@ -60,6 +60,9 @@ export const usesSharedCoach = (month: number, year: number): boolean => year * 
 /** Начиная с декабря 2026 создаём одну запись бюджета для обоих ростеров. */
 export const usesCommonBudget = (month: number, year: number): boolean => year * 100 + month >= 202612;
 
+/** С ноября 2026 напоминания должникам публикуются единым списком в общем чате. */
+export const usesUnifiedDebtorReminder = (month: number, year: number): boolean => year * 100 + month >= 202611;
+
 /** Перед публикацией обе команды должны иметь один и тот же общий расчёт. */
 export function sharedCoachBudgetsReady(red: Budget | null, black: Budget | null): boolean {
   const a = red?.details;

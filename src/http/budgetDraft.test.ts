@@ -200,10 +200,15 @@ test('админка показывает тот же черновик и вып
     assert.match(decodeURIComponent(String(publishedAgain.headers.location)), /Нет неопубликованных/);
     assert.equal(sent.length, 2);
     await assert.rejects(sendBudgetToChat(api as never, redBudget), /уже опубликован/);
+    await db.query('update charges set paid=false where budget_id=$1', [redBudget]);
     const reminder = await post('/collections/11-2026/debtors', {});
     assert.match(decodeURIComponent(String(reminder.headers.location)), /\/collections\?msg=Напоминание отправлено/);
     assert.equal(sent.length, 3);
     assert.match(String(sent[2]![1]), /Должники/);
+    assert.match(String(sent[2]![1]), /@redplayer/);
+    assert.match(String(sent[2]![1]), /@blackplayer/);
+    assert.equal(sent[2]![0], -1);
+    await db.query('update charges set paid=true where budget_id=$1', [redBudget]);
 
     const lateUpdate = await post('/budgets/11-2026/coach', { team: 'RED', change: '-1' });
     assert.match(decodeURIComponent(String(lateUpdate.headers.location)), /Опубликованный бюджет нельзя изменить/);

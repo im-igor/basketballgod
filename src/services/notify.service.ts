@@ -12,7 +12,7 @@ import {
 } from '../db/repos/budgets.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import { listAllGamesForMonth } from '../db/repos/games.repo.js';
-import { buildBudgetMessage, buildDebtorsMessage, type ChargeView } from '../domain/messages.js';
+import { buildBudgetMessage, buildDebtorsMessage, formatFullName, type ChargeView } from '../domain/messages.js';
 import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach } from '../domain/budget.js';
 import { gamesForPlayers } from '../domain/gamefee.js';
 import { chatStatusesByLogin, checkCollectionChatMembership } from './chatCheck.service.js';
@@ -278,6 +278,50 @@ export async function sendDebtors(api: Api, budgetId: number): Promise<{ count: 
     ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
   });
   return { count: d.count };
+}
+
+/**
+ * С ноября-2026 собрать должников всех бюджетов месяца в один список и отправить
+ * его в общий топик. В ноябре источниками остаются исторические RED/BLACK,
+ * начиная с декабря — единственный COMMON-бюджет.
+ */
+export async function sendMonthlyDebtors(
+  api: Api,
+  month: number,
+  year: number,
+): Promise<{ count: number; published: number }> {
+  const teams: BudgetTeam[] = usesCommonBudget(month, year) ? ['COMMON'] : TEAMS;
+  const budgets = (await Promise.all(teams.map((team) => getBudget(team, month, year))))
+    .filter((budget): budget is NonNullable<typeof budget> => budget?.message_id != null);
+  if (budgets.length === 0) return { count: 0, published: 0 };
+
+  const combined = new Map<string, { name: string | null; tg_login: string; amount: number }>();
+  for (const budget of budgets) {
+    for (const debtor of await getDebtors(budget.id)) {
+      const key = debtor.tg_login.toLowerCase();
+      const previous = combined.get(key);
+      combined.set(key, {
+        name: previous?.name ?? debtor.name,
+        tg_login: previous?.tg_login ?? debtor.tg_login,
+        amount: (previous?.amount ?? 0) + Number(debtor.amount),
+      });
+    }
+  }
+  const debtors = [...combined.values()].sort((a, b) =>
+    formatFullName(a.name).localeCompare(formatFullName(b.name), 'ru'));
+  if (debtors.length === 0) return { count: 0, published: budgets.length };
+
+  const chat = env.collectionChat;
+  await api.sendMessage(
+    chat.chatId,
+    buildDebtorsMessage(monthLabel(month, year), debtors, payment),
+    {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...(chat.threadId ? { message_thread_id: chat.threadId } : {}),
+    },
+  );
+  return { count: debtors.length, published: budgets.length };
 }
 
 /**

@@ -117,12 +117,13 @@ test('админка показывает тот же черновик и вып
     const paidResponse = await post(`/charges/${blackChargeId}/pay`, { value: 'yes' });
     const paidLocation = new URL(String(paidResponse.headers.location), 'http://localhost');
     assert.equal(paidLocation.pathname, '/collections/11-2026');
-    assert.equal(paidLocation.searchParams.get('all'), '1');
+    assert.equal(paidLocation.searchParams.has('all'), false);
     assert.equal(paidLocation.searchParams.get('msg'), 'Оплата обновлена');
-    assert.equal(paidLocation.hash, `#charge-${blackChargeId}`);
+    assert.equal(paidLocation.hash, '');
     const afterPayment = await app.inject({ method: 'GET', url: paidLocation.pathname + paidLocation.search, headers: { cookie } });
     assert.match(afterPayment.body, /Оплата обновлена/);
-    assert.match(afterPayment.body, /Все участники/);
+    assert.match(afterPayment.body, /Не сдали \(0\)/);
+    assert.doesNotMatch(afterPayment.body, new RegExp(`id="charge-${blackChargeId}"`));
     assert.deepEqual(counts((await app.inject({ method: 'GET', url: '/collections', headers: { cookie } })).body),
       ['2 сдали', '0 не сдали', '2 участников']);
     const unpaidResponse = await post(`/charges/${blackChargeId}/pay`, { value: 'no' });

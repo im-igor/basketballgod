@@ -167,11 +167,11 @@ test('Расчеты: суммы видны, детали свернуты, ка
     assert.equal(allPlayers.querySelector('input[role="switch"]')?.hasAttribute('checked'),false);
     assert.equal(allPlayers.querySelector(`#charge-${chargeId} input[name="all"]`)?.getAttribute('value'),'1');
     const paidDefault = await payment('yes');
-    assert.match(paidDefault.headers.location!,/all=1.*#charge-/);
+    assert.doesNotMatch(paidDefault.headers.location!,/all=1|#charge-/);
     const paidFiltered = await payment('yes','0');
     const afterPaid = parse((await app.inject({method:'GET',url:paidFiltered.headers.location!,cookies})).body);
-    assert.ok(afterPaid.querySelector(`#charge-${chargeId}`));
-    assert.equal(afterPaid.querySelector('input[role="switch"]')?.hasAttribute('checked'),false);
+    assert.equal(afterPaid.querySelector(`#charge-${chargeId}`),null);
+    assert.ok(afterPaid.querySelector('input[role="switch"]')?.hasAttribute('checked'));
     assert.match((await payment('yes','1')).headers.location!,/all=1/);
     assert.match((await payment('no','1')).headers.location!,/all=1/);
     const unpaid = parse((await app.inject({method:'GET',url:'/collections/12-2026',cookies})).body);

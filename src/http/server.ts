@@ -1563,9 +1563,9 @@ export async function buildServer(bot: Bot) {
     if (!charge) return redirect(reply, '/collections', 'Оплата не найдена');
     await refreshBudgetMessage(api, charge.budget_id).catch(() => undefined);
     const budget = await getBudgetById(charge.budget_id);
-    // После отметки оплаты показываем весь список, иначе только что отмеченная
-    // строка исчезает из фильтра «не сдали».
-    const showAll = body.all === '1' || value;
+    // Сохраняем явно выбранный пользователем режим. По умолчанию сдавшие скрыты,
+    // поэтому после «Перевёл» строка исчезает, а список остаётся отфильтрованным.
+    const showAll = body.all === '1';
     const back = budget ? `/collections/${periodOf(budget.month, budget.year)}${showAll ? '?all=1' : ''}` : '/collections';
     return redirect(reply, `${back}${budget && (showAll || !value) ? `#charge-${id}` : ''}`, 'Оплата обновлена');
   });

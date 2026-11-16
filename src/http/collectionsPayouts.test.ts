@@ -149,6 +149,14 @@ test('Расчеты: суммы видны, детали свернуты, ка
     const createdBudgets=(await db.query<{id:number}>('select id from budgets where month=12 and year=2026')).rows;
     assert.equal(createdBudgets.length,1);
     assert.equal((await db.query<{team:string}>('select team from budgets where month=12 and year=2026')).rows[0]!.team,'COMMON');
+    await db.query(
+      "update budgets set details=jsonb_set(details,'{game_stats_warnings}',$1::jsonb) where id=$2",
+      [JSON.stringify(['2026-11-22 Yandex Red vs ЛАНИТ: Матч ещё не завершился или сыгран сегодня']), createdBudgets[0]!.id],
+    );
+    const plannedGames = await app.inject({ method: 'GET', url: '/budgets?month=12&year=2026', cookies });
+    assert.match(plannedGames.body, /Запланированные игры в ноябре/);
+    assert.doesNotMatch(plannedGames.body, /Базовая часть рассчитана\. Взносы за новые игры пока не добавлены\./);
+    assert.doesNotMatch(plannedGames.body, /Сохранённые ранее игры учтены\. Перед публикацией нужно проверить статистику и пересобрать бюджет\./);
     const duplicateAfter=await post('create','12');
     assert.match(decodeURIComponent(duplicateAfter.headers.location!),/уже есть бюджет/);
     await db.exec('update charges set paid=true where budget_id in (select id from budgets where month=12)');

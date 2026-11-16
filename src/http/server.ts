@@ -86,6 +86,10 @@ const COOKIE = 'bbg_auth';
 const PUBLIC = new Set(['/login', '/healthz']);
 const SCHEDULE_IMPORT_INTERVALS = [15, 30, 60, 120, 240, 360, 720, 1440] as const;
 const SCHEDULE_SOURCE_TEAMS: Record<ScheduleSource, Team> = { LCHB: 'RED', MLBL: 'BLACK' };
+const MONTHS_IN_PREPOSITIONAL = [
+  'январе', 'феврале', 'марте', 'апреле', 'мае', 'июне',
+  'июле', 'августе', 'сентябре', 'октябре', 'ноябре', 'декабре',
+] as const;
 const scheduleIntervalLabel = (minutes: number): string => minutes < 60
   ? `${minutes} мин.`
   : minutes === 1440 ? '1 сутки' : `${minutes / 60} ч.`;
@@ -788,6 +792,8 @@ export async function buildServer(bot: Bot) {
         : fee.end_period === null || selectedPeriod <= fee.end_period),
     );
     const commonBudget = usesCommonBudget(month, year);
+    const sourceMonth = month === 1 ? 12 : month - 1;
+    const sourceYear = month === 1 ? year - 1 : year;
     // До декабря — пара командных черновиков, с декабря — один общий.
     const [redBudget, blackBudget, sharedBudget] = await Promise.all([
       commonBudget ? Promise.resolve(null) : getBudget('RED', month, year),
@@ -856,8 +862,7 @@ export async function buildServer(bot: Bot) {
             ${built.some((b) => b.message_id == null) ? `<form class="inline" method="post" action="/budgets/publish" onsubmit="return confirm('Проверь суммы и опубликуй сбор${commonBudget ? '' : 'ы в чаты команд'}. Продолжить?')">${hidden}<button data-budget-publish data-ready="${commonDraftReady}" ${commonDraftReady ? '' : 'disabled'}>${commonBudget ? 'Опубликовать сбор' : 'Опубликовать готовые сборы'}</button></form>` : ''}
           </div>
         </div>
-        ${statsWarnings.length ? `<div class="card"><b>Базовая часть рассчитана. Взносы за новые игры пока не добавлены.</b>
-          <p>Сохранённые ранее игры учтены. Перед публикацией нужно проверить статистику и пересобрать бюджет.</p>
+        ${statsWarnings.length ? `<div class="card"><h3 style="margin-top:0">Запланированные игры в ${MONTHS_IN_PREPOSITIONAL[sourceMonth - 1] ?? monthLabel(sourceMonth, sourceYear).toLowerCase()}</h3>
           <ul>${statsWarnings.map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul></div>` : ''}
         ${publishReasons.length ? `<div class="flash flash-error" role="alert"><b>Отправка сбора заблокирована</b><ul>${publishReasons.map((r)=>`<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
         <p class="muted">Порядок работы: собери бюджет, проверь корректировки и тексты, затем опубликуй сбор. Опубликованные суммы не меняются.</p>

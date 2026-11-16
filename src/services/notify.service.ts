@@ -1,7 +1,7 @@
 import { withBudgetOperation } from '../db/pool.js';
 import { importAutomaticGameStats, sourcePeriod } from './automaticGameStats.service.js';
 import { gameFeeForPlayer } from '../domain/gamefee.js';
-import { InlineKeyboard, type Api } from 'grammy';
+import type { Api } from 'grammy';
 import { env, TEAMS } from '../config/env.js';
 import {
   getBudget,
@@ -322,39 +322,4 @@ export async function sendMonthlyDebtors(
     },
   );
   return { count: debtors.length, published: budgets.length };
-}
-
-/**
- * Отправить ЧЕРНОВИК списка должников администраторам в личку — по одному сообщению на команду,
- * с кнопкой «Отправить в чат». В чат команды напоминание уходит только после нажатия кнопки
- * (см. bot/debtorsPublish.ts). count=0 — должников нет, черновик не шлём.
- */
-export async function sendDebtorsDraftToAdmins(
-  api: Api,
-  budgetId: number,
-): Promise<{ team: BudgetTeam; count: number } | null> {
-  const d = await buildDebtorsDraft(budgetId);
-  if (!d) return null;
-  if (d.count === 0) return { team: d.team, count: 0 };
-
-  const header =
-    `🧾 <b>Черновик напоминания должникам — ${d.team}</b>\n` +
-    `Проверь список и нажми «Отправить в чат».\n\n`;
-  const keyboard = new InlineKeyboard().text(`✅ Отправить в чат ${d.team}`, `debtorssend:${budgetId}`);
-
-  for (const adminId of env.ADMIN_TG_IDS) {
-    await api
-      .sendMessage(adminId, header + d.text, {
-        parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
-        reply_markup: keyboard,
-      })
-      .catch((err) =>
-        log.warn(
-          `[notify] не удалось отправить черновик должников админу ${adminId}`,
-          (err as Error).message,
-        ),
-      );
-  }
-  return { team: d.team, count: d.count };
 }

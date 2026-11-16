@@ -2,12 +2,6 @@ import type { Api } from 'grammy';
 import { env } from '../config/env.js';
 import { listEvents, type CalendarEvent } from '../google/calendar.js';
 import { pollSessionExistsForEvent, savePollSession } from '../db/repos/polls.repo.js';
-import {
-  createPollDraft,
-  getPollDraft,
-  setPollDraftSent,
-  type PollDraftRow,
-} from '../db/repos/pollDrafts.repo.js';
 import { calendarHorizonEnd, eventLabel } from '../domain/dates.js';
 import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import { log } from '../util/logger.js';
@@ -18,7 +12,6 @@ import {
   completeCronJobWindow,
 } from '../db/repos/cronJobWindows.repo.js';
 import {
-  readFreshCalendarGameForPoll,
   refreshLeagueCalendarsBeforePolls,
 } from './gamePollFreshness.service.js';
 
@@ -74,8 +67,7 @@ function commonChatFor(_eventStart: string | null): boolean {
 
 /**
  * Отправить один опрос в чат команды: сохранить poll_session (для сбора голосов),
- * при forward — продублировать (forward) в чат другой команды. Общий код для
- * авторассылки (sendWeeklyPolls) и публикации черновика (publishPollDraft).
+ * при forward — продублировать (forward) в чат другой команды.
  */
 interface PollSendInput {
   team: Team;
@@ -253,75 +245,4 @@ export async function sendWeeklyPolls(
 
   log.info(`[polls:${kind}] отправлено ${sent}, переслано ${forwarded}`);
   return { sent, forwarded };
-}
-
-/**
- * Собрать черновики опросов на ближайшую неделю (для ручной проверки в личке).
- * На каждое событие — строка poll_drafts со status=pending. Возвращает созданные
- * черновики (по порядку событий каждой команды).
- */
-export async function buildPollDrafts(): Promise<PollDraftRow[]> {
-  const drafts: PollDraftRow[] = [];
-  // По каждому виду — свой горизонт и фильтр по TYPE; форвард только для тренировок.
-  // Виды не пересекаются (TRAINING vs GAME/FRIENDLY), поэтому события не дублируются.
-  for (const kind of ['training', 'game'] as const) {
-    const forward = kind === 'training';
-    const { horizonDays, timezone } = await scheduleFor(kind);
-    const windowStartedAt = new Date();
-    const windowUntil = calendarHorizonEnd(windowStartedAt, horizonDays, timezone);
-    for (const { team, events } of await eventsInWindow(windowStartedAt, windowUntil)) {
-      for (const ev of events) {
-        if (!matchesKind(ev, kind) || !isUpcomingPollEvent(ev, windowStartedAt)) continue;
-        const id = await createPollDraft({
-          team,
-          event_uid: ev.uid,
-          question: questionFor(ev, kind === 'game'),
-          options: env.POLL_OPTIONS,
-          event_start: ev.start,
-          is_training: forward,
-          forward,
-        });
-        const draft = await getPollDraft(id);
-        if (draft) drafts.push(draft);
-      }
-    }
-  }
-  log.info(`[polls] подготовлено черновиков: ${drafts.length}`);
-  return drafts;
-}
-
-/**
- * Опубликовать черновик в чат команды с текущими (возможно отредактированными)
- * текстом/вариантами/форвардом. Бросает ошибку, если черновик уже отправлен/пропущен.
- */
-export async function publishPollDraft(
-  api: Api,
-  draftId: number,
-): Promise<{ team: Team; forwarded: boolean }> {
-  const draft = await getPollDraft(draftId);
-  if (!draft) throw new Error(`Черновик #${draftId} не найден`);
-  if (draft.status !== 'pending') {
-    throw new Error(draft.status === 'sent' ? 'Этот опрос уже отправлен' : 'Этот опрос пропущен');
-  }
-
-  let question = draft.question;
-  let eventStart = draft.event_start;
-  if (!draft.is_training && draft.event_uid) {
-    const event = await readFreshCalendarGameForPoll(draft.team, draft.event_uid);
-    if (!isUpcomingPollEvent(event, new Date())) throw new Error('Игра уже началась — опрос не отправлен');
-    question = questionFor(event);
-    eventStart = event.start;
-  }
-
-  const res = await sendPollForEvent(api, {
-    team: draft.team,
-    question,
-    options: draft.options,
-    eventUid: draft.event_uid,
-    eventStart,
-    forward: draft.forward,
-  });
-
-  await setPollDraftSent(draftId, res.pollId);
-  return { team: draft.team, forwarded: res.forwarded };
 }

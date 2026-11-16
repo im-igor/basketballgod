@@ -1,4 +1,4 @@
-import type { BudgetDetails, BudgetTeam, ExtraFeeItem, Tariffs, Team } from '../db/types.js';
+import type { BudgetDetails, BudgetTeam, ExtraFeeItem, Tariffs } from '../db/types.js';
 import { gameStatsRef } from '../gamefee/parser.js';
 import { monthLabel } from './dates.js';
 import { usesSharedCoach } from './budget.js';
@@ -16,35 +16,6 @@ export function formatFullName(name: string | null): string {
 
 export function paymentBlock(sberUrl: string, tbankUrl: string): string {
   return `Сбер\n${sberUrl}\n\nТбанк\n${tbankUrl}`;
-}
-
-export interface PollDraftView {
-  team: Team;
-  question: string;
-  options: string[];
-  is_training: boolean;
-  forward: boolean;
-  status: 'pending' | 'sent' | 'skipped';
-}
-
-/** HTML-карточка черновика опроса в личке у админа (перед публикацией в чат). */
-export function buildPollDraftMessage(d: PollDraftView): string {
-  const head =
-    d.status === 'skipped'
-      ? `🗳 <b>${d.team}</b> — <s>пропущен</s>`
-      : d.status === 'sent'
-        ? `🗳 <b>${d.team}</b> — ✅ отправлен`
-        : `🗳 <b>${d.team}</b>`;
-  const lines = [
-    head,
-    `<i>Вопрос:</i> ${escapeHtml(d.question)}`,
-    `<i>Варианты:</i> ${d.options.map((o) => escapeHtml(o)).join(' / ')}`,
-  ];
-  if (d.is_training) {
-    const dst = d.team === 'RED' ? 'BLACK' : 'RED';
-    lines.push(`<i>Форвард в чат ${dst}:</i> ${d.forward ? 'да' : 'нет'}`);
-  }
-  return lines.join('\n');
 }
 
 export interface ChargeView {

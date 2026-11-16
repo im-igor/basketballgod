@@ -10,7 +10,11 @@ test('уведомляет администраторов, когда игрок
     id: 1, name: 'Тестовый Игрок', tg_login: '@player', tg_user_id: 123,
     team: 'RED', is_employee: false, active: true, active_from: null, active_to: null, notes: null,
   };
-  const handler = createChatMemberHandler(async (id) => id === 123 ? player : null, [524515690]);
+  const handler = createChatMemberHandler(
+    async (id) => id === 123 ? player : null,
+    [524515690],
+    async () => true,
+  );
 
   const sent: Array<[number, string]> = [];
   const exitedRedChat = {
@@ -44,4 +48,25 @@ test('уведомляет администраторов, когда игрок
   const bot = { on: (name: string, registered: (ctx: Context) => Promise<void>) => { handlers.set(name, registered); } } as unknown as Bot;
   registerChatMemberNotifications(bot);
   assert.ok(handlers.has('chat_member'), 'обработчик подключён к экземпляру бота');
+});
+
+test('не проверяет игрока и не уведомляет, когда контроль выходов выключен', async () => {
+  const { createChatMemberHandler } = await import('./chatMember.js');
+  let playerLookups = 0;
+  const handler = createChatMemberHandler(
+    async () => { playerLookups++; return null; },
+    [524515690],
+    async () => false,
+  );
+  const sent: string[] = [];
+  await handler({
+    chatMember: {
+      chat: { id: -2 },
+      old_chat_member: { status: 'member', user: { id: 123 } },
+      new_chat_member: { status: 'left', user: { id: 123 } },
+    },
+    api: { sendMessage: async (_chatId: number, message: string) => { sent.push(message); } },
+  } as unknown as Context);
+  assert.equal(playerLookups, 0);
+  assert.deepEqual(sent, []);
 });

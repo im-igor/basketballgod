@@ -131,7 +131,9 @@ test('одна колонка статуса меняет заявку и акт
     const login = await app.inject({ method: 'POST', url: '/login', payload: { username: 'test', password: 'test-password' } });
     const cookies = { bbg_auth: login.cookies[0]!.value };
     const page = parse((await app.inject({ method: 'GET', url: '/players', cookies })).body);
-    assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'Сотрудник', 'С', 'По', '']);
+    assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'Чат', 'Сотрудник', 'С', 'По', '']);
+    assert.equal(page.querySelector('[data-chat-status="member"]')!.textContent, 'В чате');
+    assert.equal(page.querySelectorAll('[data-chat-status="missing_id"]').length, 3);
     const statusSelect = page.querySelector('[data-login="@p1"][data-player-status]')!;
     assert.equal(statusSelect.tagName, 'SELECT');
     assert.equal(statusSelect.getAttribute('data-status'), 'BLACK');
@@ -165,7 +167,7 @@ test('одна колонка статуса меняет заявку и акт
     assert.equal(player.active, true);
     assert.equal(player.active_to, null);
     assert.deepEqual(tagged, [[123, 'Active'], [123, 'Non-active'], [123, 'Black/Red']]);
-    assert.deepEqual(checked, [123, 123, 123], 'обновляется тег только выбранного игрока');
+    assert.deepEqual(checked, [123, 123, 123, 123, 123], 'страница проверяет чат, а смена статуса обновляет тег выбранного игрока');
     assert.equal((await change('invalid')).statusCode, 400);
     assert.equal((await getByLogin('@p1'))!.team, 'BOTH');
     membership = 'error';

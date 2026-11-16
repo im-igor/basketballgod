@@ -76,6 +76,7 @@ import {
 } from '../services/notify.service.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
 import { syncMemberTags } from '../services/memberTags.service.js';
+import { checkCollectionChatMembership, type ChatStatus } from '../services/chatCheck.service.js';
 import {
   syncAllToSheet,
   exportPlayersToSheet,
@@ -254,6 +255,21 @@ export async function buildServer(bot: Bot) {
     active_to: (a, b) => isoDate(a.active_to).localeCompare(isoDate(b.active_to)),
   };
 
+  const CHAT_STATUS_ORDER: Record<ChatStatus, number> = {
+    member: 0,
+    left: 1,
+    missing_id: 2,
+    check_error: 3,
+  };
+  const playerChatBadge = (status: ChatStatus): string => {
+    if (status === 'member') return '<span class="badge yes" data-chat-status="member">В чате</span>';
+    if (status === 'left') return '<span class="badge no" data-chat-status="left">Не в чате</span>';
+    if (status === 'missing_id') {
+      return '<span class="badge black" data-chat-status="missing_id" title="Игроку нужно нажать Start у бота, чтобы привязать Telegram ID">Нет Telegram ID</span>';
+    }
+    return '<span class="badge black" data-chat-status="check_error" title="Telegram не дал проверить участника">Не проверено</span>';
+  };
+
   // Клиентский фильтр списка игроков: контекстный поиск по ФИО + скрытие неактивных.
   // Работает поверх серверной сортировки, состояние чекбокса помним в localStorage.
   const playersFilterScript = `(function(){
@@ -317,10 +333,15 @@ export async function buildServer(bot: Bot) {
   app.get('/players', async (req, reply) => {
     const q = req.query as Record<string, string>;
     const msg = q.msg;
-    const sort = q.sort && PLAYER_SORTS[q.sort] ? q.sort : 'name';
+    const sort = q.sort === 'chat_status' || (q.sort && PLAYER_SORTS[q.sort]) ? q.sort : 'name';
     const dir: 'asc' | 'desc' = q.dir === 'desc' ? 'desc' : 'asc';
     const players = await listPlayers();
-    const cmp = PLAYER_SORTS[sort]!;
+    const checks = await checkCollectionChatMembership(api, players.map((p) => p.tg_login));
+    const chatStatuses = new Map(checks.map((check) => [check.tg_login.toLowerCase(), check.status]));
+    const cmp = sort === 'chat_status'
+      ? (a: Player, b: Player) => CHAT_STATUS_ORDER[chatStatuses.get(a.tg_login.toLowerCase()) ?? 'check_error']
+        - CHAT_STATUS_ORDER[chatStatuses.get(b.tg_login.toLowerCase()) ?? 'check_error']
+      : PLAYER_SORTS[sort]!;
     players.sort((a, b) => (dir === 'desc' ? -cmp(a, b) : cmp(a, b)));
     const rows = players
       .map(
@@ -353,6 +374,7 @@ export async function buildServer(bot: Bot) {
           <option value="NONE" ${playerStatus(p) === 'NONE' ? 'selected' : ''}>Active</option>
           <option value="INACTIVE" ${playerStatus(p) === 'INACTIVE' ? 'selected' : ''}>Non-active</option>
         </select></td>
+        <td>${playerChatBadge(chatStatuses.get(p.tg_login.toLowerCase()) ?? 'check_error')}</td>
         <td><label class="player-employee-toggle" title="Сотрудник"><input type="checkbox" data-player-employee data-login="${esc(p.tg_login)}" ${p.is_employee ? 'checked' : ''} aria-label="Сотрудник: ${esc(p.name)}"><span>Сотрудник</span></label></td>
         <td>${esc(isoToRu(p.active_from))}</td>
         <td>${esc(isoToRu(p.active_to))}</td>
@@ -390,6 +412,7 @@ export async function buildServer(bot: Bot) {
           ${sortHeader('ФИО', 'name', '/players', { sort, dir })}
           ${sortHeader('tg', 'tg_login', '/players', { sort, dir })}
           ${sortHeader('Статус', 'status', '/players', { sort, dir })}
+          ${sortHeader('Чат', 'chat_status', '/players', { sort, dir })}
           ${sortHeader('Сотрудник', 'is_employee', '/players', { sort, dir })}
           ${sortHeader('С', 'active_from', '/players', { sort, dir })}
           ${sortHeader('По', 'active_to', '/players', { sort, dir })}
@@ -595,6 +618,12 @@ export async function buildServer(bot: Bot) {
           отправлять вне очереди голосовалку для новой игры в активном интервале
         </label>
         <div class="muted" style="margin-top:6px">Интервал фиксируется при последнем плановом запуске опросов на игры и включает целиком последний календарный день заданного горизонта. Новые игры вне него дождутся следующего планового запуска. Опрос отправляется только один раз.</div>
+        <h2 style="margin-top:18px">Игроки в Telegram-чате</h2>
+        <label class="inline" style="display:flex;gap:7px;align-items:center;margin-top:12px">
+          <input type="checkbox" name="chat_member_check_enabled" value="yes" ${c.chat_member_check_enabled ? 'checked' : ''} style="width:auto">
+          уведомлять администраторов, когда игрок выходит из общего чата
+        </label>
+        <div class="muted" style="margin-top:6px">Настройка применяется сразу. Текущий признак «В чате / Не в чате» в разделе «Игроки» проверяется при открытии списка.</div>
         <button style="margin-top:12px">Сохранить</button>
       </form></div>`;
     return html(reply, layout('Крон', body, { flash: msg }));
@@ -624,6 +653,7 @@ export async function buildServer(bot: Bot) {
       schedule_import_enabled: b.schedule_import_enabled === 'yes',
       schedule_import_interval_minutes: scheduleImportInterval,
       schedule_import_send_polls: b.schedule_import_send_polls === 'yes',
+      chat_member_check_enabled: b.chat_member_check_enabled === 'yes',
     });
     const applied = await reloadScheduler();
     return redirect(reply, '/cron', applied ? 'Расписание сохранено и применено' : 'Расписание сохранено');

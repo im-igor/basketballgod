@@ -43,6 +43,7 @@ export interface CronConfig {
   schedule_import_enabled: boolean;
   schedule_import_interval_minutes: number;
   schedule_import_send_polls: boolean;
+  chat_member_check_enabled: boolean;
 }
 
 export interface Tag {

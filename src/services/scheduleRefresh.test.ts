@@ -543,6 +543,7 @@ test('админка показывает источники и сохраняе
         schedule_import_enabled: 'yes',
         schedule_import_interval_minutes: '120',
         schedule_import_send_polls: 'yes',
+        chat_member_check_enabled: 'yes',
       },
     });
     assert.equal(update.statusCode, 302);
@@ -550,12 +551,20 @@ test('админка показывает источники и сохраняе
     assert.equal(config.schedule_import_enabled, true);
     assert.equal(config.schedule_import_interval_minutes, 120);
     assert.equal(config.schedule_import_send_polls, true);
+    assert.equal(config.chat_member_check_enabled, true);
     assert.equal(config.poll_game_weekday, 5);
     assert.equal(config.poll_game_time, '15:50');
     assert.ok(scheduled.includes('50 15 * * 5'), 'новое время должно примениться сразу после POST /cron');
     const cron = await app.inject({ method: 'GET', url: '/cron', cookies });
     assert.match(cron.body, /value="120" selected/);
     assert.match(cron.body, /name="schedule_import_send_polls"[^>]*checked/);
+    assert.match(cron.body, /name="chat_member_check_enabled"[^>]*checked/);
+
+    await app.inject({
+      method: 'POST', url: '/cron', cookies,
+      payload: { schedule_import_interval_minutes: '120' },
+    });
+    assert.equal((await getCronConfig()).chat_member_check_enabled, false);
   } finally {
     await app.close();
     scheduleMock.mock.restore();

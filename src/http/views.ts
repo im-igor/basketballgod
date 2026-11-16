@@ -264,10 +264,10 @@ button.danger:hover { filter:brightness(.92); }
   .pay-table th:nth-child(5), .pay-table td:nth-child(5),
   .pay-table th:nth-child(6), .pay-table td:nth-child(6),
   .pay-table th:nth-child(8), .pay-table td:nth-child(8){ display:none; }
-  /* Таблица игроков: ФИО(1), Статус(3), Сотрудник(4), действия(7). */
+  /* Таблица игроков: ФИО(1), Статус(3), Чат(4), Сотрудник(5), действия(8). */
   .players-table th:nth-child(2), .players-table td:nth-child(2),
-  .players-table th:nth-child(5), .players-table td:nth-child(5),
-  .players-table th:nth-child(6), .players-table td:nth-child(6){ display:none; }
+  .players-table th:nth-child(6), .players-table td:nth-child(6),
+  .players-table th:nth-child(7), .players-table td:nth-child(7){ display:none; }
   /* Таблица игр: оставляем Соперник(3), Статус(4), Тренер(8), Судья(9) и удаление(10),
      чтобы состояние, тумблеры и кнопка были доступны в портретной ориентации. */
   .games-table th:nth-child(1), .games-table td:nth-child(1),

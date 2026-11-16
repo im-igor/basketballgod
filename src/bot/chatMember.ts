@@ -1,6 +1,7 @@
 import type { Bot, Context } from 'grammy';
 import { env } from '../config/env.js';
 import { getByTelegramUserId } from '../db/repos/players.repo.js';
+import { getCronConfig } from '../db/repos/cronConfig.repo.js';
 import type { Player } from '../db/types.js';
 import { log } from '../util/logger.js';
 
@@ -23,6 +24,16 @@ function teamByChatId(chatId: number): 'RED' | 'BLACK' | 'COMMON' | null {
   return null;
 }
 
+async function chatMemberCheckEnabled(): Promise<boolean> {
+  try {
+    return (await getCronConfig()).chat_member_check_enabled;
+  } catch (err) {
+    // Временная недоступность БД не должна молча выключить уже работавшие уведомления.
+    log.warn('[chat_member] не удалось прочитать настройку проверки чата', (err as Error).message);
+    return true;
+  }
+}
+
 /**
  * Сообщаем администраторам только о фактическом выходе игрока из его чата.
  * Для этого бот должен быть администратором чата: иначе Telegram не присылает
@@ -31,6 +42,7 @@ function teamByChatId(chatId: number): 'RED' | 'BLACK' | 'COMMON' | null {
 export function createChatMemberHandler(
   findPlayer: (tgUserId: number) => Promise<Player | null> = getByTelegramUserId,
   adminIds: readonly number[] = env.ADMIN_TG_IDS,
+  isEnabled: () => Promise<boolean> = chatMemberCheckEnabled,
 ): (ctx: Context) => Promise<void> {
   return async (ctx: Context): Promise<void> => {
     const update = ctx.chatMember;
@@ -46,6 +58,7 @@ export function createChatMemberHandler(
     }
 
     try {
+      if (!await isEnabled()) return;
       const player = await findPlayer(update.new_chat_member.user.id);
       // В общем чате следим за любым игроком; в исторических чатах — только за
       // игроком своей команды.

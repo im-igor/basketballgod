@@ -46,13 +46,16 @@ test('истечение окна до следующей проверки не 
   assert.match(scheduledPollStatus(game,context({}, { ...window,window_until:'2026-10-29T10:10:00Z' })).text,/30\.10\.2026/);
 });
 
-test('отправленные, просроченные и недоступные опросы различаются; ошибка показывает время повтора', () => {
+test('отправленные, просроченные и недоступные опросы различаются; прошлая ошибка остаётся в подсказке', () => {
   assert.equal(scheduledPollStatus({ ...game,poll_sent_at:new Date() },context()).text,'отправлен');
   assert.match(scheduledPollStatus({ ...game,game_date:'2026-10-28' },context()).text,/игра уже началась/);
   assert.match(scheduledPollStatus({ ...game,calendar_event_id:null },context()).text,/нет связи/);
-  const retry = scheduledPollStatus({ ...game,poll_last_error:'Telegram unavailable' },context());
-  assert.match(retry.text,/повтор запланирован.*13:15/);
-  assert.match(retry.detail,/Telegram unavailable/);
+  const scheduled = scheduledPollStatus(game,context());
+  const withError = scheduledPollStatus({ ...game,poll_last_error:'Telegram unavailable' },context());
+  assert.match(scheduled.text,/^Отправка опроса запланирована .*13:15/);
+  assert.equal(withError.text,scheduled.text);
+  assert.equal(withError.kind,'black');
+  assert.match(withError.detail,/Telegram unavailable/);
 });
 
 test('не обещает отправку, если до матча нет подходящего запуска', () => {

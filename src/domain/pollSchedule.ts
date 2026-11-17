@@ -101,6 +101,6 @@ export function scheduledPollStatus(game: ScheduledGame, ctx: PollScheduleContex
   const next = candidates[0];
   if (!next) return { text:'отправка не запланирована',detail:'Нет подходящего запуска до начала игры; проверь расписание и горизонт рассылки',kind:'no' };
   const when = new Intl.DateTimeFormat('ru-RU',{ timeZone:ctx.timezone,day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23' }).format(next.at);
-  return { text:`${game.poll_last_error ? 'повтор запланирован' : 'запланирована отправка'} ${when}`,
-    detail:`${next.reason} · ${ctx.timezone}${game.poll_last_error ? ` · Последняя ошибка: ${game.poll_last_error}` : ''}`,kind:game.poll_last_error?'no':'black' };
+  return { text:`Отправка опроса запланирована ${when}`,
+    detail:`${next.reason} · ${ctx.timezone}${game.poll_last_error ? ` · Последняя ошибка: ${game.poll_last_error}` : ''}`,kind:'black' };
 }

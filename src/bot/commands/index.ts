@@ -5,6 +5,7 @@ import { computeActivityDates } from '../../domain/activity.js';
 import { isoToRu } from '../../domain/dates.js';
 import { getByLogin, setActive, linkTelegramUser } from '../../db/repos/players.repo.js';
 import { log } from '../../util/logger.js';
+import { syncMemberTags } from '../../services/memberTags.service.js';
 
 const HELP = `<b>basketballgod — команды</b>
 
@@ -36,12 +37,22 @@ export function registerCommands(bot: Bot): void {
 
   bot.command('start', safe(async (ctx) => {
     const username = ctx.from?.username;
+    const login = username ? `@${username}` : null;
     const linked = username && ctx.from?.id
-      ? await linkTelegramUser(`@${username}`, ctx.from.id)
+      ? await linkTelegramUser(login!, ctx.from.id)
       : false;
+    const player = linked && login ? await getByLogin(login) : null;
+    const tags = player ? await syncMemberTags(ctx.api, [player]) : null;
+    const tagStatus = tags?.tagged
+      ? ' Бейдж в общем чате назначен.'
+      : tags?.alreadyCorrect ? ' Бейдж в общем чате уже актуален.'
+        : tags?.skippedAdmins ? ' Титул администратора в общем чате оставлен без изменений.'
+          : tags?.absent ? ' Добавьтесь в общий чат, затем повторите /start.'
+            : tags?.errors ? ' Telegram не дал назначить бейдж; администратор сможет повторить синхронизацию.'
+              : '';
     const status = ctx.chat?.type === 'private'
       ? linked
-        ? '\n\n✅ Ваш Telegram ID привязан к составу. Теперь бот может проверять ваше участие в чате команды.'
+        ? `\n\n✅ Ваш Telegram ID привязан к составу.${tagStatus}`
         : '\n\nДля проверки участия в чате нужен @username, совпадающий с записью в составе команды.'
       : '';
     await ctx.reply(`${HELP}${status}`, { parse_mode: 'HTML' });

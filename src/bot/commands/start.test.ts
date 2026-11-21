@@ -26,18 +26,23 @@ test('/start привязывает Telegram ID к игроку для пров�
     assert.equal(handlers.has('budget'), false);
     for (const removed of ['sheet', 'debtors', 'pay', 'poll']) assert.equal(handlers.has(removed), false);
     let checkedUserId: unknown;
+    const assignedTags: Array<[number, string]> = [];
     const api = { getChatMember: async (_chatId: number, userId: number) => {
       checkedUserId = userId;
       return { status: 'member' };
+    }, setChatMemberTag: async (_chatId: number, userId: number, tag: string) => {
+      assignedTags.push([userId, tag]);
     } };
     assert.equal((await checkTeamChatMembership(api as never, 'RED', ['@TestPlayer']))[0]?.status, 'missing_id');
     let reply = '';
     await handlers.get('start')!({
       from: { id: 12345, username: 'testplayer' },
       chat: { type: 'private' },
+      api,
       reply: async (text: string) => { reply = text; },
     } as unknown as Context);
     assert.match(reply, /Telegram ID привязан/);
+    assert.match(reply, /Бейдж в общем чате назначен/);
     assert.match(reply, /Состав, бюджеты, оплаты, должники, игры и голосовалки управляются в админке/);
     const player = (await db.query<{ tg_user_id: string }>(
       "select tg_user_id from players where lower(tg_login)='@testplayer'",
@@ -45,6 +50,7 @@ test('/start привязывает Telegram ID к игроку для пров�
     assert.equal(Number(player.tg_user_id), 12345);
     assert.equal((await checkTeamChatMembership(api as never, 'RED', ['@TestPlayer']))[0]?.status, 'member');
     assert.equal(checkedUserId, 12345);
+    assert.deepEqual(assignedTags, [[12345, 'Red']]);
 
     const logins = ['@TestPlayer'];
     for (let i = 0; i < 8; i++) {

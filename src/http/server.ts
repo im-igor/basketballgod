@@ -75,8 +75,8 @@ import {
   renderBudgetFromDb,
 } from '../services/notify.service.js';
 import { sendWeeklyPolls } from '../services/poll.service.js';
-import { syncMemberTags } from '../services/memberTags.service.js';
-import { checkCollectionChatMembership, type ChatStatus } from '../services/chatCheck.service.js';
+import { clearMemberTag, syncMemberTags } from '../services/memberTags.service.js';
+import type { ChatStatus } from '../services/chatCheck.service.js';
 import { monthLabel, isoToRu } from '../domain/dates.js';
 import { formatFullName } from '../domain/messages.js';
 import { sharedCoachBudgetsReady, usesCommonBudget, usesSharedCoach, usesUnifiedDebtorReminder } from '../domain/budget.js';
@@ -322,8 +322,10 @@ export async function buildServer(bot: Bot) {
     const sort = q.sort === 'chat_status' || (q.sort && PLAYER_SORTS[q.sort]) ? q.sort : 'name';
     const dir: 'asc' | 'desc' = q.dir === 'desc' ? 'desc' : 'asc';
     const players = await listPlayers();
-    const checks = await checkCollectionChatMembership(api, players.map((p) => p.tg_login));
-    const chatStatuses = new Map(checks.map((check) => [check.tg_login.toLowerCase(), check.status]));
+    const chatStatuses = new Map<string, ChatStatus>();
+    await syncMemberTags(api, players, {
+      onStatus: (player, status) => chatStatuses.set(player.tg_login.toLowerCase(), status),
+    });
     const cmp = sort === 'chat_status'
       ? (a: Player, b: Player) => CHAT_STATUS_ORDER[chatStatuses.get(a.tg_login.toLowerCase()) ?? 'check_error']
         - CHAT_STATUS_ORDER[chatStatuses.get(b.tg_login.toLowerCase()) ?? 'check_error']
@@ -376,12 +378,7 @@ export async function buildServer(bot: Bot) {
       .join('');
 
     const body = `<h1>Игроки <span class="muted">(${players.length})</span></h1>
-      <div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-        <div class="muted" style="flex:1">Правки в этом разделе пишутся в БД — это единственный источник правды.</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <form class="inline" method="post" action="/players/tags" onsubmit="return confirm('Обновить теги игроков в общем чате: Red, Black, Black/Red, Active или Non-active? Титулы администраторов останутся без изменений.')"><button class="ghost">Обновить теги Telegram</button></form>
-        </div>
-      </div></div>
+      <div class="card muted">Правки в этом разделе пишутся в БД — это единственный источник правды. Бейджи Telegram синхронизируются автоматически при открытии списка.</div>
       <details class="card"><summary style="cursor:pointer;font-weight:600;font-size:1.05rem">Добавить / обновить игрока</summary>
         <div style="margin-top:12px">${playerForm()}</div></details>
       <div class="card"><div class="row" style="align-items:end">
@@ -431,7 +428,7 @@ export async function buildServer(bot: Bot) {
       b.active_from ? b.active_from : null,
       b.active_to ? b.active_to : null,
     );
-    await upsertPlayer({
+    const player = await upsertPlayer({
       name,
       tg_login: tgLogin,
       team: b.team as PlayerTeam,
@@ -447,7 +444,15 @@ export async function buildServer(bot: Bot) {
       const old = await getByLogin(origLogin);
       if (old) await deletePlayer(old.id);
     }
-    return redirect(reply, '/players', 'Игрок сохранён');
+    const tags = await syncMemberTags(api, [player]);
+    const message = tags.tagged
+      ? 'Игрок сохранён, бейдж в Telegram назначен'
+      : tags.alreadyCorrect ? 'Игрок сохранён, бейдж в Telegram уже актуален'
+        : tags.skippedAdmins ? 'Игрок сохранён. Титул администратора Telegram оставлен без изменений'
+          : tags.missingId ? 'Игрок сохранён. Бейдж не назначен: игроку нужно открыть личный чат с ботом и нажать Start'
+            : tags.absent ? 'Игрок сохранён. Бейдж не назначен: игрока нет среди обычных участников общего чата'
+              : 'Игрок сохранён, но Telegram не дал назначить бейдж. Синхронизация повторится при следующем открытии раздела «Игроки»';
+    return redirect(reply, '/players', message);
   });
 
   // Быстрое редактирование ячейки «Команда» в списке игроков.
@@ -471,7 +476,7 @@ export async function buildServer(bot: Bot) {
       : tags.skippedAdmins ? 'Статус сохранён. Титул администратора Telegram оставлен без изменений'
         : tags.missingId ? 'Статус сохранён. Тег не обновлён: бот ещё не знает Telegram ID игрока. Игроку нужно нажать Start у бота'
           : tags.absent ? 'Статус сохранён. Тег не обновлён: игрока нет среди обычных участников общего чата'
-            : 'Статус сохранён, но Telegram не дал обновить тег. Проверь права бота и повтори через «Обновить теги Telegram»';
+            : 'Статус сохранён, но Telegram не дал обновить тег. Синхронизация повторится при следующем открытии раздела «Игроки»';
     return { saved: true, tagUpdated: tags.tagged > 0, message };
   });
 
@@ -504,16 +509,22 @@ export async function buildServer(bot: Bot) {
 
   app.post('/players/delete', async (req, reply) => {
     const login = ((req.body as Record<string, string>).login ?? '').trim();
+    let tagRemoved = false;
+    let tagError = false;
     if (login) {
       const p = await getByLogin(login);
-      if (p) await deletePlayer(p.id);
+      if (p) {
+        const tags = await clearMemberTag(api, p);
+        tagRemoved = tags.tagged > 0;
+        tagError = tags.errors > 0;
+        await deletePlayer(p.id);
+      }
     }
-    return redirect(reply, '/players', 'Игрок удалён из БД');
-  });
-
-  app.post('/players/tags', async (_req, reply) => {
-    const result = await syncMemberTags(api);
-    return redirect(reply, '/players', `Теги обновлены: ${result.tagged}; администраторов пропущено: ${result.skippedAdmins}; без Telegram ID: ${result.missingId}; вне чата: ${result.absent}; ошибок: ${result.errors}`);
+    const message = tagRemoved
+      ? 'Игрок удалён из БД, бейдж Telegram снят'
+      : tagError ? 'Игрок удалён из БД, но Telegram не дал снять бейдж'
+        : 'Игрок удалён из БД';
+    return redirect(reply, '/players', message);
   });
 
   // ── Tariffs ──────────────────────────────────────────────

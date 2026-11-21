@@ -4,6 +4,7 @@ import { listPlayers } from '../db/repos/players.repo.js';
 import type { Player, PlayerTeam } from '../db/types.js';
 import { log } from '../util/logger.js';
 import { playerStatusLabel } from '../domain/playerStatus.js';
+import type { ChatStatus } from './chatCheck.service.js';
 
 export function memberTag(team: PlayerTeam, active = true): string {
   return playerStatusLabel({ team, active });
@@ -22,6 +23,8 @@ export interface MemberTagSyncOptions {
   sleep?: (milliseconds: number) => Promise<void>;
   minWriteIntervalMs?: number;
   maxRateLimitRetries?: number;
+  onStatus?: (player: Player, status: ChatStatus) => void;
+  tagForPlayer?: (player: Player) => string;
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
@@ -60,45 +63,65 @@ export async function syncMemberTags(
   for (const player of players ?? await listPlayers()) {
     if (!player.tg_user_id) {
       result.missingId++;
+      options.onStatus?.(player, 'missing_id');
       continue;
     }
+    let member: Awaited<ReturnType<Api['getChatMember']>>;
     try {
-      const member = await api.getChatMember(env.collectionChat.chatId, player.tg_user_id);
-      if (member.status === 'administrator' || member.status === 'creator') {
-        result.skippedAdmins++;
-        continue;
-      }
-      if (member.status !== 'member') {
-        result.absent++;
-        continue;
-      }
-      const desiredTag = memberTag(player.team, player.active);
-      if (member.tag === desiredTag) {
-        result.alreadyCorrect++;
-        continue;
-      }
-
-      if (wroteTag && minWriteIntervalMs > 0) await sleep(minWriteIntervalMs);
-      let retries = 0;
-      while (true) {
-        try {
-          await api.setChatMemberTag(env.collectionChat.chatId, player.tg_user_id, desiredTag);
-          result.tagged++;
-          wroteTag = true;
-          break;
-        } catch (err) {
-          const retryAfter = retryAfterSeconds(err);
-          if (retryAfter === null || retries >= maxRateLimitRetries) throw err;
-          retries++;
-          const waitMs = (retryAfter + 1) * 1000;
-          log.warn(`[member-tags] Telegram ограничил частоту, повтор через ${retryAfter + 1} с`);
-          await sleep(waitMs);
-        }
-      }
+      member = await api.getChatMember(env.collectionChat.chatId, player.tg_user_id);
     } catch (err) {
       result.errors++;
+      options.onStatus?.(player, 'check_error');
       log.warn(`[member-tags] не удалось обновить тег ${player.tg_login}`, (err as Error).message);
+      continue;
+    }
+    if (member.status === 'administrator' || member.status === 'creator') {
+      result.skippedAdmins++;
+      options.onStatus?.(player, 'member');
+      continue;
+    }
+    if (member.status !== 'member') {
+      result.absent++;
+      options.onStatus?.(player, 'left');
+      continue;
+    }
+    options.onStatus?.(player, 'member');
+    const desiredTag = options.tagForPlayer?.(player) ?? memberTag(player.team, player.active);
+    if ((member.tag ?? '') === desiredTag) {
+      result.alreadyCorrect++;
+      continue;
+    }
+
+    if (wroteTag && minWriteIntervalMs > 0) await sleep(minWriteIntervalMs);
+    let retries = 0;
+    while (true) {
+      try {
+        await api.setChatMemberTag(env.collectionChat.chatId, player.tg_user_id, desiredTag);
+        result.tagged++;
+        wroteTag = true;
+        break;
+      } catch (err) {
+        const retryAfter = retryAfterSeconds(err);
+        if (retryAfter === null || retries >= maxRateLimitRetries) {
+          result.errors++;
+          log.warn(`[member-tags] не удалось обновить тег ${player.tg_login}`, (err as Error).message);
+          break;
+        }
+        retries++;
+        const waitMs = (retryAfter + 1) * 1000;
+        log.warn(`[member-tags] Telegram ограничил частоту, повтор через ${retryAfter + 1} с`);
+        await sleep(waitMs);
+      }
     }
   }
   return result;
+}
+
+/** Снять ранее назначенный ботом бейдж перед удалением игрока из состава. */
+export async function clearMemberTag(
+  api: Api,
+  player: Player,
+  options: MemberTagSyncOptions = {},
+): Promise<MemberTagSyncResult> {
+  return syncMemberTags(api, [player], { ...options, tagForPlayer: () => '' });
 }

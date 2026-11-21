@@ -117,14 +117,18 @@ test('одна колонка статуса меняет заявку и акт
   await db.query("update players set name='Семерной', notes=$1, tg_user_id=123,active_from='2026-10-01' where id=1", ['Нужна отдельная майка']);
   const tagged: Array<[number, string]> = [];
   const checked: number[] = [];
+  const currentTags = new Map<number, string>([[123, 'Active']]);
   let membership = 'member';
   const api = {
     getChatMember: async (_chat: number, id: number) => {
       checked.push(id);
       if (membership === 'error') throw new Error('Telegram временно недоступен');
-      return { status: membership };
+      return { status: membership, tag: currentTags.get(id) };
     },
-    setChatMemberTag: async (_chat: number, id: number, tag: string) => { tagged.push([id, tag]); },
+    setChatMemberTag: async (_chat: number, id: number, tag: string) => {
+      tagged.push([id, tag]);
+      currentTags.set(id, tag);
+    },
   };
   const app = await buildServer({ api } as unknown as Bot);
   try {
@@ -134,6 +138,8 @@ test('одна колонка статуса меняет заявку и акт
     assert.deepEqual(page.querySelectorAll('.players-table th').map(th => th.textContent.trim()), ['ФИО ▲', 'tg', 'Статус', 'Чат', 'Сотрудник', 'С', 'По', '']);
     assert.equal(page.querySelector('[data-chat-status="member"]')!.textContent, 'В чате');
     assert.equal(page.querySelectorAll('[data-chat-status="missing_id"]').length, 3);
+    assert.equal(page.querySelector('form[action="/players/tags"]'), null);
+    assert.deepEqual(tagged, [[123, 'Black']], 'открытие списка исправляет устаревший бейдж');
     const statusSelect = page.querySelector('[data-login="@p1"][data-player-status]')!;
     assert.equal(statusSelect.tagName, 'SELECT');
     assert.equal(statusSelect.getAttribute('data-status'), 'BLACK');
@@ -148,7 +154,7 @@ test('одна колонка статуса меняет заявку и акт
     const saved = await change('NONE');
     assert.equal(saved.statusCode, 200);
     assert.equal(saved.json().tagUpdated, true);
-    assert.deepEqual(tagged, [[123, 'Active']]);
+    assert.deepEqual(tagged, [[123, 'Black'], [123, 'Active']]);
     let player = (await getByLogin('@p1'))!;
     assert.equal(player.team, 'NONE');
     assert.equal(player.active, true);
@@ -166,7 +172,7 @@ test('одна колонка статуса меняет заявку и акт
     assert.equal(player.team, 'BOTH');
     assert.equal(player.active, true);
     assert.equal(player.active_to, null);
-    assert.deepEqual(tagged, [[123, 'Active'], [123, 'Non-active'], [123, 'Black/Red']]);
+    assert.deepEqual(tagged, [[123, 'Black'], [123, 'Active'], [123, 'Non-active'], [123, 'Black/Red']]);
     assert.deepEqual(checked, [123, 123, 123, 123, 123], 'страница проверяет чат, а смена статуса обновляет тег выбранного игрока');
     assert.equal((await change('invalid')).statusCode, 400);
     assert.equal((await getByLogin('@p1'))!.team, 'BOTH');
@@ -180,10 +186,28 @@ test('одна колонка статуса меняет заявку и акт
     membership = 'administrator';
     const admin = await change('BLACK');
     assert.match(admin.json().message, /Титул администратора/);
-    assert.equal(tagged.length, 3, 'титул администратора не меняется');
+    assert.equal(tagged.length, 4, 'титул администратора не меняется');
     const missingId = await app.inject({ method: 'POST', url: '/players/status', cookies, payload: { login: '@p2', status: 'NONE' } });
     assert.equal(missingId.json().saved, true);
     assert.match(missingId.json().message, /Telegram ID/);
+    const created = await app.inject({ method: 'POST', url: '/players', cookies, payload: {
+      name: 'Игрок 2', tg_login: '@p2', team: 'BLACK', active: 'yes',
+    } });
+    assert.equal(created.statusCode, 302);
+    assert.match(new URL(created.headers.location!, 'http://localhost').searchParams.get('msg')!, /нажать Start/);
+    membership = 'member';
+    await db.query('update players set tg_user_id=456 where lower(tg_login)=lower($1)', ['@p2']);
+    const updated = await app.inject({ method: 'POST', url: '/players', cookies, payload: {
+      name: 'Игрок 2', tg_login: '@p2', team: 'BLACK', active: 'yes',
+    } });
+    assert.equal(updated.statusCode, 302);
+    assert.match(new URL(updated.headers.location!, 'http://localhost').searchParams.get('msg')!, /бейдж в Telegram назначен/);
+    assert.deepEqual(tagged.at(-1), [456, 'Black']);
+    const deleted = await app.inject({ method: 'POST', url: '/players/delete', cookies, payload: { login: '@p2' } });
+    assert.equal(deleted.statusCode, 302);
+    assert.match(new URL(deleted.headers.location!, 'http://localhost').searchParams.get('msg')!, /бейдж Telegram снят/);
+    assert.deepEqual(tagged.at(-1), [456, '']);
+    assert.equal(await getByLogin('@p2'), null);
     const employee = await app.inject({ method: 'POST', url: '/players/employee', cookies, payload: { login: '@p1', value: 'no' } });
     assert.equal(employee.statusCode, 200);
     assert.equal(employee.json().isEmployee, false);

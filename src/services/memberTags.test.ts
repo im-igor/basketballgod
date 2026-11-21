@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Api } from 'grammy';
 import type { Player } from '../db/types.js';
-import { memberTag, syncMemberTags } from './memberTags.service.js';
+import { clearMemberTag, memberTag, syncMemberTags } from './memberTags.service.js';
 
 test('Telegram использует пять статусов, не меняет титулы админов и не трогает отсутствующих', async () => {
   assert.deepEqual(['RED', 'BLACK', 'BOTH', 'NONE'].map(team => memberTag(team as Player['team'])),
@@ -19,10 +19,12 @@ test('Telegram использует пять статусов, не меняет
     }),
     setChatMemberTag: async (_chat: number, id: number, tag: string) => { tagged.push([id, tag]); },
   } as unknown as Api;
+  const statuses: string[] = [];
   const result = await syncMemberTags(api, [base, { ...base, tg_user_id: 2, active: false },
     { ...base, tg_user_id: 3, active: false }, { ...base, tg_user_id: 4 }, { ...base, tg_user_id: null }],
-  { minWriteIntervalMs: 0 });
+  { minWriteIntervalMs: 0, onStatus: (_player, status) => statuses.push(status) });
   assert.deepEqual(tagged, [[2, 'Non-active']]);
+  assert.deepEqual(statuses, ['member', 'member', 'member', 'left', 'missing_id']);
   assert.deepEqual(result, {
     tagged: 1,
     alreadyCorrect: 1,
@@ -31,6 +33,19 @@ test('Telegram использует пять статусов, не меняет
     missingId: 1,
     errors: 0,
   });
+});
+
+test('снимает бейдж обычного участника перед удалением игрока', async () => {
+  const player: Player = { id: 1, tg_user_id: 42, name: 'Игрок', tg_login: '@player', team: 'BLACK',
+    active: true, is_employee: false, active_from: null, active_to: null, notes: null };
+  const writes: string[] = [];
+  const result = await clearMemberTag({
+    getChatMember: async () => ({ status: 'member', tag: 'Black' }),
+    setChatMemberTag: async (_chatId: number, _userId: number, tag: string) => { writes.push(tag); return true; },
+  } as unknown as Api, player, { minWriteIntervalMs: 0 });
+  assert.deepEqual(writes, ['']);
+  assert.equal(result.tagged, 1);
+  assert.equal(result.errors, 0);
 });
 
 test('повторяет обновление после Telegram 429 и ждёт retry_after', async () => {

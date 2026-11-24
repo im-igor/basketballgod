@@ -508,10 +508,12 @@ test('админка: авторизация, валидация, создани
     const previousMonth = await app.inject({ method: 'GET', url: '/budgets?month=9&year=2026', cookies });
     assert.match(previousMonth.body, /Для выбранного месяца активных разовых сборов нет/);
     assert.match(page.body, /href="\/budgets\/10-2026"/);
-    const budgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
+    const legacyBudgetPage = await app.inject({ method: 'GET', url: '/budgets/10-2026', cookies });
+    assert.equal(legacyBudgetPage.statusCode, 302);
+    assert.match(legacyBudgetPage.headers.location!, /budgets\?mode=edit/);
+    const budgetPage = await app.inject({ method: 'GET', url: '/budgets?mode=edit&month=10&year=2026', cookies });
     assert.equal(budgetPage.statusCode, 200);
-    assert.match(budgetPage.body, /Расчёты с тренером и залом/);
-    assert.match(budgetPage.body, /data-payout-url="\/collections\/10-2026\/payout"/);
+    assert.match(budgetPage.body, /Начисления игрокам/);
     const payoutPage = await app.inject({ method: 'GET', url: '/collections/10-2026/payout', cookies });
     assert.equal(payoutPage.statusCode, 200);
     assert.match(payoutPage.body, /Начислено тренеру — 5000₽/);

@@ -8,7 +8,7 @@ import { migrate } from '../db/migrator.js';
 import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { calculateMonthlyPayoutPreview } from './monthlyPayout.service.js';
 
-test('расчёты октября и ноября сортируют даты игр Date, строки и null без смены календарного дня', async () => {
+test('расчёт месяца бюджета берёт игры прошлого месяца и сортирует Date, строки и null', async () => {
   const db=new PGlite();
   const sql=async(text:string,params?:unknown[])=>{
     const result=params?await db.query(text,params):(await db.exec(text)).at(-1)!;
@@ -43,18 +43,18 @@ test('расчёты октября и ноября сортируют даты 
       ('BLACK','Декабрьская игра','2026-12-31',1,2027,true,'[]'),
       ('BLACK','Январская игра','2027-01-01',2,2027,true,'[]')`);
     const october=await calculateMonthlyPayoutPreview(10,2026);
-    assert.deepEqual(october.coach_items.map((item)=>item.date),['2026-10-04','2026-10-11','2026-10-15T19:00:00+03:00',null]);
-    assert.equal(october.coach_amount,20000);
+    assert.deepEqual(october.coach_items.map((item)=>item.date),['2026-09-30','2026-10-15T19:00:00+03:00',null]);
+    assert.equal(october.coach_amount,15000);
     assert.equal(october.gym_amount,28500);
-    assert.equal(october.coach_games,3);
+    assert.equal(october.coach_games,2);
     assert.deepEqual((await listAllGamesForMonth(10,2026)).map(g=>g.opponent),['Сентябрьская игра','Без даты']);
     const december=await calculateMonthlyPayoutPreview(12,2026);
-    assert.deepEqual(december.coach_items.filter(i=>i.kind==='GAME').map(i=>i.date),['2026-12-31']);
+    assert.deepEqual(december.coach_items.filter(i=>i.kind==='GAME').map(i=>i.date),['2026-11-01']);
     const january=await calculateMonthlyPayoutPreview(1,2027);
-    assert.deepEqual(january.coach_items.filter(i=>i.kind==='GAME').map(i=>i.date),['2027-01-01']);
+    assert.deepEqual(january.coach_items.filter(i=>i.kind==='GAME').map(i=>i.date),['2026-12-31']);
     const november=await calculateMonthlyPayoutPreview(11,2026);
-    assert.equal(november.coach_items[0]!.date,'2026-11-01');
-    assert.equal(november.coach_amount,10000);
+    assert.deepEqual(november.coach_items.filter(i=>i.kind==='GAME').map(i=>i.date),['2026-10-04','2026-10-11']);
+    assert.equal(november.coach_amount,15000);
     assert.ok(november.coach_items.every((item)=>item.date===null||typeof item.date==='string'));
   } finally { mock.restoreAll();await db.close();await pool.end(); }
 });

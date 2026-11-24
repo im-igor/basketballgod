@@ -208,8 +208,10 @@ export async function sendBudgetDraftsByMonth(
   api: Api,
   month: number,
   year: number,
-): Promise<{ sent: number }> {
+): Promise<{ sent: number; deliveries: number; failures: number }> {
   let sent = 0;
+  let deliveries = 0;
+  let failures = 0;
   const teams: BudgetTeam[] = usesCommonBudget(month, year) ? ['COMMON'] : TEAMS;
   for (const team of teams) {
     const budget = await getBudget(team, month, year);
@@ -218,21 +220,23 @@ export async function sendBudgetDraftsByMonth(
     if (!rendered) continue;
     for (const adminId of env.ADMIN_TG_IDS) {
       // Это копия для просмотра; правка и публикация доступны в админке.
-      await api
-        .sendMessage(adminId, rendered.text, {
+      try {
+        await api.sendMessage(adminId, rendered.text, {
           parse_mode: 'HTML',
           link_preview_options: { is_disabled: true },
-        })
-        .catch((err) =>
-          log.warn(
-            `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
-            (err as Error).message,
-          ),
+        });
+        deliveries++;
+      } catch (err) {
+        failures++;
+        log.warn(
+          `[notify] не удалось отправить черновик админу ${adminId} (нажал ли он Start у бота?)`,
+          (err as Error).message,
         );
+      }
     }
     sent++;
   }
-  return { sent };
+  return { sent, deliveries, failures };
 }
 
 /** Перерисовать ранее отправленное сообщение сбора (после отметок оплат). */

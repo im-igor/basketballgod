@@ -1,5 +1,5 @@
 import { getBudget } from '../db/repos/budgets.repo.js';
-import { listGamesByPlayedMonth } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth } from '../db/repos/games.repo.js';
 import { saveMonthlyPayout } from '../db/repos/monthlyPayouts.repo.js';
 import { getTariffs } from '../db/repos/tariffs.repo.js';
 import type { BudgetDetails, MonthlyPayout, MonthlyPayoutItem, Team } from '../db/types.js';
@@ -25,7 +25,9 @@ export async function calculateMonthlyPayoutPreview(
     getTariffs(),
     listEvents('RED', from, to),
     listEvents('BLACK', from, to),
-    listGamesByPlayedMonth(month, year),
+    // Игровая часть относится к месяцу бюджета: декабрьский бюджет собирает
+    // взносы и оплату тренера за игры ноября, январский — за игры декабря.
+    listAllGamesForMonth(month, year),
     getBudget('RED', month, year),
     getBudget('BLACK', month, year),
   ]);

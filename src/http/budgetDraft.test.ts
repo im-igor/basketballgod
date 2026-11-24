@@ -89,12 +89,13 @@ test('админка показывает тот же черновик и вып
     assert.match((await renderBudgetFromDb(blackBudget, { api: api as never }))!.text, /⚠️Блэк Игрок/);
     membership = 'member';
 
-    const page = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
+    const page = await app.inject({ method: 'GET', url: '/budgets?mode=edit&month=11&year=2026', headers: { cookie } });
     assert.match(page.body, /Тренер −/);
     assert.match(page.body, /Тренер \+/);
     assert.match(page.body, /Сохранить комментарий/);
-    assert.match(page.body, /\+ Товарищеский/);
-    assert.match(page.body, /убрать посл\./);
+    assert.match(page.body, /Начисления игрокам/);
+    assert.match(page.body, /Игры за Октябрь 2026/);
+    assert.doesNotMatch(page.body, /Товарищеский матч|\+ Товарищеский|убрать посл\./);
     assert.match(page.body, /Базовый взнос общий для Red и Black/);
     assert.match(page.body, /общий взнос тренера: 5000₽/);
     assert.doesNotMatch(page.body, /action="\/charges\/\d+\/pay"/);
@@ -150,27 +151,6 @@ test('админка показывает тот же черновик и вып
     assert.equal(note, 'Зачёт отменённой тренировки');
     assert.match((await renderBudgetFromDb(redBudget))!.text, /Зачёт отменённой тренировки/);
     assert.match((await renderBudgetFromDb(blackBudget))!.text, /Зачёт отменённой тренировки/);
-
-    await post('/budgets/11-2026/friendly', {
-      opponent: 'Соседи', logins: '@redplayer, @blackplayer', coach: 'yes',
-    });
-    assert.equal((await db.query<{ count: number }>(
-      "select count(*)::int as count from games where month=11 and year=2026 and team='MIXED'",
-    )).rows[0]!.count, 1);
-    const friendlyFee = (await db.query<{ fee_per_player: number }>(
-      "select fee_per_player from games where month=11 and year=2026 and team='MIXED'",
-    )).rows[0]!.fee_per_player;
-    assert.equal(Number((await db.query<{ amount: number }>(
-      'select amount from charges where budget_id=$1', [blackBudget],
-    )).rows[0]!.amount), 2500 + Number(friendlyFee));
-
-    await post('/budgets/11-2026/friendly/delete-last', {});
-    assert.equal((await db.query<{ count: number }>(
-      "select count(*)::int as count from games where month=11 and year=2026 and team='MIXED'",
-    )).rows[0]!.count, 0);
-    assert.equal(Number((await db.query<{ amount: number }>(
-      'select amount from charges where budget_id=$1', [blackBudget],
-    )).rows[0]!.amount), 2500);
 
     await post('/budgets/11-2026/coach', { team: 'RED', change: '1' });
     redCharge = (await db.query<{ amount: number; paid: boolean }>(

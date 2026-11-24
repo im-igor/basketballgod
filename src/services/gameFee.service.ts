@@ -6,7 +6,6 @@ import {
   selectTeamPlayers,
 } from '../gamefee/parser.js';
 import {
-  saveGame,
   getGameById,
   updateGameFee,
 } from '../db/repos/games.repo.js';
@@ -182,50 +181,6 @@ export async function validateGame(
       calendarEventId: scheduled?.calendar_event_id ?? null,
     },
   };
-}
-
-/**
- * Зарегистрировать внеплановый товарищеский (MIXED) из списка @login сыгравших.
- * Взнос = ceil((тренер?coach_per_game:0 + судья?referee_default:0) / число сыгравших),
- * делится на участников (каждый — в бюджете своей команды). Возвращает счётчики и несопоставленных.
- */
-export async function registerFriendly(
-  logins: string[],
-  opts: { coach: boolean; judge: boolean; label?: string },
-  month: number,
-  year: number,
-): Promise<{ matched: number; unmatched: string[]; fee: number }> {
-  const tariffs = await getTariffs();
-  const matched: Player[] = [];
-  const unmatched: string[] = [];
-  for (const raw of logins) {
-    const login = normalizeLogin(raw);
-    const p = await getByLogin(login);
-    if (p) matched.push(p);
-    else unmatched.push(login);
-  }
-  if (matched.length === 0) return { matched: 0, unmatched, fee: 0 };
-
-  const fee = computeGameFee(tariffs, { coach_present: opts.coach, judge: opts.judge }, matched.length);
-  const participants: GameParticipant[] = matched.map((p) => ({
-    name: p.name,
-    tg_login: p.tg_login,
-    matched_player_id: p.id,
-  }));
-  await saveGame({
-    event_uid: null,
-    team: 'MIXED',
-    opponent: opts.label ?? 'товарищеский',
-    played_on: null,
-    stat_url: null,
-    fee_per_player: fee,
-    participants,
-    coach_present: opts.coach,
-    judge: opts.judge,
-    month,
-    year,
-  });
-  return { matched: matched.length, unmatched, fee };
 }
 
 /** Сохранить проверенные игры (дедуп по ссылке) с привязкой к месяцу бюджета. */

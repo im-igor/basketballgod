@@ -56,21 +56,6 @@ export async function deleteGamesByUrl(statUrl: string): Promise<void> {
   );
 }
 
-/** Удалить последний добавленный вручную товарищеский (MIXED, без stat_url) за месяц. */
-export async function deleteLastManualFriendly(month: number, year: number): Promise<Game | null> {
-  const { rows } = await query<Game>(
-    `delete from games
-     where id = (
-       select id from games
-       where month = $1 and year = $2 and team = 'MIXED' and stat_url is null
-       order by id desc limit 1
-     )
-     returning *`,
-    [month, year],
-  );
-  return rows[0] ?? null;
-}
-
 /** Игры команды за месяц (для включения взносов в бюджет). */
 export async function listGamesForMonth(
   team: Team,
@@ -100,9 +85,7 @@ export async function listAllGamesForMonth(month: number, year: number): Promise
   return rows;
 }
 
-/** Выплаты тренеру относятся к месяцу игры, а не к месяцу сбора взносов.
- * Для старых ручных записей без даты сохраняем явно указанный месяц.
- */
+/** Игры по фактическому месяцу проведения — для экрана «Игры». */
 export async function listGamesByPlayedMonth(month: number, year: number): Promise<Game[]> {
   const { rows } = await query<Game>(
     `select * from games

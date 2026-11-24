@@ -1,4 +1,5 @@
 import { checkAutomaticGameStats } from '../services/automaticGameStats.service.js';
+import { refreshAndSendCompletedDraft } from '../services/automaticBudgetDraft.service.js';
 import cron from 'node-cron';
 import type { Api } from 'grammy';
 import { env } from '../config/env.js';
@@ -199,7 +200,17 @@ function applySchedule(api: Api, sch: Schedule): void {
     const current = monthInTimeZone(new Date(), sch.tz);
     for (const period of [current, { month: current.month === 12 ? 1 : current.month + 1,
       year: current.month === 12 ? current.year + 1 : current.year }]) {
-      await checkAutomaticGameStats(period.month, period.year);
+      try {
+        const checks = await checkAutomaticGameStats(period.month, period.year);
+        const result = await refreshAndSendCompletedDraft(api, period.month, period.year, checks);
+        if (result === 'sent') {
+          log.info(`[game-stats] черновик ${period.month}.${period.year} пересчитан и отправлен администраторам`);
+        }
+      } catch (err) {
+        // Сбой одного периода не должен блокировать проверку второго: например,
+        // недоступный октябрьский источник не мешает дождаться последней игры ноября.
+        log.warn(`[game-stats] ${period.month}.${period.year}: ${(err as Error).message}`);
+      }
     }
   }), { timezone: sch.tz }));
   if (sch.scheduleImportCron) {

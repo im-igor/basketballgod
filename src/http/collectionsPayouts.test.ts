@@ -109,12 +109,14 @@ test('Расчеты: суммы видны, детали свернуты, ка
     assert.match(picker.body,/href="\/budgets\?mode=create&month=12&year=2026"/);
     const draftCard=page.body.match(/<section[^>]*aria-label="Расчеты за [^"]+">[\s\S]*?<\/section>/)?.[0];
     assert.ok(draftCard);
+    assert.match(draftCard,/Пересчитать черновик/);
+    assert.match(draftCard,/name="return_to" value="collections"/);
     assert.match(draftCard,/Редактировать/);
     assert.doesNotMatch(draftCard,/Оплаты игроков/);
     assert.match(draftCard,/action="\/collections\/11-2026\/delete"/);
     const publishedCard=page.body.match(/<section class="settlement-card settlement-card--partial"[\s\S]*?<\/section>/)?.[0];
     assert.ok(publishedCard);
-    assert.doesNotMatch(publishedCard,/Редактировать|>Удалить</);
+    assert.doesNotMatch(publishedCard,/Пересчитать черновик|Редактировать|>Удалить</);
     const post=async(mode:string,month:string)=>app!.inject({method:'POST',url:'/budgets/build',cookies,payload:{mode,month,year:'2026'}});
     const duplicate=await post('create','11');
     assert.match(decodeURIComponent(duplicate.headers.location!),/уже есть бюджет/);
@@ -164,6 +166,12 @@ test('Расчеты: суммы видны, детали свернуты, ка
     const rebuilt=await post('edit','12');
     assert.match(decodeURIComponent(rebuilt.headers.location!),/Общий черновик.*собран/);
     assert.deepEqual((await db.query('select id,paid from charges where budget_id in (select id from budgets where month=12) order by id')).rows,beforeEdit.rows);
+    const quickRebuild=await app.inject({method:'POST',url:'/budgets/build',cookies,payload:{
+      mode:'edit',month:'12',year:'2026',return_to:'collections',
+    }});
+    const quickLocation=decodeURIComponent(quickRebuild.headers.location!);
+    assert.match(quickLocation,/^\/collections\?msg=/);
+    assert.match(quickLocation,/#budget-12-2026$/);
     assert.equal(buildLocked,false);
     // Payment actions preserve the selected filter; paid players stay hidden by default.
     const chargeId = (beforeEdit.rows[0] as {id:number}).id;

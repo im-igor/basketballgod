@@ -40,7 +40,7 @@ import {
   deleteBudget,
   deleteDraftMonth,
 } from '../db/repos/budgets.repo.js';
-import { listAllGamesForMonth, listGamesByPlayedMonth, deleteGameById, deleteLastManualFriendly } from '../db/repos/games.repo.js';
+import { listAllGamesForMonth, listGamesByPlayedMonth, deleteGameById } from '../db/repos/games.repo.js';
 import { listExtraFees } from '../db/repos/extraFees.repo.js';
 import { getMonthlyPayout, listMonthlyPayouts } from '../db/repos/monthlyPayouts.repo.js';
 import { calculateMonthlyPayoutPreview } from '../services/monthlyPayout.service.js';
@@ -49,7 +49,6 @@ import { listScheduleSources, upsertScheduleSource } from '../db/repos/scheduleS
 import { buildAndSaveBudgets, recalcBudget, updateBudgetCorrection } from '../services/budget.service.js';
 import { correctionNote, isLegacyAutoCorrectionNote } from '../domain/budgetCorrections.js';
 import {
-  registerFriendly,
   registerManualGame,
   recomputeGameFee,
   registerValidatedGames,
@@ -744,11 +743,14 @@ export async function buildServer(bot: Bot) {
       <td>${item.team ? `${teamBadge(item.team)} ` : ''}${esc(item.label)}</td>
       <td class="right"><b>${esc(item.amount)}₽</b></td>
     </tr>`).join('');
+    const gameMonth = payout ? (payout.month === 1 ? 12 : payout.month - 1) : 0;
+    const gameYear = payout ? (payout.month === 1 ? payout.year - 1 : payout.year) : 0;
     return payout ? `<div class="card" id="${esc(anchor)}">
       <div class="row" style="align-items:baseline;justify-content:space-between">
         <h2 style="margin:0">Расчёты с тренером и залом</h2>
         <span class="muted">${saved ? 'Итоговый расчёт' : 'Предварительно по текущему календарю'} · ${esc(fmtDateTime(payout.calculated_at))}</span>
       </div>
+      <p class="muted">Игровая часть — за ${esc(monthLabel(gameMonth, gameYear))}; учитываются уже завершённые и проверенные игры.</p>
       <div class="row" style="align-items:flex-start;margin-top:12px">
         <div style="min-width:300px"><h2>Начислено тренеру — ${esc(payout.coach_amount)}₽</h2>
           <table><thead><tr><th>Дата</th><th>За что</th><th class="right">Сумма</th></tr></thead>
@@ -864,6 +866,44 @@ export async function buildServer(bot: Bot) {
             </div>
           </div>`;
       }));
+      const draftCharges: (Charge & { team: PlayerTeam | BudgetTeam })[] = [];
+      for (const budget of built) {
+        for (const charge of await getCharges(budget.id)) {
+          draftCharges.push({
+            ...charge,
+            team: budget.team === 'COMMON' ? charge.team_badge ?? 'COMMON' : budget.team,
+          });
+        }
+      }
+      draftCharges.sort((a, b) => formatFullName(a.name).localeCompare(formatFullName(b.name), 'ru'));
+      const chargeRows = draftCharges.map((charge) => `<tr>
+        <td>${esc(formatFullName(charge.name))}</td><td>${teamBadge(charge.team)}</td>
+        <td class="muted">${esc(charge.tg_login)}</td><td>${esc(charge.base_amount)}₽</td>
+        <td>${charge.game_amount ? `+${esc(charge.game_amount)}₽` : ''}</td>
+        <td>${charge.extra_items.map((item) => `${esc(item.title)}: +${esc(item.amount)}₽`).join('<br>')}</td>
+        <td><b>${esc(charge.amount)}₽</b></td><td>${charge.paid ? activeBadge(true) : activeBadge(false)}</td>
+      </tr>`).join('');
+      const sourceGamesUrl = `/games?month=${sourceMonth}&year=${sourceYear}`;
+      const coachEditorControls = commonBudget ? '' : built.map((budget) => {
+        const details = budget.details;
+        if (!details) return '';
+        const delta = details.coach_delta ?? 0;
+        const effective = Math.max(0, details.coach_sessions + delta);
+        const teamInput = `<input type="hidden" name="team" value="${budget.team}">`;
+        return `<div class="card" style="margin-top:16px">
+          <h2>${teamBadge(budget.team)} · тренер</h2>
+          <p class="muted">Календарь: ${esc(details.coach_sessions)} трен. · поправка: ${delta > 0 ? '+' : ''}${esc(delta)} · к оплате: ${esc(effective)} трен.${sharedCoach ? ` · общий взнос тренера: ${esc(details.coach_per_person)}₽/чел.` : ''}</p>
+          ${sharedCoach ? '<p class="muted">Стоимость тренировок обеих команд делится на всех игроков. Поправка в одной команде меняет оба бюджета.</p>' : ''}
+          <div class="row">
+            <form class="inline" method="post" action="/budgets/${seg}/coach">${teamInput}<input type="hidden" name="change" value="-1"><button class="ghost" ${effective === 0 ? 'disabled' : ''}>Тренер −</button></form>
+            <form class="inline" method="post" action="/budgets/${seg}/coach">${teamInput}<input type="hidden" name="change" value="1"><button class="ghost">Тренер +</button></form>
+          </div>
+          <form method="post" action="/budgets/${seg}/coach-note" class="row" style="margin-top:10px">
+            ${teamInput}<div><label>Комментарий к поправке</label><input name="note" value="${esc(details.coach_note ?? '')}" placeholder="Например: зачёт отменённой тренировки"></div>
+            <div style="flex:0"><label>&nbsp;</label><button class="ghost">Сохранить комментарий</button></div>
+          </form>
+        </div>`;
+      }).join('');
       const hidden = `<input type="hidden" name="month" value="${month}"><input type="hidden" name="year" value="${year}">`;
       draftsCard = `<div class="card" id="drafts">
         <div class="row" style="justify-content:space-between;align-items:center">
@@ -880,6 +920,16 @@ export async function buildServer(bot: Bot) {
         ${commonDraftReady || statsWarnings.length ? '' : correction && !correction.reviewed ? '<p class="muted">Проверь и подтверди корректировки перед публикацией.</p>' : '<p class="muted">Черновик собран по прежней формуле или отсутствует одна команда. Пересобери бюджеты обеих команд и проверь общий взнос перед публикацией.</p>'}
         <p class="muted">🚫 — игрока нет в чате · 🟡 — бот ещё не знает Telegram ID игрока · ⚠️ — Telegram не дал проверить членство.</p>
         ${previews.join('')}
+        ${coachEditorControls}
+        ${sharedCoach ? '<div class="card muted" style="margin-top:16px">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</div>' : ''}
+        <div style="margin-top:20px" id="player-charges">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <h2 style="margin:0">Начисления игрокам</h2>
+            <a href="${sourceGamesUrl}">Игры за ${esc(monthLabel(sourceMonth, sourceYear))} →</a>
+          </div>
+          <table class="pay-table" style="margin-top:12px"><thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th></tr></thead>
+          <tbody>${chargeRows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table>
+        </div>
       </div>`;
     }
 
@@ -927,7 +977,10 @@ export async function buildServer(bot: Bot) {
     const p = readPeriod(req.body);
     if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
     const mode = (req.body as { mode?: string }).mode ?? 'create';
-    const back = `/budgets?month=${p.month}&year=${p.year}`;
+    const returnTo = (req.body as { return_to?: string }).return_to;
+    const back = returnTo === 'collections'
+      ? `/collections#budget-${periodOf(p.month, p.year)}`
+      : `/budgets?month=${p.month}&year=${p.year}`;
     if (mode !== 'create' && mode !== 'edit') return redirect(reply, '/collections', 'Неверный режим');
     try {
       await buildAndSaveBudgets(p.month, p.year, undefined, api, mode);
@@ -945,11 +998,13 @@ export async function buildServer(bot: Bot) {
     if (!p) return redirect(reply, '/budgets', 'Неверный месяц/год');
     const back = `/budgets?month=${p.month}&year=${p.year}`;
     try {
-      const { sent } = await sendBudgetDraftsByMonth(api, p.month, p.year);
+      const { sent, deliveries } = await sendBudgetDraftsByMonth(api, p.month, p.year);
       return redirect(
         reply,
         back,
-        sent ? `Черновики отправлены в личку (команд: ${sent})` : 'Нет собранных черновиков за период',
+        deliveries ? `Черновики отправлены в личку (команд: ${sent})`
+          : sent ? 'Не удалось доставить черновик ни одному администратору'
+            : 'Нет собранных черновиков за период',
       );
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
@@ -1075,9 +1130,14 @@ export async function buildServer(bot: Bot) {
       const outstanding = Math.max(0,total-paidAmount);
       const percent = total>0 ? Math.round(paidAmount/total*100) : 0;
       const state = published === expectedBudgets ? 'published' : published > 0 ? 'partial' : 'draft';
-      cards.push(`<section class="settlement-card settlement-card--${state}" aria-label="Расчеты за ${esc(monthLabel(first.month,first.year))}">
+      cards.push(`<section class="settlement-card settlement-card--${state}" id="budget-${seg}" aria-label="Расчеты за ${esc(monthLabel(first.month,first.year))}">
         <div class="settlement-header">
           <div class="settlement-title"><h2><a href="/collections/${seg}">${esc(monthLabel(first.month,first.year))}</a></h2>${status}</div>${published === 0 ? `<div class="settlement-actions">
+            <form class="inline" method="post" action="/budgets/build" data-loading-label="Пересчитываю…">
+              <input type="hidden" name="month" value="${first.month}"><input type="hidden" name="year" value="${first.year}">
+              <input type="hidden" name="mode" value="edit"><input type="hidden" name="return_to" value="collections">
+              <button class="ghost">Пересчитать черновик</button>
+            </form>
             <a class="button ghost" href="/budgets?mode=edit&month=${first.month}&year=${first.year}">Редактировать</a>
             <form class="inline" method="post" action="/collections/${seg}/delete" onsubmit="return confirm('Удалить черновик за ${esc(monthLabel(first.month,first.year))} для обеих команд со всеми начислениями и отметками оплат? Это действие нельзя отменить.')">
               <input type="hidden" name="confirmation" value="${esc(monthLabel(first.month,first.year))}"><button class="danger">Удалить</button>
@@ -1130,21 +1190,17 @@ export async function buildServer(bot: Bot) {
   const renderBudgetDetail = async (
     req: FastifyRequest,
     reply: FastifyReply,
-    view: 'calculation' | 'collection',
   ) => {
     const period = parsePeriod((req.params as { period: string }).period);
     const query = req.query as Record<string, string>;
     const msg = query.msg;
-    const showAllCharges = view === 'collection' && query.all === '1';
-    if (!period) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Неверный период бюджета');
+    const showAllCharges = query.all === '1';
+    if (!period) return redirect(reply, '/collections', 'Неверный период бюджета');
     const seg = periodOf(period.month, period.year);
 
     // Общий список обеих команд: собираем начисления и помечаем командой.
-    const [monthBudgets, monthGames] = await Promise.all([
-      monthBudgetsOf(period.month, period.year),
-      listAllGamesForMonth(period.month, period.year),
-    ]);
-    if (monthBudgets.length === 0) return redirect(reply, view === 'collection' ? '/collections' : '/budgets', 'Бюджет не найден');
+    const monthBudgets = await monthBudgetsOf(period.month, period.year);
+    if (monthBudgets.length === 0) return redirect(reply, '/collections', 'Бюджет не найден');
     const combined: (Charge & { team: PlayerTeam | BudgetTeam })[] = [];
     for (const b of monthBudgets) {
       for (const c of await getCharges(b.id)) combined.push({ ...c, team: b.team === 'COMMON' ? c.team_badge ?? 'COMMON' : b.team });
@@ -1157,64 +1213,6 @@ export async function buildServer(bot: Bot) {
     const paidCount = combined.filter((c) => c.paid).length;
     const anySent = monthBudgets.some((b) => b.message_id != null);
     const commonBudget = usesCommonBudget(period.month, period.year);
-    const sharedCoach = !commonBudget && usesSharedCoach(period.month, period.year);
-    const publishReasons = commonBudget ? [] : publicationBlockReasons(monthBudgets,sharedCoach);
-    const commonDraftReady = (commonBudget || !sharedCoach || sharedCoachBudgetsReady(
-      monthBudgets.find((b) => b.team === 'RED') ?? null,
-      monthBudgets.find((b) => b.team === 'BLACK') ?? null,
-    )) && monthBudgets.every((b) => !b.details?.correction || b.details.correction.reviewed) && publishReasons.length === 0;
-    const editableBudgets = monthBudgets.filter((b) => b.message_id == null);
-    const confirmation = monthLabel(period.month, period.year);
-    const coachControls = commonBudget ? '' : monthBudgets.map((b) => {
-      const details = b.details;
-      if (!details) return '';
-      const delta = details.coach_delta ?? 0;
-      const effective = Math.max(0, details.coach_sessions + delta);
-      const action = `/budgets/${seg}/coach`;
-      const teamInput = `<input type="hidden" name="team" value="${b.team}">`;
-      const locked = sharedCoach ? anySent : b.message_id != null;
-      const lateConfirm = (sharedCoach ? anySent : b.message_id != null)
-        ? `onsubmit="return confirm('${sharedCoach ? 'Суммы в чатах обеих команд могут измениться.' : 'Сумма в чате изменится.'} Сверь уже полученные переводы. Продолжить?')"`
-        : '';
-      return `<div class="card">
-        <h2>${teamBadge(b.team)} · тренер</h2>
-        <p class="muted">Календарь: ${esc(details.coach_sessions)} трен. · поправка: ${delta > 0 ? '+' : ''}${esc(delta)} · к оплате: ${esc(effective)} трен.${sharedCoach ? ` · общий взнос тренера: ${esc(details.coach_per_person)}₽/чел.` : ''}</p>
-        ${sharedCoach ? '<p class="muted">Стоимость тренировок обеих команд делится на всех игроков. Поправка в одной команде меняет оба бюджета.</p>' : ''}
-        ${locked ? '<p class="muted">Сбор опубликован; суммы за этот месяц зафиксированы.</p>' : ''}
-        <div class="row">
-          <form class="inline" method="post" action="${action}" ${lateConfirm}>${teamInput}<input type="hidden" name="change" value="-1"><button class="ghost" ${effective === 0 || locked ? 'disabled' : ''}>Тренер −</button></form>
-          <form class="inline" method="post" action="${action}" ${lateConfirm}>${teamInput}<input type="hidden" name="change" value="1"><button class="ghost" ${locked ? 'disabled' : ''}>Тренер +</button></form>
-        </div>
-        <form method="post" action="/budgets/${seg}/coach-note" class="row" style="margin-top:10px" ${lateConfirm}>
-          ${teamInput}<div><label>Комментарий к поправке</label><input name="note" value="${esc(details.coach_note ?? '')}" placeholder="Например: зачёт отменённой тренировки"></div>
-          <div style="flex:0"><label>&nbsp;</label><button class="ghost" ${locked ? 'disabled' : ''}>Сохранить комментарий</button></div>
-        </form>
-      </div>`;
-    }).join('');
-    const lastFriendly = [...monthGames].reverse().find((g) => g.team === 'MIXED' && g.stat_url === null);
-    const friendlyLateConfirm = anySent
-      ? 'onsubmit="return confirm(\'Сбор уже опубликован. Суммы в чатах изменятся; сверь уже полученные переводы. Продолжить?\')"'
-      : '';
-    const friendlyControls = `<div class="card">
-      <h2>Товарищеский матч</h2>
-      ${anySent ? '<p class="muted">Сбор опубликован; этот черновик уже нельзя изменить.</p>' : ''}
-      <form method="post" action="/budgets/${seg}/friendly" ${friendlyLateConfirm}>
-        <div class="row">
-          <div><label>Соперник</label><input name="opponent" placeholder="Название соперника"></div>
-          <div><label>Сыгравшие через пробел или запятую</label><input name="logins" placeholder="@ivan @petr" required></div>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <label><input type="checkbox" name="coach" value="yes" style="width:auto"> Тренер</label>
-          <label><input type="checkbox" name="judge" value="yes" style="width:auto"> Судья</label>
-          <button ${anySent ? 'disabled' : ''}>🤝 + Товарищеский</button>
-        </div>
-      </form>
-      <div class="row" style="margin-top:12px;align-items:center">
-        <span class="muted">${lastFriendly ? `Последний: ${esc(lastFriendly.opponent ?? 'товарищеский')} · ${esc(lastFriendly.participants?.length ?? 0)} игроков` : 'Ручных товарищеских за месяц нет'}</span>
-        <form class="inline" method="post" action="/budgets/${seg}/friendly/delete-last" onsubmit="return confirm('Удалить последний ручной товарищеский матч?')"><button class="ghost" ${lastFriendly && !anySent ? '' : 'disabled'}>🗑 убрать посл.</button></form>
-      </div>
-    </div>`;
-
     // Последняя отметка «Перевёл» = максимальный paid_at среди оплативших.
     const lastPaidMs = combined
       .filter((c) => c.paid && c.paid_at)
@@ -1223,7 +1221,7 @@ export async function buildServer(bot: Bot) {
 
     const payoutCard = lazyPayout(seg);
 
-    const displayedCharges = view === 'collection' && !showAllCharges
+    const displayedCharges = !showAllCharges
       ? combined.filter((c) => !c.paid)
       : combined;
     const rows = displayedCharges
@@ -1237,51 +1235,21 @@ export async function buildServer(bot: Bot) {
         <td>${c.extra_items.map((item) => `${esc(item.title)}: +${esc(item.amount)}₽`).join('<br>')}</td>
         <td><b>${esc(c.amount)}₽</b></td>
         <td>${c.paid ? activeBadge(true) : activeBadge(false)}</td>
-        ${view === 'collection' ? `<td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
+        <td class="right"><form class="inline" method="post" action="/charges/${c.id}/pay">
           <input type="hidden" name="value" value="${c.paid ? 'no' : 'yes'}">
           <input type="hidden" name="all" value="${showAllCharges ? '1' : '0'}">
           <button class="${c.paid ? 'ghost' : 'ok'}">${c.paid ? 'Снять' : 'Перевёл'}</button>
-        </form></td>` : ''}</tr>`,
+        </form></td></tr>`,
       )
       .join('');
-
-    const deleteCard = editableBudgets.length ? `<details class="card">
-        <summary style="cursor:pointer;font-weight:650;color:var(--danger)">Удалить бюджет из базы</summary>
-        <div class="muted" style="margin:10px 0 12px">
-          Удалится бюджет выбранной команды и все его начисления, включая историю разовых взносов за этот месяц — они смогут начислиться заново.
-          Для подтверждения введи точную строку <b>${esc(confirmation)}</b>.
-        </div>
-        <form method="post" action="/budgets/${seg}/delete" class="row" onsubmit="return confirm('Удалить выбранный бюджет и начисления без возможности отмены?')">
-          <div style="flex:0"><label>Команда</label><select name="team">${editableBudgets.map((b) => `<option value="${esc(b.team)}">${esc(b.team)}</option>`).join('')}</select></div>
-          <div><label>Подтверждение</label><input name="confirmation" autocomplete="off" placeholder="${esc(confirmation)}" required></div>
-          <div style="flex:0"><label>&nbsp;</label><button class="danger">Удалить</button></div>
-        </form>
-      </details>` : '';
-    if (view === 'calculation') {
-      const body = `<h1>Расчёт бюджета ${esc(monthLabel(period.month, period.year))}</h1>
-        <p><a href="/budgets?month=${period.month}&year=${period.year}">← Черновик месяца</a> · <a href="/collections/${seg}">Перейти к сбору →</a></p>
-        <div class="card row" style="align-items:center">
-          ${editableBudgets.length ? `<form class="inline" method="post" action="/budgets/${seg}/send" onsubmit="return confirm('Опубликовать сбор? Проверь все суммы перед отправкой.')"><button ${commonDraftReady ? '' : 'disabled'}>Опубликовать сбор</button></form>` : '<span class="badge yes">Сбор опубликован</span>'}
-          <span class="muted">${monthBudgets.length} команд · ${combined.length} участников</span>
-        </div>
-        ${publishReasons.length ? `<div class="flash flash-error" role="alert"><b>Отправка сбора заблокирована</b><ul>${publishReasons.map((r)=>`<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
-        ${payoutCard}
-        ${coachControls}
-        ${friendlyControls}
-        ${sharedCoach ? '<div class="card muted">Базовый взнос общий для Red и Black: зал и тренер делятся на всех игроков.</div>' : ''}
-        <div class="card"><h2>Начисления игрокам</h2><table class="pay-table">
-          <thead><tr><th>ФИО</th><th>Команда</th><th>tg</th><th>База</th><th>Игры</th><th>Разовые</th><th>Итого</th><th>Оплата</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="8" class="muted">Нет начислений</td></tr>'}</tbody></table></div>
-        ${deleteCard}`;
-      return html(reply, layout(`Расчёт бюджета ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
-    }
 
     const publishedTeams = new Set(monthBudgets.filter((b) => b.message_id != null).map((b) => b.team));
     const canRemind = commonBudget
       ? monthBudgets.some((b) => b.message_id != null) && combined.some((c) => !c.paid)
       : combined.some((c) => !c.paid && publishedTeams.has(c.team as BudgetTeam));
+    const editLink = anySent ? '' : ` · <a href="/budgets?mode=edit&month=${period.month}&year=${period.year}">Редактировать бюджет →</a>`;
     const body = `<h1>Расчеты ${esc(monthLabel(period.month, period.year))}</h1>
-      <p><a href="/collections">← Все расчеты</a> · <a href="/budgets/${seg}">К расчёту бюджета →</a></p>
+      <p><a href="/collections">← Все расчеты</a>${editLink}</p>
       <div class="card row" style="align-items:center;justify-content:space-between">
         <span><b>${combined.length}</b> участников · <b>${paidCount}</b> сдали · <b>${combined.length - paidCount}</b> не сдали${lastCheck ? ` · последняя отметка: ${esc(lastCheck)}` : ''}</span>
         <form class="inline" method="post" action="/budgets/${seg}/debtors" onsubmit="return confirm('Отправить напоминание должникам в чаты опубликованных сборов?')"><button class="ghost" ${canRemind ? '' : 'disabled'}>Напомнить должникам</button></form>
@@ -1298,8 +1266,18 @@ export async function buildServer(bot: Bot) {
     return html(reply, layout(`Расчеты ${monthLabel(period.month, period.year)}`, body, { flash: msg }));
   };
 
-  app.get('/budgets/:period', (req, reply) => renderBudgetDetail(req, reply, 'calculation'));
-  app.get('/collections/:period', (req, reply) => renderBudgetDetail(req, reply, 'collection'));
+  // Старый отдельный экран расчёта объединён с редактором черновика.
+  app.get('/budgets/:period', async (req, reply) => {
+    const period = parsePeriod((req.params as { period: string }).period);
+    if (!period) return redirect(reply, '/collections', 'Неверный период бюджета');
+    const budgets = await monthBudgetsOf(period.month, period.year);
+    if (!budgets.length) return redirect(reply, '/collections', 'Бюджет не найден');
+    if (budgets.every((budget) => budget.message_id == null)) {
+      return redirect(reply, `/budgets?mode=edit&month=${period.month}&year=${period.year}`);
+    }
+    return redirect(reply, `/collections/${periodOf(period.month, period.year)}`);
+  });
+  app.get('/collections/:period', (req, reply) => renderBudgetDetail(req, reply));
 
   const budgetForForm = async (period: { month: number; year: number }, body: unknown) => {
     const team = (body as { team?: string })?.team;
@@ -1447,53 +1425,6 @@ export async function buildServer(bot: Bot) {
       return redirect(reply, back, failed.length === 0
         ? `Комментарий тренера ${budget.team} сохранён`
         : `Комментарий сохранён, но сообщения не обновились: ${failed.join(', ')}`);
-    } catch (err) {
-      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
-    }
-  });
-
-  app.post('/budgets/:period/friendly', async (req, reply) => {
-    const period = parsePeriod((req.params as { period: string }).period);
-    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
-    if ((await monthBudgetsOf(period.month, period.year)).some((b) => b.message_id != null))
-      return redirect(reply, back, 'Опубликованный бюджет нельзя изменить');
-    const b = req.body as Record<string, string>;
-    const coach = b.coach === 'yes';
-    const judge = b.judge === 'yes';
-    if (!coach && !judge) return redirect(reply, back, 'Выбери тренера, судью или обоих');
-    const logins = (b.logins ?? '').split(/[\s,]+/).filter(Boolean);
-    if (logins.length === 0 || logins.some((login) => !/^@?[A-Za-z0-9_]{3,}$/.test(login))) {
-      return redirect(reply, back, 'Укажи корректные @login сыгравших');
-    }
-    const opponent = (b.opponent ?? '').trim();
-    if (opponent.length > 150) return redirect(reply, back, 'Название соперника слишком длинное');
-    const label = opponent ? `Товарищеская игра с «${opponent}»` : 'Товарищеская игра';
-    try {
-      const result = await registerFriendly(logins, { coach, judge, label }, period.month, period.year);
-      if (result.matched === 0) return redirect(reply, back, `Игроки не найдены: ${result.unmatched.join(', ')}`);
-      const failed = await recalcMonthBudgets(period.month, period.year);
-      const unmatched = result.unmatched.length ? `; не найдены: ${result.unmatched.join(', ')}` : '';
-      const warning = failed.length ? `; сообщения не обновились: ${failed.join(', ')}` : '';
-      return redirect(reply, back, `Товарищеский добавлен: ${result.matched} игроков, ${result.fee} ₽/чел.${unmatched}${warning}`);
-    } catch (err) {
-      return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
-    }
-  });
-
-  app.post('/budgets/:period/friendly/delete-last', async (req, reply) => {
-    const period = parsePeriod((req.params as { period: string }).period);
-    if (!period) return redirect(reply, '/budgets', 'Неверный период бюджета');
-    const back = `/budgets/${periodOf(period.month, period.year)}`;
-    if ((await monthBudgetsOf(period.month, period.year)).some((b) => b.message_id != null))
-      return redirect(reply, back, 'Опубликованный бюджет нельзя изменить');
-    try {
-      const removed = await deleteLastManualFriendly(period.month, period.year);
-      if (!removed) return redirect(reply, back, 'Ручных товарищеских за месяц нет');
-      const failed = await recalcMonthBudgets(period.month, period.year);
-      return redirect(reply, back, failed.length
-        ? `Последний товарищеский удалён, но сообщения не обновились: ${failed.join(', ')}`
-        : 'Последний товарищеский удалён; бюджеты пересчитаны');
     } catch (err) {
       return redirect(reply, back, `Ошибка: ${(err as Error).message}`);
     }

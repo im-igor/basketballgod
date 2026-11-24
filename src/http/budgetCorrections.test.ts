@@ -71,13 +71,14 @@ test('единая кнопка применяет комментарий, пе�
     assert.doesNotMatch(page.body, /Тарифы исходного месяца/);
     assert.match(page.body, /Зал/);
     assert.match(page.body, /Подтвердить корректировки/);
-    assert.doesNotMatch(page.body, /Сохранить комментарий|action="[^"]+correction-note"/);
+    assert.doesNotMatch(page.body, /action="[^"]+correction-note"/);
     const initialForm = parse(page.body).querySelector('form[action$="correction-review"]')!;
     assert.ok(initialForm.querySelector('textarea[name="note"]'));
     assert.equal(initialForm.querySelector('button')!.hasAttribute('disabled'), false);
     assert.match(page.body, /disabled>Опубликовать готовые сборы/);
     const detail = await app.inject({ method: 'GET', url: '/budgets/11-2026', headers: { cookie } });
-    assert.doesNotMatch(detail.body, /<h2>Корректировки<\/h2>/);
+    assert.equal(detail.statusCode, 302);
+    assert.match(detail.headers.location!, /budgets\?mode=edit/);
     const payoutPreview = await app.inject({
       method: 'GET', url: '/collections/11-2026/payout', headers: { cookie },
     });
